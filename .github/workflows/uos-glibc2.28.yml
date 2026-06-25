@@ -1,146 +1,145 @@
-- name: Build in Debian 10 container (glibc 2.28 with GCC 11)
-  run: |
-    docker run --rm \
-      -v $PWD:/build \
-      -w /build \
-      debian:10 \
-      bash -c "
-        set -e
+name: Build VSCode for UOS (Debian 10 - glibc 2.28 with GCC 11)
 
-        echo '=== 🐳 Starting Debian 10 build container ==='
-        echo '=== Original glibc and GCC versions ==='
-        ldd --version | head -1
-        gcc --version 2>/dev/null || echo 'GCC not installed yet'
+on:
+  workflow_dispatch:
 
-        echo '=== Step 1: Configure apt sources ==='
-        cp /etc/apt/sources.list /etc/apt/sources.list.bak
-        echo 'deb http://archive.debian.org/debian buster main' > /etc/apt/sources.list
-        echo 'deb http://archive.debian.org/debian buster-updates main' >> /etc/apt/sources.list
-        echo 'deb http://archive.debian.org/debian-security buster/updates main' >> /etc/apt/sources.list
-        echo 'deb http://archive.debian.org/debian buster-backports main' >> /etc/apt/sources.list
+jobs:
+  build-in-debian10:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout VSCode source (skip LFS)
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+          fetch-depth: 0
 
-        echo '=== /etc/apt/sources.list content ==='
-        cat /etc/apt/sources.list
+      - name: Remove LFS pointer files
+        run: |
+          echo "=== Removing LFS pointer files ==="
+          find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
+            echo "Removing: $file"
+            rm -f "$file"
+          done
+          rm -rf .git/lfs 2>/dev/null || true
+          echo "✅ LFS pointer files removed"
 
-        echo '=== Step 2: Update package list ==='
-        apt-get update -o Acquire::Check-Valid-Until=false
+      - name: Configure git to skip LFS
+        run: |
+          git config --global filter.lfs.smudge "git-lfs smudge --skip"
+          git config --global filter.lfs.process "git-lfs filter-process --skip"
+          git config --global filter.lfs.required false
+          echo "✅ Git LFS disabled globally"
 
-        echo '=== Step 3: Search for available GCC packages in backports ==='
-        echo 'Searching for gcc-11* packages:'
-        apt-cache search ^gcc-11 | head -20
-        echo ''
-        echo 'Searching for g++-11* packages:'
-        apt-cache search ^g++-11 | head -20
-        echo ''
-        echo 'Searching for gcc-10* packages:'
-        apt-cache search ^gcc-10 | head -20
-        echo ''
-        echo 'Listing all gcc-* packages available:'
-        apt-cache search ^gcc- | grep -E 'gcc-[0-9]+' | head -20
+      - name: Build in Debian 10 container (glibc 2.28 with GCC 11)
+        run: |
+          docker run --rm \
+            -v $PWD:/build \
+            -w /build \
+            debian:10 \
+            bash -c "
+              set -e
 
-        echo '=== Step 4: Check backports repository content ==='
-        apt-cache policy | grep backports
+              echo '=== 🐳 Starting Debian 10 build container ==='
+              echo '=== Original glibc and GCC versions ==='
+              ldd --version | head -1
+              gcc --version 2>/dev/null || echo 'GCC not installed yet'
 
-        echo '=== Step 5: Try different GCC installation approaches ==='
-        echo 'Attempt 1: Install gcc-11-backports g++-11-backports'
-        if apt-get install -y -t buster-backports gcc-11-backports g++-11-backports 2>/dev/null; then
-          echo '✅ gcc-11-backports installed successfully'
-          GCC_VERSION=11
-        else
-          echo '❌ gcc-11-backports failed, trying gcc-11 (without suffix)'
-          if apt-get install -y -t buster-backports gcc-11 g++-11 2>/dev/null; then
-            echo '✅ gcc-11 installed successfully'
-            GCC_VERSION=11
-          else
-            echo '❌ gcc-11 failed, falling back to gcc-10'
-            if apt-get install -y -t buster-backports gcc-10 g++-10 2>/dev/null; then
-              echo '✅ gcc-10 installed successfully as fallback'
-              GCC_VERSION=10
-            else
-              echo '❌ All attempts to install GCC from backports failed!'
-              echo 'Listing all gcc packages in backports:'
-              apt-cache search gcc | grep -E '^gcc-[0-9]+'
-              exit 1
-            fi
-          fi
-        fi
+              echo '=== Step 1: Configure apt sources ==='
+              cp /etc/apt/sources.list /etc/apt/sources.list.bak
+              echo 'deb http://archive.debian.org/debian buster main' > /etc/apt/sources.list
+              echo 'deb http://archive.debian.org/debian buster-updates main' >> /etc/apt/sources.list
+              echo 'deb http://archive.debian.org/debian-security buster/updates main' >> /etc/apt/sources.list
+              echo 'deb http://archive.debian.org/debian buster-backports main' >> /etc/apt/sources.list
 
-        echo '=== Step 6: Set default compiler ==='
-        if [ \"\$GCC_VERSION\" = \"11\" ]; then
-          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
-          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
-          update-alternatives --set gcc /usr/bin/gcc-11
-          update-alternatives --set g++ /usr/bin/g++-11
-        elif [ \"\$GCC_VERSION\" = \"10\" ]; then
-          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
-          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
-          update-alternatives --set gcc /usr/bin/gcc-10
-          update-alternatives --set g++ /usr/bin/g++-10
-        fi
+              echo '=== /etc/apt/sources.list content ==='
+              cat /etc/apt/sources.list
 
-        echo '=== Step 7: Verify compiler version ==='
-        echo 'GCC version:'
-        gcc --version
-        echo 'G++ version:'
-        g++ --version
+              echo '=== Step 2: Update package list ==='
+              apt-get update -o Acquire::Check-Valid-Until=false
 
-        echo '=== Step 8: Install Node.js 20.x ==='
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-        apt-get install -y nodejs
+              echo '=== Step 3: Install base build dependencies ==='
+              apt-get install -y \
+                curl wget git build-essential pkg-config \
+                libgtk-3-dev libxkbfile-dev libkrb5-dev libgbm-dev \
+                libsecret-1-dev libx11-dev libxext-dev libxtst-dev \
+                libxss-dev libfreetype6-dev libfontconfig1-dev \
+                libcairo2-dev libpango1.0-dev libicu-dev \
+                libnss3-dev libnspr4-dev libxkbcommon-dev \
+                libxrandr-dev libxcomposite-dev libxdamage-dev \
+                libxi-dev libdrm-dev libglvnd-dev \
+                rpm python3 python3-pip
 
-        echo '=== Step 9: Verify all versions ==='
-        echo 'glibc version:'
-        ldd --version | head -1
-        echo 'Node.js version:'
-        node --version
-        echo 'npm version:'
-        npm --version
-        echo 'GCC version:'
-        gcc --version | head -1
+              echo '=== Step 4: Install GCC 11 from backports ==='
+              apt-get install -y -t buster-backports gcc-11 g++-11 || \
+              apt-get install -y -t buster-backports gcc-10 g++-10
 
-        echo '=== Step 10: Check for package-lock.json ==='
-        if [ -f '/build/package-lock.json' ]; then
-          echo '✅ package-lock.json found'
-        else
-          echo '❌ package-lock.json NOT found!'
-          echo 'Listing /build directory:'
-          ls -la /build/
-          exit 1
-        fi
+              echo '=== Step 5: Set GCC as default ==='
+              if command -v gcc-11 >/dev/null 2>&1; then
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
+                update-alternatives --set gcc /usr/bin/gcc-11
+                update-alternatives --set g++ /usr/bin/g++-11
+                GCC_VERSION=11
+              elif command -v gcc-10 >/dev/null 2>&1; then
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+                update-alternatives --set gcc /usr/bin/gcc-10
+                update-alternatives --set g++ /usr/bin/g++-10
+                GCC_VERSION=10
+              else
+                echo '❌ No suitable GCC found!'
+                exit 1
+              fi
 
-        echo '=== Step 11: Install dependencies with npm ci ==='
-        export CC=/usr/bin/gcc-\$GCC_VERSION
-        export CXX=/usr/bin/g++-\$GCC_VERSION
-        echo \"Using CC=\$CC, CXX=\$CXX\"
-        npm ci
+              echo '=== Step 6: Verify GCC version ==='
+              gcc --version | head -1
 
-        echo '=== Step 12: Build VSCode ==='
-        export CC=/usr/bin/gcc-\$GCC_VERSION
-        export CXX=/usr/bin/g++-\$GCC_VERSION
-        npm run gulp vscode-linux-x64
+              echo '=== Step 7: Install Node.js 20.x ==='
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt-get install -y nodejs
 
-        echo '=== Step 13: Package artifacts ==='
-        mkdir -p /build/artifacts
+              echo '=== Step 8: Verify all versions ==='
+              echo \"glibc: \$(ldd --version | head -1)\"
+              echo \"Node.js: \$(node --version)\"
+              echo \"npm: \$(npm --version)\"
+              echo \"GCC: \$(gcc --version | head -1)\"
 
-        if [ -d '.build/linux/x64' ]; then
-          echo '✅ Found .build/linux/x64'
-          tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C .build/linux/x64 .
-        elif [ -d '../VSCode-linux-x64' ]; then
-          echo '✅ Found ../VSCode-linux-x64'
-          tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C ../VSCode-linux-x64 .
-        elif [ -d 'VSCode-linux-x64' ]; then
-          echo '✅ Found VSCode-linux-x64'
-          tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C VSCode-linux-x64 .
-        else
-          echo '⚠️ Build output not found'
-          echo 'Searching for VSCode directories...'
-          find . -name 'VSCode*' -type d 2>/dev/null | head -20
-          echo 'Checking .build directory...'
-          ls -la .build/ 2>/dev/null || echo '.build directory not found'
-          exit 1
-        fi
+              echo '=== Step 9: Check for package-lock.json ==='
+              if [ ! -f '/build/package-lock.json' ]; then
+                echo '❌ package-lock.json NOT found!'
+                ls -la /build/
+                exit 1
+              fi
+              echo '✅ package-lock.json found'
 
-        echo '✅ Build completed successfully'
-        echo '=== Artifacts ==='
-        ls -lh /build/artifacts/
-      "
+              echo '=== Step 10: Install dependencies ==='
+              export CC=/usr/bin/gcc-\$GCC_VERSION
+              export CXX=/usr/bin/g++-\$GCC_VERSION
+              npm ci
+
+              echo '=== Step 11: Build VSCode ==='
+              export CC=/usr/bin/gcc-\$GCC_VERSION
+              export CXX=/usr/bin/g++-\$GCC_VERSION
+              npm run gulp vscode-linux-x64
+
+              echo '=== Step 12: Package artifacts ==='
+              mkdir -p /build/artifacts
+              if [ -d '.build/linux/x64' ]; then
+                tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C .build/linux/x64 .
+              else
+                echo '⚠️ Build output not found!'
+                find . -name 'VSCode*' -type d | head -10
+                exit 1
+              fi
+
+              echo '✅ Build completed'
+              ls -lh /build/artifacts/
+            "
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-linux-x64-uos-glibc228
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
