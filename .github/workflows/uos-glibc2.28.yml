@@ -40,7 +40,7 @@ jobs:
           echo "✅ Git LFS disabled globally"
 
       # ============================================
-      # 4. 在 Debian 10 容器内构建（升级 GCC 到 11）
+      # 4. 在 Debian 10 容器内构建（含调试步骤）
       # ============================================
       - name: Build in Debian 10 container (glibc 2.28 with GCC 11)
         run: |
@@ -56,70 +56,93 @@ jobs:
               ldd --version | head -1
               gcc --version 2>/dev/null || echo 'GCC not installed yet'
 
-              echo '=== Updating package list ==='
-              sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
-              sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
-              sed -i '/stretch-updates/d' /etc/apt/sources.list
-              echo 'deb http://archive.debian.org/debian buster-backports main' >> /etc/apt/sources.list
+              echo '=== Step 1: Configure apt sources ==='
+              # 备份原始 sources.list
+              cp /etc/apt/sources.list /etc/apt/sources.list.bak
+
+              # 配置主源为 archive（Debian 10 已 EOL）
+              cat > /etc/apt/sources.list << EOF
+              deb http://archive.debian.org/debian buster main
+              deb http://archive.debian.org/debian buster-updates main
+              deb http://archive.debian.org/debian-security buster/updates main
+              deb http://archive.debian.org/debian buster-backports main
+              EOF
+
+              echo '=== /etc/apt/sources.list content ==='
+              cat /etc/apt/sources.list
+
+              echo '=== Step 2: Update package list ==='
               apt-get update -o Acquire::Check-Valid-Until=false
 
-              echo '=== Installing base build dependencies ==='
-              apt-get install -y \
-                curl \
-                wget \
-                git \
-                build-essential \
-                pkg-config \
-                libgtk-3-dev \
-                libxkbfile-dev \
-                libkrb5-dev \
-                libgbm-dev \
-                libsecret-1-dev \
-                libx11-dev \
-                libxext-dev \
-                libxtst-dev \
-                libxss-dev \
-                libfreetype6-dev \
-                libfontconfig1-dev \
-                libcairo2-dev \
-                libpango1.0-dev \
-                libicu-dev \
-                libnss3-dev \
-                libnspr4-dev \
-                libxkbcommon-dev \
-                libxrandr-dev \
-                libxcomposite-dev \
-                libxdamage-dev \
-                libxi-dev \
-                libdrm-dev \
-                libglvnd-dev \
-                rpm \
-                python3 \
-                python3-pip
+              echo '=== Step 3: Search for available GCC packages in backports ==='
+              echo 'Searching for gcc-11* packages:'
+              apt-cache search ^gcc-11 | head -20
+              echo ''
+              echo 'Searching for g++-11* packages:'
+              apt-cache search ^g++-11 | head -20
+              echo ''
+              echo 'Searching for gcc-10* packages:'
+              apt-cache search ^gcc-10 | head -20
+              echo ''
+              echo 'Listing all gcc-* packages available:'
+              apt-cache search ^gcc- | grep -E 'gcc-[0-9]+' | head -20
 
-              # ============================================
-              # 关键步骤：安装 GCC 11（从 Backports）
-              # ============================================
-              echo '=== Installing GCC 11 from Debian Backports ==='
-              apt-get install -y -t buster-backports \
-                gcc-11-backports \
-                g++-11-backports
+              echo '=== Step 4: Check backports repository content ==='
+              apt-cache policy | grep backports
 
-              # 将 GCC 11 设为默认编译器
-              update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
-              update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
-              update-alternatives --set gcc /usr/bin/gcc-11
-              update-alternatives --set g++ /usr/bin/g++-11
+              echo '=== Step 5: Try different GCC installation approaches ==='
+              # 尝试方法 1：gcc-11-backports（带后缀）
+              echo 'Attempt 1: Install gcc-11-backports g++-11-backports'
+              if apt-get install -y -t buster-backports gcc-11-backports g++-11-backports 2>/dev/null; then
+                echo '✅ gcc-11-backports installed successfully'
+                GCC_VERSION=11
+              else
+                echo '❌ gcc-11-backports failed, trying gcc-11 (without suffix)'
 
-              echo '=== Verifying GCC version ==='
+                # 尝试方法 2：gcc-11（不带后缀）
+                if apt-get install -y -t buster-backports gcc-11 g++-11 2>/dev/null; then
+                  echo '✅ gcc-11 installed successfully'
+                  GCC_VERSION=11
+                else
+                  echo '❌ gcc-11 failed, falling back to gcc-10'
+
+                  # 尝试方法 3：gcc-10（备选方案）
+                  if apt-get install -y -t buster-backports gcc-10 g++-10 2>/dev/null; then
+                    echo '✅ gcc-10 installed successfully as fallback'
+                    GCC_VERSION=10
+                  else
+                    echo '❌ All attempts to install GCC from backports failed!'
+                    echo 'Listing all gcc packages in backports:'
+                    apt-cache search gcc | grep -E '^gcc-[0-9]+'
+                    exit 1
+                  fi
+                fi
+              fi
+
+              echo '=== Step 6: Set default compiler ==='
+              if [ \"\$GCC_VERSION\" = \"11\" ]; then
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
+                update-alternatives --set gcc /usr/bin/gcc-11
+                update-alternatives --set g++ /usr/bin/g++-11
+              elif [ \"\$GCC_VERSION\" = \"10\" ]; then
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+                update-alternatives --set gcc /usr/bin/gcc-10
+                update-alternatives --set g++ /usr/bin/g++-10
+              fi
+
+              echo '=== Step 7: Verify compiler version ==='
+              echo 'GCC version:'
               gcc --version
+              echo 'G++ version:'
               g++ --version
 
-              echo '=== Installing Node.js 20.x ==='
+              echo '=== Step 8: Install Node.js 20.x ==='
               curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
               apt-get install -y nodejs
 
-              echo '=== Verifying versions ==='
+              echo '=== Step 9: Verify all versions ==='
               echo 'glibc version:'
               ldd --version | head -1
               echo 'Node.js version:'
@@ -129,7 +152,7 @@ jobs:
               echo 'GCC version:'
               gcc --version | head -1
 
-              echo '=== Checking for package-lock.json ==='
+              echo '=== Step 10: Check for package-lock.json ==='
               if [ -f '/build/package-lock.json' ]; then
                 echo '✅ package-lock.json found'
               else
@@ -139,21 +162,20 @@ jobs:
                 exit 1
               fi
 
-              echo '=== Installing dependencies with npm ci ==='
-              # 设置环境变量确保使用正确的 GCC
-              export CC=/usr/bin/gcc-11
-              export CXX=/usr/bin/g++-11
+              echo '=== Step 11: Install dependencies with npm ci ==='
+              export CC=/usr/bin/gcc-\$GCC_VERSION
+              export CXX=/usr/bin/g++-\$GCC_VERSION
+              echo \"Using CC=\$CC, CXX=\$CXX\"
               npm ci
 
-              echo '=== Building VSCode ==='
-              export CC=/usr/bin/gcc-11
-              export CXX=/usr/bin/g++-11
+              echo '=== Step 12: Build VSCode ==='
+              export CC=/usr/bin/gcc-\$GCC_VERSION
+              export CXX=/usr/bin/g++-\$GCC_VERSION
               npm run gulp vscode-linux-x64
 
-              echo '=== Packaging artifacts ==='
+              echo '=== Step 13: Package artifacts ==='
               mkdir -p /build/artifacts
 
-              # 查找构建产物
               if [ -d '.build/linux/x64' ]; then
                 echo '✅ Found .build/linux/x64'
                 tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C .build/linux/x64 .
@@ -164,21 +186,15 @@ jobs:
                 echo '✅ Found VSCode-linux-x64'
                 tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C VSCode-linux-x64 .
               else
-                echo '⚠️ Build output not found, searching...'
-                echo ''
-                echo '=== Searching for VSCode directories ==='
+                echo '⚠️ Build output not found'
+                echo 'Searching for VSCode directories...'
                 find . -name 'VSCode*' -type d 2>/dev/null | head -20
-                echo ''
-                echo '=== Checking .build directory ==='
+                echo 'Checking .build directory...'
                 ls -la .build/ 2>/dev/null || echo '.build directory not found'
-                echo ''
-                echo '=== Checking root directory ==='
-                ls -la
                 exit 1
               fi
 
               echo '✅ Build completed successfully'
-              echo ''
               echo '=== Artifacts ==='
               ls -lh /build/artifacts/
             "
