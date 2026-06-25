@@ -1,0 +1,77 @@
+name: Build VSCode for UOS (glibc 2.28)
+
+on:
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build-for-uos:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout VSCode source
+        uses: actions/checkout@v6
+        with:
+          lfs: false  # 关闭 LFS 加速克隆
+          # 如需固定版本，取消下行注释
+          # ref: 'refs/tags/1.95.0'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libxkbfile-dev \
+            libkrb5-dev \
+            libgbm-dev \
+            rpm \
+            libx11-dev \
+            libxss-dev \
+            libxtst-dev
+
+      - name: Install Yarn and dependencies
+        run: |
+          npm install -g yarn
+          yarn install --frozen-lockfile
+
+      - name: Compile TypeScript
+        run: |
+          yarn compile-build
+          yarn compile-extensions-build
+
+      - name: Build VSCode Linux x64
+        run: |
+          export VSCODE_SKIP_PRELAUNCH=1
+          yarn gulp vscode-linux-x64-min  # 使用 min 版本更省空间
+
+      - name: List built files (debug)
+        run: |
+          echo "Current directory contents:"
+          ls -la
+          echo "Checking for VSCode output:"
+          ls -la ../VSCode-linux-x64 || echo "Not found at ../VSCode-linux-x64"
+          ls -la vscode-linux-x64 || echo "Not found at ./vscode-linux-x64"
+
+      - name: Package build artifacts
+        run: |
+          mkdir -p artifacts
+          # 根据上一步实际路径调整（常见路径为 ../VSCode-linux-x64）
+          if [ -d "../VSCode-linux-x64" ]; then
+            tar -czf artifacts/vscode-for-uos.tar.gz -C ../ VSCode-linux-x64
+          elif [ -d "./vscode-linux-x64" ]; then
+            tar -czf artifacts/vscode-for-uos.tar.gz vscode-linux-x64
+          else
+            echo "ERROR: Build output not found!"
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-linux-x64-uos
+          path: artifacts/
