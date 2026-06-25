@@ -1,0 +1,44 @@
+name: Build VSCode for UOS (Docker)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-in-container:
+    runs-on: ubuntu-22.04  # 运行器本身版本不重要，作为宿主机
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Build in glibc 2.28 Docker container
+        run: |
+          # 使用一个glibc为2.28的基础镜像，如 centos:7
+          docker run --rm -v $PWD:/build -w /build centos:7 bash -c "
+            # 安装构建依赖 (以CentOS为例，根据镜像调整包管理器)
+            yum install -y epel-release centos-release-scl
+            yum install -y git gcc-c++ make python3 \
+              devtoolset-11-gcc-c++ devtoolset-11-binutils \
+              alsa-lib-devel gtk3-devel libxkbfile-devel \
+              krb5-devel rpm-build
+
+            # 安装Node.js (需要较高版本)
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+            yum install -y nodejs
+
+            # 使用更新的GCC
+            source /opt/rh/devtoolset-11/enable
+
+            # 安装依赖与构建 (同方案一)
+            npm install -g yarn
+            yarn install --frozen-lockfile
+            yarn gulp vscode-linux-x64
+
+            # 打包产物到容器外的挂载目录
+            tar -czf /build/artifacts/vscode-for-uos.tar.gz -C .build/linux/x64 .
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-linux-x64-uos
+          path: artifacts/
