@@ -1,70 +1,146 @@
-name: Build VSCode for UOS (Rocky Linux 8 - glibc 2.28)
+name: Build VSCode for UOS (Debian 10 - glibc 2.28)
 
 on:
   workflow_dispatch:
+  # push:
+  #   branches: [main]
 
 jobs:
-  build-in-rocky8:
+  build-in-debian10:
     runs-on: ubuntu-22.04
     steps:
       # ============================================
-      # 检出代码，跳过 LFS 文件
+      # 1. 检出代码（跳过 LFS）
       # ============================================
       - name: Checkout VSCode source (skip LFS)
         uses: actions/checkout@v6
         with:
-          lfs: false                    # 关键：跳过 LFS
-          fetch-depth: 1                # 只拉取最近一次提交，加速
-          # 如果仓库是公开的，可以尝试浅克隆
-          # sparse-checkout: .          # 可选：只拉取必要文件
+          lfs: false
+          fetch-depth: 1
 
       # ============================================
-      # 清理 LFS 指针文件（可选）
+      # 2. 删除 LFS 指针文件（构建不需要）
       # ============================================
-      - name: Remove LFS pointer files (optional)
+      - name: Remove LFS pointer files
         run: |
-          # 查找并删除所有 LFS 指针文件（以 "version https://git-lfs.github.com/spec/v1" 开头的文件）
-          # 这些文件如果保留，可能干扰构建，直接删除
-          find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | xargs rm -f
-          echo "✅ Removed LFS pointer files"
+          echo "=== Removing LFS pointer files ==="
+          find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
+            echo "Removing: $file"
+            rm -f "$file"
+          done
+          rm -rf .git/lfs 2>/dev/null || true
+          echo "✅ LFS pointer files removed"
+
+      # ============================================
+      # 3. 配置 Git 跳过 LFS
+      # ============================================
+      - name: Configure git to skip LFS
+        run: |
+          git config --global filter.lfs.smudge "git-lfs smudge --skip"
+          git config --global filter.lfs.process "git-lfs filter-process --skip"
+          git config --global filter.lfs.required false
+          echo "✅ Git LFS disabled globally"
+
+      # ============================================
+      # 4. 🔍 调试步骤 - 查看当前目录结构
+      # ============================================
+      - name: 🔍 Debug - list files before build
+        run: |
+          echo '=== Current directory ==='
+          pwd
+          echo ''
+          echo '=== Directory structure (top level) ==='
+          ls -la
+          echo ''
+          echo '=== Git status ==='
+          git status
+          echo ''
+          echo '=== Check .gitattributes for LFS ==='
+          find . -name '.gitattributes' -exec echo "Found: {}" \; -exec cat {} \;
+          echo ''
+          echo '=== Check for LFS pointer files ==='
+          find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | head -20 || echo 'No LFS pointer files found'
+          echo ''
+          echo '=== Check disk space ==='
+          df -h
+          echo ''
+          echo '=== Check memory ==='
+          free -h
         continue-on-error: true
 
       # ============================================
-      # 在 Rocky Linux 8 容器内构建
+      # 5. 在 Debian 10 容器内构建
       # ============================================
-      - name: Build in Rocky Linux 8 container
+      - name: Build in Debian 10 container (glibc 2.28)
         run: |
           docker run --rm \
             -v $PWD:/build \
             -w /build \
-            rockylinux:8 \
+            debian:10 \
             bash -c "
               set -e
 
+              echo '=== 🐳 Starting Debian 10 build container ==='
+              echo '=== glibc version (host) ==='
+              ldd --version | head -1
+
+              echo '=== Updating package list ==='
+              # Debian 10 使用旧源，切换到 archive
+              sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
+              sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
+              sed -i '/stretch-updates/d' /etc/apt/sources.list
+              apt-get update -o Acquire::Check-Valid-Until=false
+
               echo '=== Installing build dependencies ==='
-              dnf install -y epel-release
-              dnf groupinstall -y 'Development Tools'
-              dnf install -y \
-                git python3 curl wget which rpm-build \
-                alsa-lib-devel gtk3-devel libxkbfile-devel \
-                krb5-devel libsecret-devel libgbm-devel \
-                mesa-libEGL-devel mesa-libGL-devel \
-                libX11-devel libXext-devel libXtst-devel \
-                libXScrnSaver-devel freetype-devel fontconfig-devel \
-                cairo-devel pango-devel libicu-devel \
-                nss-devel nspr-devel libxkbcommon-devel
+              apt-get install -y \
+                curl \
+                wget \
+                git \
+                build-essential \
+                pkg-config \
+                libgtk-3-dev \
+                libxkbfile-dev \
+                libkrb5-dev \
+                libgbm-dev \
+                libsecret-1-dev \
+                libx11-dev \
+                libxext-dev \
+                libxtst-dev \
+                libxss-dev \
+                libfreetype-dev \
+                libfontconfig-dev \
+                libcairo2-dev \
+                libpango1.0-dev \
+                libicu-dev \
+                libnss3-dev \
+                libnspr4-dev \
+                libxkbcommon-dev \
+                libxrandr-dev \
+                libxcomposite-dev \
+                libxdamage-dev \
+                libxi-dev \
+                libdrm-dev \
+                libglvnd-dev \
+                rpm \
+                python3 \
+                python3-pip
 
               echo '=== Installing Node.js 20.x ==='
-              curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-              dnf install -y nodejs
+              # Debian 10 需要从 NodeSource 安装
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt-get install -y nodejs
 
               echo '=== Installing Yarn ==='
               npm install -g yarn
 
-              echo '=== glibc version ==='
+              echo '=== Verifying glibc version ==='
               ldd --version | head -1
+              echo '=== Verifying Node.js version ==='
+              node --version
+              echo '=== Verifying Yarn version ==='
+              yarn --version
 
-              echo '=== Installing dependencies ==='
+              echo '=== Installing project dependencies ==='
               yarn install --frozen-lockfile
 
               echo '=== Building VSCode ==='
@@ -72,21 +148,55 @@ jobs:
 
               echo '=== Packaging artifacts ==='
               mkdir -p /build/artifacts
+
+              # 查找构建产物
               if [ -d '.build/linux/x64' ]; then
-                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
+                echo '✅ Found .build/linux/x64'
+                tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C .build/linux/x64 .
               elif [ -d '../VSCode-linux-x64' ]; then
-                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C ../VSCode-linux-x64 .
+                echo '✅ Found ../VSCode-linux-x64'
+                tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C ../VSCode-linux-x64 .
+              elif [ -d 'VSCode-linux-x64' ]; then
+                echo '✅ Found VSCode-linux-x64'
+                tar -czf /build/artifacts/vscode-debian10-glibc228.tar.gz -C VSCode-linux-x64 .
               else
-                echo '⚠️ Build output not found'
-                find . -name 'VSCode*' -type d 2>/dev/null || echo 'No VSCode directories found'
+                echo '⚠️ Build output not found, searching...'
+                echo ''
+                echo '=== Searching for VSCode directories ==='
+                find . -name 'VSCode*' -type d 2>/dev/null | head -20
+                echo ''
+                echo '=== Checking .build directory ==='
+                ls -la .build/ 2>/dev/null || echo '.build directory not found'
+                echo ''
+                echo '=== Checking root directory ==='
+                ls -la
                 exit 1
               fi
 
               echo '✅ Build completed successfully'
+              echo ''
+              echo '=== Artifacts ==='
+              ls -lh /build/artifacts/
             "
 
       # ============================================
-      # 上传构建产物
+      # 6. 🔍 调试步骤 - 查看构建产物
+      # ============================================
+      - name: 🔍 Debug - list artifacts after build
+        if: always()
+        run: |
+          echo '=== Artifacts directory ==='
+          ls -la artifacts/ || echo 'No artifacts directory found'
+          echo ''
+          echo '=== Disk space after build ==='
+          df -h
+          echo ''
+          echo '=== Memory after build ==='
+          free -h
+        continue-on-error: true
+
+      # ============================================
+      # 7. 上传构建产物
       # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -94,3 +204,16 @@ jobs:
           name: vscode-linux-x64-uos-glibc228
           path: artifacts/
           if-no-files-found: error
+          retention-days: 7
+
+      # ============================================
+      # 8. 🔍 调试步骤 - 列出上传的产物
+      # ============================================
+      - name: 🔍 Debug - list uploaded artifacts
+        if: always()
+        run: |
+          echo '=== Uploaded artifacts ==='
+          ls -la artifacts/ || echo 'No artifacts found'
+          echo ''
+          echo '=== Artifact size ==='
+          du -sh artifacts/ 2>/dev/null || echo 'Artifacts directory not found'
