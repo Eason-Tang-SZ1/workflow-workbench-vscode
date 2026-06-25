@@ -1,4 +1,4 @@
-name: Build VSCode for UOS (Rocky Linux 8 - glibc 2.28)
+name: Build VSCode for UOS (Docker Rocky Linux 8 - glibc 2.28)
 
 on:
   workflow_dispatch:
