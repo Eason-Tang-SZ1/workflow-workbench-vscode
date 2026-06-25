@@ -1,4 +1,4 @@
-name: Build VSCode for UOS (Debian 10 - glibc 2.28)
+name: Build VSCode for UOS (Debian 10 - glibc 2.28 with GCC 11)
 
 on:
   workflow_dispatch:
@@ -40,42 +40,9 @@ jobs:
           echo "✅ Git LFS disabled globally"
 
       # ============================================
-      # 4. 🔍 调试 - 查看文件结构
+      # 4. 在 Debian 10 容器内构建（升级 GCC 到 11）
       # ============================================
-      - name: 🔍 Debug - list files before build
-        run: |
-          echo '=== Current directory ==='
-          pwd
-          echo ''
-          echo '=== Directory structure (top level) ==='
-          ls -la
-          echo ''
-          echo '=== Check for package-lock.json ==='
-          if [ -f "package-lock.json" ]; then
-            echo '✅ package-lock.json found'
-            head -5 package-lock.json
-          else
-            echo '❌ package-lock.json NOT found!'
-          fi
-          echo ''
-          echo '=== Check for yarn.lock ==='
-          if [ -f "yarn.lock" ]; then
-            echo '⚠️ yarn.lock found (should not exist)'
-          else
-            echo '✅ yarn.lock not found (correct for npm project)'
-          fi
-          echo ''
-          echo '=== Check for gulpfile ==='
-          ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
-          echo ''
-          echo '=== Git status ==='
-          git status
-        continue-on-error: true
-
-      # ============================================
-      # 5. 在 Debian 10 容器内构建（使用 npm）
-      # ============================================
-      - name: Build in Debian 10 container (glibc 2.28)
+      - name: Build in Debian 10 container (glibc 2.28 with GCC 11)
         run: |
           docker run --rm \
             -v $PWD:/build \
@@ -85,16 +52,18 @@ jobs:
               set -e
 
               echo '=== 🐳 Starting Debian 10 build container ==='
-              echo '=== glibc version (host) ==='
+              echo '=== Original glibc and GCC versions ==='
               ldd --version | head -1
+              gcc --version 2>/dev/null || echo 'GCC not installed yet'
 
               echo '=== Updating package list ==='
               sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
               sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
               sed -i '/stretch-updates/d' /etc/apt/sources.list
+              echo 'deb http://archive.debian.org/debian buster-backports main' >> /etc/apt/sources.list
               apt-get update -o Acquire::Check-Valid-Until=false
 
-              echo '=== Installing build dependencies ==='
+              echo '=== Installing base build dependencies ==='
               apt-get install -y \
                 curl \
                 wget \
@@ -128,6 +97,24 @@ jobs:
                 python3 \
                 python3-pip
 
+              # ============================================
+              # 关键步骤：安装 GCC 11
+              # ============================================
+              echo '=== Installing GCC 11 from Debian Backports ==='
+              apt-get install -y -t buster-backports \
+                gcc-11 \
+                g++-11
+
+              # 将 GCC 11 设为默认编译器
+              update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
+              update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
+              update-alternatives --set gcc /usr/bin/gcc-11
+              update-alternatives --set g++ /usr/bin/g++-11
+
+              echo '=== Verifying GCC version ==='
+              gcc --version
+              g++ --version
+
               echo '=== Installing Node.js 20.x ==='
               curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
               apt-get install -y nodejs
@@ -139,6 +126,8 @@ jobs:
               node --version
               echo 'npm version:'
               npm --version
+              echo 'GCC version:'
+              gcc --version | head -1
 
               echo '=== Checking for package-lock.json ==='
               if [ -f '/build/package-lock.json' ]; then
@@ -151,11 +140,14 @@ jobs:
               fi
 
               echo '=== Installing dependencies with npm ci ==='
-              # npm ci 基于 package-lock.json 安装，更快更可靠
+              # 设置环境变量确保使用正确的 GCC
+              export CC=/usr/bin/gcc-11
+              export CXX=/usr/bin/g++-11
               npm ci
 
               echo '=== Building VSCode ==='
-              # VS Code 使用 gulp 构建，通过 npm run 调用
+              export CC=/usr/bin/gcc-11
+              export CXX=/usr/bin/g++-11
               npm run gulp vscode-linux-x64
 
               echo '=== Packaging artifacts ==='
@@ -192,7 +184,7 @@ jobs:
             "
 
       # ============================================
-      # 6. 上传构建产物
+      # 5. 上传构建产物
       # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
