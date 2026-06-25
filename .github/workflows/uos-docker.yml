@@ -1,44 +1,74 @@
-name: Build VSCode for UOS (Docker)
+name: Build VSCode for UOS (Rocky Linux 8 - glibc 2.28)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-in-container:
-    runs-on: ubuntu-22.04  # 运行器本身版本不重要，作为宿主机
+  build-in-rocky8:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout source
+      - name: Checkout VSCode source
         uses: actions/checkout@v6
+        with:
+          lfs: true
 
-      - name: Build in glibc 2.28 Docker container
+      - name: Build in Rocky Linux 8 container (glibc 2.28)
         run: |
-          # 使用一个glibc为2.28的基础镜像，如 centos:7
-          docker run --rm -v $PWD:/build -w /build centos:7 bash -c "
-            # 安装构建依赖 (以CentOS为例，根据镜像调整包管理器)
-            yum install -y epel-release centos-release-scl
-            yum install -y git gcc-c++ make python3 \
-              devtoolset-11-gcc-c++ devtoolset-11-binutils \
-              alsa-lib-devel gtk3-devel libxkbfile-devel \
-              krb5-devel rpm-build
+          docker run --rm \
+            -v $PWD:/build \
+            -w /build \
+            rockylinux:8 \
+            bash -c "
+              set -e
 
-            # 安装Node.js (需要较高版本)
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-            yum install -y nodejs
+              # 1. 安装 epel-release 和开发工具
+              dnf install -y epel-release
+              dnf groupinstall -y 'Development Tools'
+              dnf install -y \
+                git python3 curl wget which rpm-build \
+                alsa-lib-devel gtk3-devel libxkbfile-devel \
+                krb5-devel libsecret-devel libgbm-devel \
+                mesa-libEGL-devel mesa-libGL-devel \
+                libX11-devel libXext-devel libXtst-devel \
+                libXScrnSaver-devel freetype-devel fontconfig-devel \
+                cairo-devel pango-devel libicu-devel \
+                nss-devel nspr-devel libxkbcommon-devel
 
-            # 使用更新的GCC
-            source /opt/rh/devtoolset-11/enable
+              # 2. 安装 Node.js 20.x
+              curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+              dnf install -y nodejs
 
-            # 安装依赖与构建 (同方案一)
-            npm install -g yarn
-            yarn install --frozen-lockfile
-            yarn gulp vscode-linux-x64
+              # 3. 安装 Yarn
+              npm install -g yarn
 
-            # 打包产物到容器外的挂载目录
-            tar -czf /build/artifacts/vscode-for-uos.tar.gz -C .build/linux/x64 .
-          "
+              # 4. 验证 glibc 版本
+              echo '=== glibc version ==='
+              ldd --version | head -1
 
-      - name: Upload artifacts
+              # 5. 安装依赖
+              yarn install --frozen-lockfile
+
+              # 6. 构建 VSCode (根据需要调整目标)
+              yarn gulp vscode-linux-x64
+
+              # 7. 打包产物
+              mkdir -p /build/artifacts
+              if [ -d '.build/linux/x64' ]; then
+                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
+              elif [ -d '../VSCode-linux-x64' ]; then
+                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C ../VSCode-linux-x64 .
+              else
+                echo '⚠️ Build output not found, checking directory structure...'
+                find . -name 'VSCode*' -type d 2>/dev/null || echo 'No VSCode directories found'
+                exit 1
+              fi
+
+              echo '✅ Build completed successfully'
+            "
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-linux-x64-uos
+          name: vscode-linux-x64-uos-glibc228
           path: artifacts/
+          if-no-files-found: error
