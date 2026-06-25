@@ -8,13 +8,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       # ============================================
-      # 1. 检出代码（跳过 LFS）
+      # 1. 检出代码（跳过 LFS，拉取完整历史）
       # ============================================
       - name: Checkout VSCode source (skip LFS)
         uses: actions/checkout@v6
         with:
           lfs: false
-          fetch-depth: 1
+          fetch-depth: 0  # 拉取完整历史，确保 yarn.lock 被正确下载
 
       # ============================================
       # 2. 删除 LFS 指针文件（构建不需要）
@@ -50,11 +50,25 @@ jobs:
           echo '=== Directory structure (top level) ==='
           ls -la
           echo ''
+          echo '=== Check for yarn.lock ==='
+          if [ -f "yarn.lock" ]; then
+            echo '✅ yarn.lock found'
+            head -5 yarn.lock
+          else
+            echo '❌ yarn.lock NOT found!'
+            echo 'Listing all .lock files:'
+            find . -name "*.lock" -type f
+          fi
+          echo ''
+          echo '=== Check for package-lock.json ==='
+          if [ -f "package-lock.json" ]; then
+            echo '⚠️ package-lock.json found (should be removed)'
+          else
+            echo '✅ package-lock.json not found'
+          fi
+          echo ''
           echo '=== Git status ==='
           git status
-          echo ''
-          echo '=== Check .gitattributes for LFS ==='
-          find . -name '.gitattributes' -exec echo "Found: {}" \; -exec cat {} \;
           echo ''
           echo '=== Check disk space ==='
           df -h
@@ -64,7 +78,20 @@ jobs:
         continue-on-error: true
 
       # ============================================
-      # 5. 在 Debian 10 容器内构建
+      # 5. 删除可能干扰的 package-lock.json
+      # ============================================
+      - name: Remove package-lock.json (if exists)
+        run: |
+          if [ -f "package-lock.json" ]; then
+            echo '⚠️ Removing package-lock.json'
+            rm -f package-lock.json
+            echo '✅ package-lock.json removed'
+          else
+            echo '✅ package-lock.json not found'
+          fi
+
+      # ============================================
+      # 6. 在 Debian 10 容器内构建
       # ============================================
       - name: Build in Debian 10 container (glibc 2.28)
         run: |
@@ -121,21 +148,35 @@ jobs:
                 python3-pip
 
               echo '=== Installing Node.js 20.x ==='
-              # Debian 10 需要从 NodeSource 安装
               curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
               apt-get install -y nodejs
 
               echo '=== Installing Yarn ==='
               npm install -g yarn
 
-              echo '=== Verifying glibc version ==='
+              echo '=== Verifying versions ==='
+              echo 'glibc version:'
               ldd --version | head -1
-              echo '=== Verifying Node.js version ==='
+              echo 'Node.js version:'
               node --version
-              echo '=== Verifying Yarn version ==='
+              echo 'Yarn version:'
               yarn --version
 
+              echo '=== Checking for yarn.lock ==='
+              if [ -f '/build/yarn.lock' ]; then
+                echo '✅ yarn.lock found in /build'
+                head -5 /build/yarn.lock
+              else
+                echo '❌ yarn.lock NOT found in /build!'
+                echo 'Listing /build directory:'
+                ls -la /build/
+                echo 'Listing all .lock files in /build:'
+                find /build -name '*.lock' -type f
+                exit 1
+              fi
+
               echo '=== Installing project dependencies ==='
+              # 使用 --frozen-lockfile 确保严格遵循锁定文件
               yarn install --frozen-lockfile
 
               echo '=== Building VSCode ==='
@@ -175,7 +216,7 @@ jobs:
             "
 
       # ============================================
-      # 6. 🔍 调试步骤 - 查看构建产物
+      # 7. 🔍 调试步骤 - 查看构建产物
       # ============================================
       - name: 🔍 Debug - list artifacts after build
         if: always()
@@ -191,7 +232,7 @@ jobs:
         continue-on-error: true
 
       # ============================================
-      # 7. 上传构建产物
+      # 8. 上传构建产物
       # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -202,7 +243,7 @@ jobs:
           retention-days: 7
 
       # ============================================
-      # 8. 🔍 调试步骤 - 列出上传的产物
+      # 9. 🔍 调试步骤 - 列出上传的产物
       # ============================================
       - name: 🔍 Debug - list uploaded artifacts
         if: always()
