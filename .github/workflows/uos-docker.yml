@@ -12,6 +12,8 @@ jobs:
           docker run --rm \
             -v $PWD:/build \
             -w /build \
+            --memory=16g \
+            --memory-swap=16g \
             rockylinux:8 \
             bash -c "
               set -e
@@ -126,7 +128,7 @@ jobs:
               npm cache clean --force
               npm ci --legacy-peer-deps
 
-              echo '=== Step 14: Build VSCode (compile only) ==='
+              echo '=== Step 14: Build VSCode with increased memory ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
@@ -137,33 +139,26 @@ jobs:
 
               cd /build
 
-              # 先编译代码
+              # 增加内存限制到 16GB
+              export NODE_OPTIONS=\"--max-old-space-size=16384 --max-semi-space-size=256\"
+
+              echo '=== Step 14a: Compile TypeScript (with 16GB memory) ==='
               echo 'Compiling TypeScript...'
               npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              # 编译扩展
+              echo '=== Step 14b: Compile extensions ==='
               echo 'Compiling extensions...'
               npx tsx ./node_modules/gulp/bin/gulp.js compile-extensions
 
-              # 编译主应用
-              echo 'Compiling main application...'
-              NODE_OPTIONS=\"--max-old-space-size=8192\" \
-                npx tsx ./node_modules/gulp/bin/gulp.js esbuild-bundle-linux-x64
+              echo '=== Step 14c: Bundle main application ==='
+              echo 'Bundling main application...'
+              npx tsx ./node_modules/gulp/bin/gulp.js esbuild-bundle-linux-x64
 
-              echo '=== Step 15: Package VSCode (create executable) ==='
-              # 创建 VSCode-linux-x64 目录
+              echo '=== Step 14d: Package VSCode ==='
               echo 'Packaging VSCode application...'
-              NODE_OPTIONS=\"--max-old-space-size=8192\" \
-                npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+              npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              # 如果上面的命令没有创建 VSCode-linux-x64，尝试使用打包任务
-              if [ ! -d 'VSCode-linux-x64' ]; then
-                echo 'VSCode-linux-x64 not found, trying package task...'
-                NODE_OPTIONS=\"--max-old-space-size=8192\" \
-                  npx tsx ./node_modules/gulp/bin/gulp.js package-linux-x64
-              fi
-
-              echo '=== Step 16: Find build outputs ==='
+              echo '=== Step 15: Find build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
@@ -171,7 +166,7 @@ jobs:
               if [ -d 'VSCode-linux-x64' ]; then
                 echo '✅ VSCode-linux-x64 exists'
                 ls -la VSCode-linux-x64/ | head -20
-                echo "Total size: $(du -sh VSCode-linux-x64/ 2>/dev/null | cut -f1)"
+                echo \"Total size: $(du -sh VSCode-linux-x64/ 2>/dev/null | cut -f1)\"
               else
                 echo '❌ VSCode-linux-x64 not found'
               fi
@@ -182,7 +177,7 @@ jobs:
               echo '=== Checking for deb/rpm packages ==='
               find . -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 17: Package artifacts ==='
+              echo '=== Step 16: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -209,7 +204,7 @@ jobs:
                 echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 18: Build summary ==='
+              echo '=== Step 17: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
