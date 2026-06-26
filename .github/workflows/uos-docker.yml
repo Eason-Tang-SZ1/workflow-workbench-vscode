@@ -77,17 +77,13 @@ jobs:
               curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 9: Install TypeScript and ts-node ==='
-              npm install -g typescript ts-node
-
-              echo '=== Step 10: Verify all versions ==='
+              echo '=== Step 9: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
-              echo \"TypeScript: \$(tsc --version)\"
 
-              echo '=== Step 11: Check for package-lock.json ==='
+              echo '=== Step 10: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -96,58 +92,31 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 12: Install dependencies with npm ci (skip scripts) ==='
+              echo '=== Step 11: Install dependencies with npm ci (skip scripts) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
               npm ci --ignore-scripts
 
-              echo '=== Step 13: Pre-compile TypeScript files ==='
-              cd /build
-              # 编译 build 目录下的 TypeScript 文件
-              echo 'Compiling build TypeScript files...'
-              if [ -f 'build/tsconfig.json' ]; then
-                npx tsc -p build/tsconfig.json --skipLibCheck || echo 'tsc build compilation failed'
-              fi
-
-              # 编译根目录的 gulpfile.ts
-              if [ -f 'gulpfile.ts' ]; then
-                echo 'Compiling gulpfile.ts...'
-                npx tsc gulpfile.ts --outDir . --skipLibCheck --target es2020 --module commonjs || \
-                echo 'gulpfile.ts compilation failed, but continuing...'
-              fi
-
-              # 确保 gulpfile.js 存在
-              if [ ! -f 'gulpfile.js' ]; then
-                echo '❌ gulpfile.js not found after compilation!'
-                echo 'Checking for gulpfile.ts...'
-                ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
-                # 尝试用 ts-node 直接执行
-                echo 'Will use ts-node to execute gulpfile.ts directly'
-              fi
-
-              echo '=== Step 14: Build VSCode ==='
+              echo '=== Step 12: Build VSCode using gulpfile.mjs ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
 
               cd /build
 
-              # 如果 gulpfile.js 存在，用 node 执行
-              if [ -f 'gulpfile.js' ]; then
-                echo 'Using gulpfile.js with node...'
-                node --max-old-space-size=8192 ./node_modules/gulp/bin/gulp.js vscode-linux-x64
-              else
-                # 否则用 ts-node 执行 gulpfile.ts
-                echo 'Using gulpfile.ts with ts-node...'
-                npx ts-node \
-                  --project tsconfig.tsnode.json \
-                  --transpile-only \
-                  ./node_modules/gulp/bin/gulp.js vscode-linux-x64
-              fi
+              # 检查 gulpfile 的格式
+              echo 'Checking gulpfile:'
+              ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
 
-              echo '=== Step 15: Find and list build outputs ==='
+              # 直接使用 node 运行 gulpfile.mjs (ES Module)
+              # 使用 --experimental-specifier-resolution=node 解决 ES Module 导入问题
+              echo 'Running gulp build using node...'
+              NODE_OPTIONS=\"--max-old-space-size=8192 --experimental-specifier-resolution=node\" \
+                node ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+
+              echo '=== Step 13: Find and list build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
@@ -163,7 +132,7 @@ jobs:
               echo '=== Checking for .deb or .rpm packages ==='
               find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 16: Package artifacts ==='
+              echo '=== Step 14: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -200,7 +169,7 @@ jobs:
                 echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 17: Build summary ==='
+              echo '=== Step 15: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
