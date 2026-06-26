@@ -7,11 +7,9 @@ jobs:
   build-in-rocky8:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout VSCode source
-        uses: actions/checkout@v6
-        with:
-          lfs: true
-
+      # ============================================
+      # 1. 直接在 Rocky Linux 8 容器内完成一切
+      # ============================================
       - name: Build in Rocky Linux 8 container (glibc 2.28)
         run: |
           docker run --rm \
@@ -21,54 +19,134 @@ jobs:
             bash -c "
               set -e
 
-              # 1. 安装 epel-release 和开发工具
-              dnf install -y epel-release
-              dnf groupinstall -y 'Development Tools'
-              dnf install -y \
-                git python3 curl wget which rpm-build \
-                alsa-lib-devel gtk3-devel libxkbfile-devel \
-                krb5-devel libsecret-devel libgbm-devel \
-                mesa-libEGL-devel mesa-libGL-devel \
-                libX11-devel libXext-devel libXtst-devel \
-                libXScrnSaver-devel freetype-devel fontconfig-devel \
-                cairo-devel pango-devel libicu-devel \
-                nss-devel nspr-devel libxkbcommon-devel
-
-              # 2. 安装 Node.js 20.x
-              curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-              dnf install -y nodejs
-
-              # 3. 安装 Yarn
-              npm install -g yarn
-
-              # 4. 验证 glibc 版本
+              echo '=== 🐳 Starting Rocky Linux 8 build container ==='
               echo '=== glibc version ==='
               ldd --version | head -1
 
-              # 5. 安装依赖
-              yarn install --frozen-lockfile
+              echo '=== Step 1: Enable EPEL and PowerTools ==='
+              dnf install -y epel-release
+              dnf config-manager --set-enabled powertools 2>/dev/null || \
+                dnf config-manager --set-enabled crb 2>/dev/null || \
+                echo 'PowerTools/CRB already enabled'
 
-              # 6. 构建 VSCode (根据需要调整目标)
-              yarn gulp vscode-linux-x64
+              echo '=== Step 2: Install Git and basic tools ==='
+              dnf install -y git curl wget which
 
-              # 7. 打包产物
+              echo '=== Step 3: Clone repository inside container (skip LFS) ==='
+              # 在容器内克隆仓库，完全跳过 LFS
+              git clone --depth 1 \
+                --filter=blob:none \
+                https://github.com/${{ github.repository }}.git /source
+
+              # 将源代码复制到构建目录
+              echo '=== Step 4: Copy source code to build directory ==='
+              cp -r /source/. /build/ 2>/dev/null || cp -r /source/* /build/
+              # 复制隐藏文件（如 .gitignore）
+              cp -r /source/.[!.]* /build/ 2>/dev/null || true
+              rm -rf /source
+
+              echo '=== Step 5: Remove LFS pointer files ==='
+              cd /build
+              find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
+                echo \"Removing LFS pointer: \$file\"
+                rm -f \"\$file\"
+              done
+              rm -rf .git/lfs 2>/dev/null || true
+              # 移除 .gitattributes 中的 LFS 规则
+              if [ -f '.gitattributes' ]; then
+                sed -i '/filter=lfs/d' .gitattributes
+              fi
+
+              echo '=== Step 6: Install GCC 11 via gcc-toolset-11 ==='
+              dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
+              source /opt/rh/gcc-toolset-11/enable
+              echo 'GCC version:'
+              gcc --version | head -1
+
+              echo '=== Step 7: Install build dependencies ==='
+              dnf install -y \
+                python3 rpm-build \
+                alsa-lib-devel gtk3-devel \
+                krb5-devel libsecret-devel \
+                mesa-libEGL-devel mesa-libGL-devel mesa-libgbm-devel \
+                libX11-devel libXext-devel libXtst-devel \
+                libXScrnSaver-devel freetype-devel fontconfig-devel \
+                cairo-devel pango-devel libicu-devel \
+                nss-devel nspr-devel libxkbcommon-devel \
+                libxkbcommon-x11-devel \
+                libXrandr-devel libXcomposite-devel \
+                libXdamage-devel libXi-devel libdrm-devel \
+                libglvnd-devel
+
+              dnf install -y libxkbfile-devel 2>/dev/null || echo 'libxkbfile-devel not found, continuing...'
+
+              echo '=== Step 8: Install Node.js 20.x ==='
+              curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+              dnf install -y nodejs
+
+              echo '=== Step 9: Verify all versions ==='
+              echo \"glibc: \$(ldd --version | head -1)\"
+              echo \"Node.js: \$(node --version)\"
+              echo \"npm: \$(npm --version)\"
+              echo \"GCC: \$(gcc --version | head -1)\"
+
+              echo '=== Step 10: Check for package-lock.json ==='
+              if [ ! -f '/build/package-lock.json' ]; then
+                echo '❌ package-lock.json NOT found!'
+                echo 'Listing /build directory:'
+                ls -la /build/
+                exit 1
+              fi
+              echo '✅ package-lock.json found'
+
+              echo '=== Step 11: Install dependencies with npm ci ==='
+              source /opt/rh/gcc-toolset-11/enable
+              export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
+              export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              cd /build
+              npm ci
+
+              echo '=== Step 12: Build VSCode ==='
+              source /opt/rh/gcc-toolset-11/enable
+              export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
+              export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              cd /build
+              npm run gulp vscode-linux-x64
+
+              echo '=== Step 13: Package artifacts ==='
               mkdir -p /build/artifacts
+              cd /build
+
               if [ -d '.build/linux/x64' ]; then
+                echo '✅ Found .build/linux/x64'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
               elif [ -d '../VSCode-linux-x64' ]; then
+                echo '✅ Found ../VSCode-linux-x64'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C ../VSCode-linux-x64 .
+              elif [ -d 'VSCode-linux-x64' ]; then
+                echo '✅ Found VSCode-linux-x64'
+                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C VSCode-linux-x64 .
               else
-                echo '⚠️ Build output not found, checking directory structure...'
-                find . -name 'VSCode*' -type d 2>/dev/null || echo 'No VSCode directories found'
+                echo '⚠️ Build output not found!'
+                echo 'Searching for VSCode directories...'
+                find . -name 'VSCode*' -type d 2>/dev/null | head -20
+                echo 'Checking .build directory...'
+                ls -la .build/ 2>/dev/null || echo '.build directory not found'
                 exit 1
               fi
 
               echo '✅ Build completed successfully'
+              echo '=== Artifacts ==='
+              ls -lh /build/artifacts/
             "
 
+      # ============================================
+      # 2. 上传构建产物
+      # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: vscode-linux-x64-uos-glibc228
           path: artifacts/
           if-no-files-found: error
+          retention-days: 7
