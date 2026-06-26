@@ -26,8 +26,8 @@ jobs:
                 dnf config-manager --set-enabled crb 2>/dev/null || \
                 echo 'PowerTools/CRB already enabled'
 
-              echo '=== Step 2: Install Git and basic tools ==='
-              dnf install -y git curl wget which rsync
+              echo '=== Step 2: Install Git, basic tools and jq ==='
+              dnf install -y git curl wget which rsync jq
 
               echo '=== Step 3: Clone repository inside container (with token) ==='
               git clone --depth 1 \
@@ -65,13 +65,35 @@ jobs:
                 sed -i '/filter=lfs/d' .gitattributes
               fi
 
-              echo '=== Step 7: Install GCC 11 via gcc-toolset-11 ==='
+              echo '=== Step 7: Fix product.json extensionsGallery ==='
+              cd /build
+              if [ -f 'product.json' ]; then
+                echo 'Original product.json extensionsGallery:'
+                grep -A 5 'extensionsGallery' product.json || echo 'No extensionsGallery found'
+
+                # 使用 jq 精确修改 product.json
+                echo 'Fixing product.json extensionsGallery...'
+                jq '.extensionsGallery = {
+                  \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
+                  \"cacheUrl\": \"https://vscode.blob.core.windows.net/gallery/index\",
+                  \"itemUrl\": \"https://marketplace.visualstudio.com/items\"
+                }' product.json > product.json.tmp && mv product.json.tmp product.json
+
+                # 验证 JSON 是否有效
+                echo 'Validating product.json...'
+                jq empty product.json && echo '✅ product.json is valid JSON'
+
+                echo 'Fixed product.json extensionsGallery:'
+                grep -A 5 'extensionsGallery' product.json
+              fi
+
+              echo '=== Step 8: Install GCC 11 via gcc-toolset-11 ==='
               dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
               source /opt/rh/gcc-toolset-11/enable
               echo 'GCC version:'
               gcc --version | head -1
 
-              echo '=== Step 8: Install build dependencies ==='
+              echo '=== Step 9: Install build dependencies ==='
               dnf install -y \
                 python39 python39-devel \
                 rpm-build \
@@ -91,21 +113,22 @@ jobs:
               alternatives --set python3 /usr/bin/python3.9
               python3 --version
 
-              echo '=== Step 9: Install Node.js 22.x ==='
+              echo '=== Step 10: Install Node.js 22.x ==='
               curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 10: Install tsx (TypeScript Execute) ==='
+              echo '=== Step 11: Install tsx (TypeScript Execute) ==='
               npm install -g tsx typescript
 
-              echo '=== Step 11: Verify all versions ==='
+              echo '=== Step 12: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
               echo \"Python3: \$(python3 --version)\"
+              echo \"jq: \$(jq --version)\"
 
-              echo '=== Step 12: Check for package-lock.json ==='
+              echo '=== Step 13: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -114,7 +137,7 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 13: Clear npm cache and install dependencies ==='
+              echo '=== Step 14: Clear npm cache and install dependencies ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
@@ -125,20 +148,6 @@ jobs:
 
               echo 'Installing dependencies with npm ci (full install)...'
               npm ci --legacy-peer-deps
-
-              echo '=== Step 14: Use environment variables for extension marketplace ==='
-              cd /build
-
-              # 不修改 product.json，只通过环境变量覆盖
-              # 这些环境变量会被 builtInExtensions.ts 读取
-              export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
-              export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
-
-              # 如果 product.json 中有自定义源，打印出来供调试
-              if [ -f 'product.json' ]; then
-                echo 'Current product.json extensionsGallery:'
-                grep -A 5 'extensionsGallery' product.json || echo 'No extensionsGallery found'
-              fi
 
               echo '=== Step 15: Verify key dependencies ==='
               if [ -d 'node_modules/ternary-stream' ]; then
@@ -154,7 +163,7 @@ jobs:
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
 
-              # 设置扩展市场环境变量（确保在构建时也生效）
+              # 也设置环境变量作为双重保障
               export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
               export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
