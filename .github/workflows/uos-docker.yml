@@ -7,9 +7,6 @@ jobs:
   build-in-rocky8:
     runs-on: ubuntu-22.04
     steps:
-      # ============================================
-      # 1. 直接在 Rocky Linux 8 容器内完成一切
-      # ============================================
       - name: Build in Rocky Linux 8 container (glibc 2.28)
         run: |
           docker run --rm \
@@ -80,13 +77,17 @@ jobs:
               curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 9: Verify all versions ==='
+              echo '=== Step 9: Install TypeScript and ts-node ==='
+              npm install -g typescript ts-node
+
+              echo '=== Step 10: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
+              echo \"TypeScript: \$(tsc --version)\"
 
-              echo '=== Step 10: Check for package-lock.json ==='
+              echo '=== Step 11: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -95,37 +96,45 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 11: Install dependencies with npm ci (skip scripts) ==='
+              echo '=== Step 12: Install dependencies with npm ci (skip scripts) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
-
-              # 关键修改：使用 --ignore-scripts 跳过 preinstall 脚本
               npm ci --ignore-scripts
 
-              echo '=== Step 11b: Compile TypeScript scripts ==='
-              # 安装 ts-node 以便执行 TypeScript 脚本
-              npm install -g typescript ts-node
-
-              # 手动编译 preinstall.ts（如果后续构建需要）
-              if [ -f 'build/npm/preinstall.ts' ]; then
-                echo 'Compiling preinstall.ts...'
-                npx tsc build/npm/preinstall.ts --outDir build/npm/ --skipLibCheck --target es2020 2>/dev/null || \
-                echo 'TypeScript compilation skipped, using ts-node for execution'
+              echo '=== Step 13: Compile TypeScript build files ==='
+              cd /build
+              # 编译 build 目录下的 TypeScript 文件
+              if [ -f 'build/tsconfig.json' ]; then
+                echo 'Compiling build TypeScript files...'
+                npx tsc -p build/tsconfig.json --skipLibCheck
+              else
+                echo 'No build tsconfig found, compiling individual files...'
+                # 手动编译 gulpfile.ts 和 preinstall.ts
+                find build -name '*.ts' -not -name '*.d.ts' | while read file; do
+                  echo \"Compiling \$file...\"
+                  npx tsc \"\$file\" --outDir build/ --skipLibCheck --target es2020 --module commonjs 2>/dev/null || true
+                done
               fi
 
-              echo '=== Step 12: Build VSCode ==='
+              # 编译根目录的 gulpfile.ts（如果存在）
+              if [ -f 'gulpfile.ts' ]; then
+                echo 'Compiling gulpfile.ts...'
+                npx tsc gulpfile.ts --outDir . --skipLibCheck --target es2020 --module commonjs 2>/dev/null || \
+                echo 'gulpfile.ts compilation skipped'
+              fi
+
+              echo '=== Step 14: Build VSCode using ts-node ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+
+              # 使用 ts-node 直接执行 gulpfile.ts
               cd /build
+              npx ts-node --transpile-only -P build/tsconfig.json ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              # 如果 preinstall 脚本被跳过，但后续构建需要它，可以用 ts-node 执行
-              # 但通常 gulp 构建任务会处理必要的编译
-              npm run gulp vscode-linux-x64
-
-              echo '=== Step 13: Package artifacts ==='
+              echo '=== Step 15: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -152,9 +161,6 @@ jobs:
               ls -lh /build/artifacts/
             "
 
-      # ============================================
-      # 2. 上传构建产物
-      # ============================================
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
