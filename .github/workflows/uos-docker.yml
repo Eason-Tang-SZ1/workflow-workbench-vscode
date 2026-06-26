@@ -139,23 +139,13 @@ jobs:
 
               cd /build
 
-              # 增加内存限制到 16GB
               export NODE_OPTIONS=\"--max-old-space-size=16384 --max-semi-space-size=256\"
 
               echo '=== Step 14a: Compile TypeScript (with 16GB memory) ==='
-              echo 'Compiling TypeScript...'
               npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              echo '=== Step 14b: Compile extensions ==='
-              echo 'Compiling extensions...'
-              npx tsx ./node_modules/gulp/bin/gulp.js compile-extensions
-
-              echo '=== Step 14c: Bundle main application ==='
-              echo 'Bundling main application...'
-              npx tsx ./node_modules/gulp/bin/gulp.js esbuild-bundle-linux-x64
-
-              echo '=== Step 14d: Package VSCode ==='
-              echo 'Packaging VSCode application...'
+              echo '=== Step 14b: Build and package VSCode ==='
+              # vscode-linux-x64 任务会处理 compile-extensions 和打包
               npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
               echo '=== Step 15: Find build outputs ==='
