@@ -65,28 +65,18 @@ jobs:
                 sed -i '/filter=lfs/d' .gitattributes
               fi
 
-              echo '=== Step 7: Fix product.json extensionsGallery ==='
+              echo '=== Step 7: Fix product.json ==='
               cd /build
               if [ -f 'product.json' ]; then
-                echo 'Original product.json:'
-                grep -E '(extensionsGallery|extensions)' product.json | head -20
-
-                # 使用 jq 修改 product.json，同时清除可能存在的 extensions 字段
-                echo 'Fixing product.json...'
                 jq '.extensionsGallery = {
                   \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
                   \"cacheUrl\": \"https://vscode.blob.core.windows.net/gallery/index\",
                   \"itemUrl\": \"https://marketplace.visualstudio.com/items\"
                 } | del(.extensions?)' product.json > product.json.tmp && mv product.json.tmp product.json
-
-                echo 'Validating product.json...'
                 jq empty product.json && echo '✅ product.json is valid JSON'
-
-                echo 'Fixed product.json:'
-                grep -E '(extensionsGallery|extensions)' product.json | head -20
               fi
 
-              echo '=== Step 8: Install GCC 11 via gcc-toolset-11 ==='
+              echo '=== Step 8: Install GCC 11 ==='
               dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
               source /opt/rh/gcc-toolset-11/enable
               echo 'GCC version:'
@@ -116,27 +106,17 @@ jobs:
               curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 11: Install tsx (TypeScript Execute) ==='
+              echo '=== Step 11: Install tsx ==='
               npm install -g tsx typescript
 
-              echo '=== Step 12: Verify all versions ==='
+              echo '=== Step 12: Verify versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
               echo \"Python3: \$(python3 --version)\"
-              echo \"jq: \$(jq --version)\"
 
-              echo '=== Step 13: Check for package-lock.json ==='
-              if [ ! -f '/build/package-lock.json' ]; then
-                echo '❌ package-lock.json NOT found!'
-                echo 'Listing /build directory:'
-                ls -la /build/
-                exit 1
-              fi
-              echo '✅ package-lock.json found'
-
-              echo '=== Step 14: Clear npm cache and install dependencies ==='
+              echo '=== Step 13: Install dependencies ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
@@ -144,67 +124,75 @@ jobs:
               cd /build
 
               npm cache clean --force
-
-              echo 'Installing dependencies with npm ci (full install)...'
               npm ci --legacy-peer-deps
 
-              echo '=== Step 15: Verify key dependencies ==='
-              if [ -d 'node_modules/ternary-stream' ]; then
-                echo '✅ ternary-stream installed'
-              else
-                echo '❌ ternary-stream missing, attempting to install manually...'
-                npm install ternary-stream --save-dev
-              fi
-
-              echo '=== Step 16: Build VSCode using tsx (skip extension download) ==='
+              echo '=== Step 14: Build VSCode (compile only) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
-
-              # 关键：跳过内置扩展下载
               export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
               export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
               export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
               cd /build
 
-              echo 'Checking gulpfile:'
-              ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
+              # 先编译代码
+              echo 'Compiling TypeScript...'
+              npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              echo 'Running gulp build using tsx (skipping extension download)...'
+              # 编译扩展
+              echo 'Compiling extensions...'
+              npx tsx ./node_modules/gulp/bin/gulp.js compile-extensions
+
+              # 编译主应用
+              echo 'Compiling main application...'
+              NODE_OPTIONS=\"--max-old-space-size=8192\" \
+                npx tsx ./node_modules/gulp/bin/gulp.js esbuild-bundle-linux-x64
+
+              echo '=== Step 15: Package VSCode (create executable) ==='
+              # 创建 VSCode-linux-x64 目录
+              echo 'Packaging VSCode application...'
               NODE_OPTIONS=\"--max-old-space-size=8192\" \
                 npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              echo '=== Step 17: Find and list build outputs ==='
+              # 如果上面的命令没有创建 VSCode-linux-x64，尝试使用打包任务
+              if [ ! -d 'VSCode-linux-x64' ]; then
+                echo 'VSCode-linux-x64 not found, trying package task...'
+                NODE_OPTIONS=\"--max-old-space-size=8192\" \
+                  npx tsx ./node_modules/gulp/bin/gulp.js package-linux-x64
+              fi
+
+              echo '=== Step 16: Find build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
-              echo '=== Checking .build directory ==='
-              ls -la .build/ 2>/dev/null || echo '.build directory not found'
+              echo '=== Checking for VSCode-linux-x64 directory ==='
+              if [ -d 'VSCode-linux-x64' ]; then
+                echo '✅ VSCode-linux-x64 exists'
+                ls -la VSCode-linux-x64/ | head -20
+                echo "Total size: $(du -sh VSCode-linux-x64/ 2>/dev/null | cut -f1)"
+              else
+                echo '❌ VSCode-linux-x64 not found'
+              fi
               echo ''
-              echo '=== Checking for VSCode* directories ==='
-              find . -maxdepth 2 -name 'VSCode*' -type d 2>/dev/null
+              echo '=== Checking .build/linux/x64 ==='
+              ls -la .build/linux/x64 2>/dev/null || echo '.build/linux/x64 not found'
               echo ''
-              echo '=== Checking for out* directories ==='
-              find . -maxdepth 2 -name 'out*' -type d 2>/dev/null | head -10
-              echo ''
-              echo '=== Checking for .deb or .rpm packages ==='
-              find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
+              echo '=== Checking for deb/rpm packages ==='
+              find . -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 18: Package artifacts ==='
+              echo '=== Step 17: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
-              if [ -d '.build/linux/x64' ]; then
-                echo '✅ Found .build/linux/x64'
+              if [ -d 'VSCode-linux-x64' ] && [ \"$(ls -A VSCode-linux-x64 2>/dev/null)\" ]; then
+                echo '✅ Found VSCode-linux-x64 directory, packaging...'
+                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz VSCode-linux-x64/
+                echo \"Package size: $(du -sh /build/artifacts/vscode-rocky8-glibc228.tar.gz | cut -f1)\"
+              elif [ -d '.build/linux/x64' ] && [ \"$(ls -A .build/linux/x64 2>/dev/null)\" ]; then
+                echo '✅ Found .build/linux/x64 directory, packaging...'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
-              elif [ -d 'VSCode-linux-x64' ]; then
-                echo '✅ Found VSCode-linux-x64'
-                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C VSCode-linux-x64 .
-              elif [ -d 'out' ]; then
-                echo '✅ Found out/ directory (partial build)'
-                tar -czf /build/artifacts/vscode-rocky8-glibc228-out.tar.gz out/
               elif [ -f 'VSCode-linux-x64.deb' ]; then
                 echo '✅ Found .deb package'
                 cp VSCode-linux-x64.deb /build/artifacts/
@@ -213,22 +201,15 @@ jobs:
                 cp VSCode-linux-x64.rpm /build/artifacts/
               else
                 echo '⚠️ No build outputs found!'
-                echo '=== Full directory listing for debugging ==='
+                echo '=== Full directory listing ==='
                 ls -la /build/
                 echo ''
-                echo '=== .build directory contents ==='
-                ls -la .build/ 2>/dev/null || echo '.build not found'
-                echo ''
-                echo '=== All VSCode* files ==='
-                find . -name 'VSCode*' 2>/dev/null | head -20
-                echo ''
-                echo '=== All .deb and .rpm files ==='
-                find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
+                echo '=== All VSCode* files/dirs ==='
+                find . -name 'VSCode*' 2>/dev/null | head -30
                 echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
-                echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 19: Build summary ==='
+              echo '=== Step 18: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
