@@ -32,16 +32,15 @@ jobs:
               echo '=== Step 2: Install Git and basic tools ==='
               dnf install -y git curl wget which
 
-              echo '=== Step 3: Clone repository inside container (skip LFS) ==='
-              # 在容器内克隆仓库，完全跳过 LFS
+              echo '=== Step 3: Clone repository inside container (with token) ==='
+              # 使用 GITHUB_TOKEN 进行认证
               git clone --depth 1 \
                 --filter=blob:none \
-                https://github.com/${{ github.repository }}.git /source
+                https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /source
 
               # 将源代码复制到构建目录
               echo '=== Step 4: Copy source code to build directory ==='
               cp -r /source/. /build/ 2>/dev/null || cp -r /source/* /build/
-              # 复制隐藏文件（如 .gitignore）
               cp -r /source/.[!.]* /build/ 2>/dev/null || true
               rm -rf /source
 
@@ -52,7 +51,6 @@ jobs:
                 rm -f \"\$file\"
               done
               rm -rf .git/lfs 2>/dev/null || true
-              # 移除 .gitattributes 中的 LFS 规则
               if [ -f '.gitattributes' ]; then
                 sed -i '/filter=lfs/d' .gitattributes
               fi
