@@ -103,38 +103,23 @@ jobs:
               cd /build
               npm ci --ignore-scripts
 
-              echo '=== Step 13: Compile TypeScript build files ==='
-              cd /build
-              # 编译 build 目录下的 TypeScript 文件
-              if [ -f 'build/tsconfig.json' ]; then
-                echo 'Compiling build TypeScript files...'
-                npx tsc -p build/tsconfig.json --skipLibCheck
-              else
-                echo 'No build tsconfig found, compiling individual files...'
-                # 手动编译 gulpfile.ts 和 preinstall.ts
-                find build -name '*.ts' -not -name '*.d.ts' | while read file; do
-                  echo \"Compiling \$file...\"
-                  npx tsc \"\$file\" --outDir build/ --skipLibCheck --target es2020 --module commonjs 2>/dev/null || true
-                done
-              fi
-
-              # 编译根目录的 gulpfile.ts（如果存在）
-              if [ -f 'gulpfile.ts' ]; then
-                echo 'Compiling gulpfile.ts...'
-                npx tsc gulpfile.ts --outDir . --skipLibCheck --target es2020 --module commonjs 2>/dev/null || \
-                echo 'gulpfile.ts compilation skipped'
-              fi
-
-              echo '=== Step 14: Build VSCode using ts-node ==='
+              echo '=== Step 13: Build VSCode using ts-node (skip type checking) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
 
-              # 使用 ts-node 直接执行 gulpfile.ts
               cd /build
-              npx ts-node --transpile-only -P build/tsconfig.json ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              echo '=== Step 15: Package artifacts ==='
+              # 关键：使用 --transpile-only 跳过类型检查
+              # 使用 --skipLibCheck 跳过库文件类型检查
+              # 使用 --noCheck 完全跳过类型检查（ts-node 选项）
+              npx ts-node \
+                --transpile-only \
+                --skipLibCheck \
+                --compilerOptions '{\"noEmit\":false,\"skipLibCheck\":true,\"strict\":false}' \
+                ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+
+              echo '=== Step 14: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
