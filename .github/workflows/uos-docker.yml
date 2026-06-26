@@ -73,22 +73,30 @@ jobs:
 
               dnf install -y libxkbfile-devel 2>/dev/null || echo 'libxkbfile-devel not found, continuing...'
 
-              echo '=== Step 8: Install Node.js 22.x ==='
-              # 使用 NodeSource 安装 Node.js 22.x
+              echo '=== Step 8: Install Python 3.9 (for node-gyp) ==='
+              # Rocky Linux 8 默认 Python 3.6 太旧，需要安装 Python 3.9
+              dnf install -y python39 python39-devel
+              # 设置 Python 3.9 为默认
+              alternatives --set python3 /usr/bin/python3.9
+              # 验证 Python 版本
+              python3 --version
+
+              echo '=== Step 9: Install Node.js 22.x ==='
               curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 9: Install tsx (TypeScript Execute) ==='
+              echo '=== Step 10: Install tsx (TypeScript Execute) ==='
               npm install -g tsx typescript
 
-              echo '=== Step 10: Verify all versions ==='
+              echo '=== Step 11: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
+              echo \"Python3: \$(python3 --version)\"
               echo \"tsx: \$(tsx --version 2>/dev/null || echo 'tsx installed')\"
 
-              echo '=== Step 11: Check for package-lock.json ==='
+              echo '=== Step 12: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -97,31 +105,34 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 12: Install dependencies with npm ci ==='
+              echo '=== Step 13: Install dependencies with npm ci ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
 
+              # 设置 Python 路径供 node-gyp 使用
+              export PYTHON=/usr/bin/python3.9
+
               echo 'Installing dependencies with npm ci...'
               npm ci
 
-              echo '=== Step 13: Build VSCode using tsx ==='
+              echo '=== Step 14: Build VSCode using tsx ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              export PYTHON=/usr/bin/python3.9
 
               cd /build
 
               echo 'Checking gulpfile:'
               ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
 
-              # 使用 tsx 执行 gulpfile.mjs
               echo 'Running gulp build using tsx...'
               NODE_OPTIONS=\"--max-old-space-size=8192\" \
                 npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              echo '=== Step 14: Find and list build outputs ==='
+              echo '=== Step 15: Find and list build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
@@ -137,11 +148,10 @@ jobs:
               echo '=== Checking for .deb or .rpm packages ==='
               find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 15: Package artifacts ==='
+              echo '=== Step 16: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
-              # 查找并打包实际存在的产物
               if [ -d '.build/linux/x64' ]; then
                 echo '✅ Found .build/linux/x64'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
@@ -174,7 +184,7 @@ jobs:
                 echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 16: Build summary ==='
+              echo '=== Step 17: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
