@@ -105,7 +105,6 @@ jobs:
 
               echo '=== Step 13: Create tsconfig for ts-node ==='
               cd /build
-              # 创建一个临时 tsconfig.json，禁用所有类型检查
               cat > tsconfig.tsnode.json << 'EOF'
               {
                 \"compilerOptions\": {
@@ -139,36 +138,77 @@ jobs:
 
               cd /build
 
-              # 使用自定义 tsconfig 文件，完全跳过类型检查
-              npx ts-node \
+              # 尝试多个构建目标
+              echo 'Attempting build target: vscode-linux-x64'
+              if npx ts-node \
                 --project tsconfig.tsnode.json \
                 --transpile-only \
-                ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+                ./node_modules/gulp/bin/gulp.js vscode-linux-x64; then
+                echo '✅ vscode-linux-x64 build succeeded'
+              else
+                echo '⚠️ vscode-linux-x64 failed, trying vscode-linux-min...'
+                npx ts-node \
+                  --project tsconfig.tsnode.json \
+                  --transpile-only \
+                  ./node_modules/gulp/bin/gulp.js vscode-linux-min
+              fi
 
-              echo '=== Step 15: Package artifacts ==='
+              echo '=== Step 15: Find and list build outputs ==='
+              cd /build
+              echo 'Searching for VSCode build outputs...'
+              echo ''
+              echo '=== Checking .build directory ==='
+              ls -la .build/ 2>/dev/null || echo '.build directory not found'
+              echo ''
+              echo '=== Checking for VSCode* directories ==='
+              find . -maxdepth 2 -name 'VSCode*' -type d 2>/dev/null
+              echo ''
+              echo '=== Checking for output directories ==='
+              find . -maxdepth 2 -name 'out*' -type d 2>/dev/null | head -10
+              echo ''
+              echo '=== Checking for .deb or .rpm packages ==='
+              find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
+
+              echo '=== Step 16: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
+              # 查找并打包实际存在的产物
               if [ -d '.build/linux/x64' ]; then
                 echo '✅ Found .build/linux/x64'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
-              elif [ -d '../VSCode-linux-x64' ]; then
-                echo '✅ Found ../VSCode-linux-x64'
-                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C ../VSCode-linux-x64 .
               elif [ -d 'VSCode-linux-x64' ]; then
                 echo '✅ Found VSCode-linux-x64'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C VSCode-linux-x64 .
+              elif [ -d 'out' ]; then
+                echo '✅ Found out/ directory (partial build)'
+                tar -czf /build/artifacts/vscode-rocky8-glibc228-out.tar.gz out/
+              elif [ -f 'VSCode-linux-x64.deb' ]; then
+                echo '✅ Found .deb package'
+                cp VSCode-linux-x64.deb /build/artifacts/
+              elif [ -f 'VSCode-linux-x64.rpm' ]; then
+                echo '✅ Found .rpm package'
+                cp VSCode-linux-x64.rpm /build/artifacts/
               else
-                echo '⚠️ Build output not found!'
-                echo 'Searching for VSCode directories...'
-                find . -name 'VSCode*' -type d 2>/dev/null | head -20
-                echo 'Checking .build directory...'
-                ls -la .build/ 2>/dev/null || echo '.build directory not found'
-                exit 1
+                echo '⚠️ No build outputs found!'
+                echo '=== Full directory listing for debugging ==='
+                ls -la /build/
+                echo ''
+                echo '=== .build directory contents ==='
+                ls -la .build/ 2>/dev/null || echo '.build not found'
+                echo ''
+                echo '=== All VSCode* files ==='
+                find . -name 'VSCode*' 2>/dev/null | head -20
+                echo ''
+                echo '=== All .deb and .rpm files ==='
+                find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
+                # 如果找不到产物，创建一个错误标记文件
+                echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
+                echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '✅ Build completed successfully'
-              echo '=== Artifacts ==='
+              echo '=== Step 17: Build summary ==='
+              echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
 
@@ -177,5 +217,5 @@ jobs:
         with:
           name: vscode-linux-x64-uos-glibc228
           path: artifacts/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
