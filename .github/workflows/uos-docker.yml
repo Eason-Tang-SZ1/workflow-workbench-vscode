@@ -77,13 +77,17 @@ jobs:
               curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 9: Verify all versions ==='
+              echo '=== Step 9: Install tsx (TypeScript Execute) ==='
+              npm install -g tsx typescript
+
+              echo '=== Step 10: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
+              echo \"tsx: \$(tsx --version 2>/dev/null || echo 'tsx installed')\"
 
-              echo '=== Step 10: Check for package-lock.json ==='
+              echo '=== Step 11: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -92,31 +96,30 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 11: Install dependencies with npm ci (skip scripts) ==='
+              echo '=== Step 12: Install dependencies with npm ci (skip scripts) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
               npm ci --ignore-scripts
 
-              echo '=== Step 12: Build VSCode using gulpfile.mjs ==='
+              echo '=== Step 13: Build VSCode using tsx ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
 
               cd /build
 
-              # 检查 gulpfile 的格式
+              # 检查 gulpfile
               echo 'Checking gulpfile:'
               ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
 
-              # 直接使用 node 运行 gulpfile.mjs (ES Module)
-              # 使用 --experimental-specifier-resolution=node 解决 ES Module 导入问题
-              echo 'Running gulp build using node...'
-              NODE_OPTIONS=\"--max-old-space-size=8192 --experimental-specifier-resolution=node\" \
-                node ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+              # 使用 tsx 执行 gulpfile.mjs（它内部会导入 .ts 文件）
+              echo 'Running gulp build using tsx...'
+              NODE_OPTIONS=\"--max-old-space-size=8192\" \
+                npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              echo '=== Step 13: Find and list build outputs ==='
+              echo '=== Step 14: Find and list build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
@@ -132,7 +135,7 @@ jobs:
               echo '=== Checking for .deb or .rpm packages ==='
               find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 14: Package artifacts ==='
+              echo '=== Step 15: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -169,7 +172,7 @@ jobs:
                 echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 15: Build summary ==='
+              echo '=== Step 16: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
