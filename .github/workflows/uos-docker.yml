@@ -35,11 +35,26 @@ jobs:
                 https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /source
 
               echo '=== Step 4: Copy source code to build directory ==='
-              cp -r /source/. /build/ 2>/dev/null || cp -r /source/* /build/
-              cp -r /source/.[!.]* /build/ 2>/dev/null || true
+              # 使用 rsync 保留所有文件包括 .git
+              rsync -a /source/ /build/ 2>/dev/null || cp -r /source/. /build/
               rm -rf /source
 
-              echo '=== Step 5: Remove LFS pointer files ==='
+              echo '=== Step 5: Ensure .git directory exists ==='
+              cd /build
+              if [ -d '.git' ]; then
+                echo '✅ .git directory exists'
+                # 配置 Git 安全设置，避免 postinstall 中的 Git 命令失败
+                git config --global --add safe.directory /build
+                git config pull.rebase merges 2>/dev/null || echo 'Git config skipped'
+              else
+                echo '⚠️ .git directory not found, initializing...'
+                git init
+                git remote add origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+                git fetch --depth 1 origin HEAD
+                git reset --hard FETCH_HEAD
+              fi
+
+              echo '=== Step 6: Remove LFS pointer files ==='
               cd /build
               find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
                 echo \"Removing LFS pointer: \$file\"
@@ -50,13 +65,13 @@ jobs:
                 sed -i '/filter=lfs/d' .gitattributes
               fi
 
-              echo '=== Step 6: Install GCC 11 via gcc-toolset-11 ==='
+              echo '=== Step 7: Install GCC 11 via gcc-toolset-11 ==='
               dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
               source /opt/rh/gcc-toolset-11/enable
               echo 'GCC version:'
               gcc --version | head -1
 
-              echo '=== Step 7: Install build dependencies ==='
+              echo '=== Step 8: Install build dependencies ==='
               dnf install -y \
                 python3 rpm-build \
                 alsa-lib-devel gtk3-devel \
@@ -73,30 +88,26 @@ jobs:
 
               dnf install -y libxkbfile-devel 2>/dev/null || echo 'libxkbfile-devel not found, continuing...'
 
-              echo '=== Step 8: Install Python 3.9 (for node-gyp) ==='
-              # Rocky Linux 8 默认 Python 3.6 太旧，需要安装 Python 3.9
+              echo '=== Step 9: Install Python 3.9 (for node-gyp) ==='
               dnf install -y python39 python39-devel
-              # 设置 Python 3.9 为默认
               alternatives --set python3 /usr/bin/python3.9
-              # 验证 Python 版本
               python3 --version
 
-              echo '=== Step 9: Install Node.js 22.x ==='
+              echo '=== Step 10: Install Node.js 22.x ==='
               curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
               dnf install -y nodejs
 
-              echo '=== Step 10: Install tsx (TypeScript Execute) ==='
+              echo '=== Step 11: Install tsx (TypeScript Execute) ==='
               npm install -g tsx typescript
 
-              echo '=== Step 11: Verify all versions ==='
+              echo '=== Step 12: Verify all versions ==='
               echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
               echo \"Python3: \$(python3 --version)\"
-              echo \"tsx: \$(tsx --version 2>/dev/null || echo 'tsx installed')\"
 
-              echo '=== Step 12: Check for package-lock.json ==='
+              echo '=== Step 13: Check for package-lock.json ==='
               if [ ! -f '/build/package-lock.json' ]; then
                 echo '❌ package-lock.json NOT found!'
                 echo 'Listing /build directory:'
@@ -105,19 +116,27 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 13: Install dependencies with npm ci ==='
+              echo '=== Step 14: Install dependencies with npm ci ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              export PYTHON=/usr/bin/python3.9
               cd /build
 
-              # 设置 Python 路径供 node-gyp 使用
-              export PYTHON=/usr/bin/python3.9
+              echo 'Installing dependencies with npm ci (skipping postinstall)...'
+              # 跳过 postinstall 脚本（它包含 Git 操作，在 CI 中不需要）
+              npm ci --ignore-scripts
 
-              echo 'Installing dependencies with npm ci...'
-              npm ci
+              echo '=== Step 15: Manually run necessary postinstall tasks ==='
+              cd /build
+              # 只运行需要的 postinstall 任务（跳过 Git 相关操作）
+              # 如果 preinstall 没有执行，用 tsx 运行它
+              if [ -f 'build/npm/preinstall.ts' ]; then
+                echo 'Running preinstall.ts...'
+                npx tsx build/npm/preinstall.ts || echo 'preinstall.ts skipped'
+              fi
 
-              echo '=== Step 14: Build VSCode using tsx ==='
+              echo '=== Step 16: Build VSCode using tsx ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
@@ -132,7 +151,7 @@ jobs:
               NODE_OPTIONS=\"--max-old-space-size=8192\" \
                 npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
-              echo '=== Step 15: Find and list build outputs ==='
+              echo '=== Step 17: Find and list build outputs ==='
               cd /build
               echo 'Searching for VSCode build outputs...'
               echo ''
@@ -148,7 +167,7 @@ jobs:
               echo '=== Checking for .deb or .rpm packages ==='
               find . -name '*.deb' -o -name '*.rpm' 2>/dev/null
 
-              echo '=== Step 16: Package artifacts ==='
+              echo '=== Step 18: Package artifacts ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -184,7 +203,7 @@ jobs:
                 echo 'Check the build logs above for errors.' >> /build/artifacts/ERROR.txt
               fi
 
-              echo '=== Step 17: Build summary ==='
+              echo '=== Step 19: Build summary ==='
               echo 'Artifacts directory contents:'
               ls -lh /build/artifacts/
             "
