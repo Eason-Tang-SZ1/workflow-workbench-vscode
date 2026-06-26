@@ -73,8 +73,9 @@ jobs:
 
               dnf install -y libxkbfile-devel 2>/dev/null || echo 'libxkbfile-devel not found, continuing...'
 
-              echo '=== Step 8: Install Node.js 20.x ==='
-              curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+              echo '=== Step 8: Install Node.js 22.x ==='
+              # 使用 NodeSource 安装 Node.js 22.x
+              curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
               dnf install -y nodejs
 
               echo '=== Step 9: Install tsx (TypeScript Execute) ==='
@@ -102,18 +103,8 @@ jobs:
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
 
-              # 移除 --ignore-scripts，让所有安装脚本正常执行
-              # 如果 preinstall.ts 执行失败，用 tsx 来执行它
-              echo 'Installing dependencies...'
-              if ! npm ci; then
-                echo '⚠️ npm ci failed, trying with tsx for preinstall...'
-                # 如果 preinstall.ts 是唯一失败的原因，可以单独处理
-                if [ -f 'build/npm/preinstall.ts' ]; then
-                  npx tsx build/npm/preinstall.ts
-                fi
-                # 重新尝试 npm ci
-                npm ci
-              fi
+              echo 'Installing dependencies with npm ci...'
+              npm ci
 
               echo '=== Step 13: Build VSCode using tsx ==='
               source /opt/rh/gcc-toolset-11/enable
