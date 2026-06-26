@@ -68,23 +68,22 @@ jobs:
               echo '=== Step 7: Fix product.json extensionsGallery ==='
               cd /build
               if [ -f 'product.json' ]; then
-                echo 'Original product.json extensionsGallery:'
-                grep -A 5 'extensionsGallery' product.json || echo 'No extensionsGallery found'
+                echo 'Original product.json:'
+                grep -E '(extensionsGallery|extensions)' product.json | head -20
 
-                # 使用 jq 精确修改 product.json
-                echo 'Fixing product.json extensionsGallery...'
+                # 使用 jq 修改 product.json，同时清除可能存在的 extensions 字段
+                echo 'Fixing product.json...'
                 jq '.extensionsGallery = {
                   \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
                   \"cacheUrl\": \"https://vscode.blob.core.windows.net/gallery/index\",
                   \"itemUrl\": \"https://marketplace.visualstudio.com/items\"
-                }' product.json > product.json.tmp && mv product.json.tmp product.json
+                } | del(.extensions?)' product.json > product.json.tmp && mv product.json.tmp product.json
 
-                # 验证 JSON 是否有效
                 echo 'Validating product.json...'
                 jq empty product.json && echo '✅ product.json is valid JSON'
 
-                echo 'Fixed product.json extensionsGallery:'
-                grep -A 5 'extensionsGallery' product.json
+                echo 'Fixed product.json:'
+                grep -E '(extensionsGallery|extensions)' product.json | head -20
               fi
 
               echo '=== Step 8: Install GCC 11 via gcc-toolset-11 ==='
@@ -157,13 +156,14 @@ jobs:
                 npm install ternary-stream --save-dev
               fi
 
-              echo '=== Step 16: Build VSCode using tsx ==='
+              echo '=== Step 16: Build VSCode using tsx (skip extension download) ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
 
-              # 也设置环境变量作为双重保障
+              # 关键：跳过内置扩展下载
+              export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
               export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
               export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
@@ -172,7 +172,7 @@ jobs:
               echo 'Checking gulpfile:'
               ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
 
-              echo 'Running gulp build using tsx...'
+              echo 'Running gulp build using tsx (skipping extension download)...'
               NODE_OPTIONS=\"--max-old-space-size=8192\" \
                 npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
