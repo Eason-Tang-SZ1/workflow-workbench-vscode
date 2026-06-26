@@ -96,12 +96,24 @@ jobs:
               fi
               echo '✅ package-lock.json found'
 
-              echo '=== Step 12: Install dependencies with npm ci (skip scripts) ==='
+              echo '=== Step 12: Install dependencies with npm ci ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               cd /build
-              npm ci --ignore-scripts
+
+              # 移除 --ignore-scripts，让所有安装脚本正常执行
+              # 如果 preinstall.ts 执行失败，用 tsx 来执行它
+              echo 'Installing dependencies...'
+              if ! npm ci; then
+                echo '⚠️ npm ci failed, trying with tsx for preinstall...'
+                # 如果 preinstall.ts 是唯一失败的原因，可以单独处理
+                if [ -f 'build/npm/preinstall.ts' ]; then
+                  npx tsx build/npm/preinstall.ts
+                fi
+                # 重新尝试 npm ci
+                npm ci
+              fi
 
               echo '=== Step 13: Build VSCode using tsx ==='
               source /opt/rh/gcc-toolset-11/enable
@@ -110,11 +122,10 @@ jobs:
 
               cd /build
 
-              # 检查 gulpfile
               echo 'Checking gulpfile:'
               ls -la gulpfile.* 2>/dev/null || echo 'No gulpfile found'
 
-              # 使用 tsx 执行 gulpfile.mjs（它内部会导入 .ts 文件）
+              # 使用 tsx 执行 gulpfile.mjs
               echo 'Running gulp build using tsx...'
               NODE_OPTIONS=\"--max-old-space-size=8192\" \
                 npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
