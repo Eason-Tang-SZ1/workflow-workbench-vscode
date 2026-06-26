@@ -126,33 +126,17 @@ jobs:
               echo 'Installing dependencies with npm ci (full install)...'
               npm ci --legacy-peer-deps
 
-              echo '=== Step 14: Set environment to use official extension sources ==='
+              echo '=== Step 14: Use environment variables for extension marketplace ==='
               cd /build
 
-              # 设置环境变量使用官方 VS Code 扩展市场
+              # 不修改 product.json，只通过环境变量覆盖
+              # 这些环境变量会被 builtInExtensions.ts 读取
               export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
               export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
-              # 如果有自定义的 product.json 配置了其他源，覆盖它
+              # 如果 product.json 中有自定义源，打印出来供调试
               if [ -f 'product.json' ]; then
                 echo 'Current product.json extensionsGallery:'
-                grep -A 5 'extensionsGallery' product.json || echo 'No extensionsGallery found'
-
-                # 备份并修改 product.json
-                cp product.json product.json.bak
-                # 使用 jq 或 sed 修改 extensionsGallery 配置（如果有 jq 就用 jq）
-                if command -v jq &> /dev/null; then
-                  jq '.extensionsGallery = {
-                    \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
-                    \"cacheUrl\": \"https://vscode.blob.core.windows.net/gallery/index\",
-                    \"itemUrl\": \"https://marketplace.visualstudio.com/items\"
-                  }' product.json > product.json.tmp && mv product.json.tmp product.json
-                else
-                  # 使用 sed 简单替换
-                  sed -i 's|\"serviceUrl\":.*|\"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",|g' product.json
-                  sed -i 's|\"itemUrl\":.*|\"itemUrl\": \"https://marketplace.visualstudio.com/items\"|g' product.json
-                fi
-                echo 'Updated product.json extensionsGallery:'
                 grep -A 5 'extensionsGallery' product.json || echo 'No extensionsGallery found'
               fi
 
@@ -170,7 +154,7 @@ jobs:
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
 
-              # 设置扩展市场环境变量
+              # 设置扩展市场环境变量（确保在构建时也生效）
               export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
               export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
