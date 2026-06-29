@@ -1,4 +1,4 @@
-name: 为 UOS 构建 VSCode（Rocky Linux 8 - glibc 2.28）
+name: 为 UOS 构建 VSCode Remote（轻量版）
 
 on:
   workflow_dispatch:
@@ -7,19 +7,19 @@ jobs:
   build-in-rocky8:
     runs-on: ubuntu-22.04
     steps:
-      - name: 在 Rocky Linux 8 容器中构建（优化内存）
+      - name: 在 Rocky Linux 8 容器中构建 Remote 版
         run: |
           docker run --rm \
             -v $PWD:/build \
             -w /build \
-            --memory=16g \
-            --memory-swap=16g \
+            --memory=14g \
+            --memory-swap=14g \
             --cpus=2 \
             rockylinux:8 \
             bash -c "
               set -e
 
-              echo '=== 🐳 启动 Rocky Linux 8 构建容器 ==='
+              echo '=== 🐳 构建 VSCode Remote 版本 ==='
               echo '=== 系统信息 ==='
               echo 'CPU 核心数: \$(nproc)'
               echo '内存总量: \$(free -h | grep Mem | awk '{print \$2}')'
@@ -28,8 +28,7 @@ jobs:
               echo '=== 步骤 1: 启用 EPEL 和 PowerTools ==='
               dnf install -y epel-release
               dnf config-manager --set-enabled powertools 2>/dev/null || \
-                dnf config-manager --set-enabled crb 2>/dev/null || \
-                echo 'PowerTools/CRB 已启用'
+                dnf config-manager --set-enabled crb 2>/dev/null || true
 
               echo '=== 步骤 2: 安装基础工具 ==='
               dnf install -y git curl wget which rsync jq
@@ -46,12 +45,10 @@ jobs:
               echo '=== 步骤 5: 修复 .git 目录 ==='
               cd /build
               if [ -d '.git' ]; then
-                echo '✅ .git 目录存在'
                 git config --global --add safe.directory /build
                 git config --global user.email 'ci@github.com'
                 git config --global user.name 'CI Build'
               else
-                echo '⚠️ .git 目录不存在，重新初始化...'
                 git init
                 git remote add origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
                 git fetch --depth 1 origin HEAD
@@ -59,8 +56,7 @@ jobs:
                 git config --global --add safe.directory /build
               fi
 
-              echo '=== 步骤 6: 移除 LFS 指针文件 ==='
-              cd /build
+              echo '=== 步骤 6: 移除 LFS 指针 ==='
               find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
                 echo \"移除 LFS 指针: \$file\"
                 rm -f \"\$file\"
@@ -71,21 +67,18 @@ jobs:
               fi
 
               echo '=== 步骤 7: 修复 product.json ==='
-              cd /build
               if [ -f 'product.json' ]; then
                 jq '.extensionsGallery = {
                   \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
                   \"cacheUrl\": \"https://vscode.blob.core.windows.net/gallery/index\",
                   \"itemUrl\": \"https://marketplace.visualstudio.com/items\"
                 } | del(.extensions?)' product.json > product.json.tmp && mv product.json.tmp product.json
-                jq empty product.json && echo '✅ product.json 是有效的 JSON'
               fi
 
               echo '=== 步骤 8: 安装 GCC 11 ==='
               dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
               source /opt/rh/gcc-toolset-11/enable
-              echo 'GCC 版本:'
-              gcc --version | head -1
+              echo 'GCC 版本: \$(gcc --version | head -1)'
 
               echo '=== 步骤 9: 安装构建依赖 ==='
               dnf install -y \
@@ -103,9 +96,8 @@ jobs:
                 libXdamage-devel libXi-devel libdrm-devel \
                 libglvnd-devel
 
-              dnf install -y libxkbfile-devel 2>/dev/null || echo 'libxkbfile-devel 未找到，继续...'
+              dnf install -y libxkbfile-devel 2>/dev/null || true
               alternatives --set python3 /usr/bin/python3.9
-              python3 --version
 
               echo '=== 步骤 10: 安装 Node.js 22.x ==='
               curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
@@ -115,96 +107,75 @@ jobs:
               npm install -g tsx typescript
 
               echo '=== 步骤 12: 验证版本 ==='
-              echo \"glibc: \$(ldd --version | head -1)\"
               echo \"Node.js: \$(node --version)\"
               echo \"npm: \$(npm --version)\"
               echo \"GCC: \$(gcc --version | head -1)\"
               echo \"Python3: \$(python3 --version)\"
 
-              echo '=== 步骤 13: 安装 npm 依赖（限制并发以节省内存） ==='
+              echo '=== 步骤 13: 安装 npm 依赖 ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
               cd /build
 
-              # 清理缓存并安装依赖，限制并发数
               npm cache clean --force
               npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=2
 
-              echo '=== 步骤 14: 分阶段构建 VSCode（优化内存和 CPU） ==='
-
-              # 启用 GCC 11
+              echo '=== 步骤 14: 构建 Remote 版本 ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
               export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
-              export VSCODE_MARKETPLACE_SERVICE_URL='https://marketplace.visualstudio.com/_apis/public/gallery'
-              export VSCODE_MARKETPLACE_ITEM_URL='https://marketplace.visualstudio.com/items'
 
               cd /build
 
-              # 设置 Node.js 内存限制（14GB，因为总内存只有 16GB）
-              export NODE_OPTIONS=\"--max-old-space-size=14336 --max-semi-space-size=256\"
+              # Remote 版本只需要约 8-10GB 内存
+              export NODE_OPTIONS=\"--max-old-space-size=10240 --max-semi-space-size=256\"
 
-              echo '=== 步骤 14a: 编译 TypeScript（串行执行，降低内存峰值） ==='
-              # 使用 gulp 的 --series 参数串行执行任务
+              echo '=== 步骤 14a: 编译 TypeScript ==='
               npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              echo '=== 步骤 14b: 构建扩展（串行构建，避免内存爆炸） ==='
-              # 构建扩展时限制并行度
-              npx tsx ./node_modules/gulp/bin/gulp.js compile-extensions-build
-
-              echo '=== 步骤 14c: 打包 VSCode Linux x64 ==='
-              # 打包前强制垃圾回收
-              node -e \"global.gc && global.gc()\" 2>/dev/null || true
-              npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
+              echo '=== 步骤 14b: 构建 Remote Extension Host ==='
+              npx tsx ./node_modules/gulp/bin/gulp.js vscode-reh-linux-x64
 
               echo '=== 步骤 15: 查找构建产物 ==='
               cd /build
-              echo '正在搜索 VSCode 构建产物...'
-              echo ''
-              echo '=== 检查 VSCode-linux-x64 目录 ==='
-              if [ -d 'VSCode-linux-x64' ]; then
-                echo '✅ VSCode-linux-x64 存在'
-                ls -la VSCode-linux-x64/ | head -20
-                echo \"总大小: \$(du -sh VSCode-linux-x64/ 2>/dev/null | cut -f1)\"
+              echo '正在搜索构建产物...'
+
+              echo '=== 检查 vscode-reh-linux-x64 目录 ==='
+              if [ -d 'vscode-reh-linux-x64' ]; then
+                echo '✅ vscode-reh-linux-x64 存在'
+                ls -la vscode-reh-linux-x64/ | head -20
+                echo \"总大小: \$(du -sh vscode-reh-linux-x64/ 2>/dev/null | cut -f1)\"
               else
-                echo '❌ VSCode-linux-x64 未找到'
+                echo '❌ vscode-reh-linux-x64 未找到'
+                echo '查找所有可能的构建产物...'
+                find . -name '*reh*' -type d 2>/dev/null | head -10
+                find . -name 'VSCode*' -type d 2>/dev/null | head -10
               fi
-              echo ''
-              echo '=== 检查 .build/linux/x64 ==='
-              ls -la .build/linux/x64 2>/dev/null || echo '.build/linux/x64 未找到'
-              echo ''
-              echo '=== 检查 deb/rpm 包 ==='
-              find . -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.rpm' 2>/dev/null
 
               echo '=== 步骤 16: 打包产物 ==='
               mkdir -p /build/artifacts
               cd /build
 
-              if [ -d 'VSCode-linux-x64' ] && [ \"\$(ls -A VSCode-linux-x64 2>/dev/null)\" ]; then
-                echo '✅ 找到 VSCode-linux-x64 目录，正在打包...'
+              if [ -d 'vscode-reh-linux-x64' ] && [ \"\$(ls -A vscode-reh-linux-x64 2>/dev/null)\" ]; then
+                echo '✅ 找到 vscode-reh-linux-x64，正在打包...'
+                tar -czf /build/artifacts/vscode-reh-rocky8-glibc228.tar.gz vscode-reh-linux-x64/
+                echo \"打包大小: \$(du -sh /build/artifacts/vscode-reh-rocky8-glibc228.tar.gz | cut -f1)\"
+              elif [ -d 'VSCode-linux-x64' ] && [ \"\$(ls -A VSCode-linux-x64 2>/dev/null)\" ]; then
+                echo '✅ 找到 VSCode-linux-x64，正在打包...'
                 tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz VSCode-linux-x64/
-                echo \"打包大小: \$(du -sh /build/artifacts/vscode-rocky8-glibc228.tar.gz | cut -f1)\"
-              elif [ -d '.build/linux/x64' ] && [ \"\$(ls -A .build/linux/x64 2>/dev/null)\" ]; then
-                echo '✅ 找到 .build/linux/x64 目录，正在打包...'
-                tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz -C .build/linux/x64 .
-              elif [ -f 'VSCode-linux-x64.deb' ]; then
-                echo '✅ 找到 .deb 包'
-                cp VSCode-linux-x64.deb /build/artifacts/
-              elif [ -f 'VSCode-linux-x64.rpm' ]; then
-                echo '✅ 找到 .rpm 包'
-                cp VSCode-linux-x64.rpm /build/artifacts/
               else
                 echo '⚠️ 未找到构建产物！'
                 echo '=== 完整目录列表 ==='
                 ls -la /build/
                 echo ''
-                echo '=== 所有 VSCode* 文件/目录 ==='
-                find . -name 'VSCode*' 2>/dev/null | head -30
+                echo '=== 所有相关目录 ==='
+                find . -maxdepth 2 -name '*code*' -o -name '*VSCode*' 2>/dev/null | head -30
                 echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
+                exit 1
               fi
 
               echo '=== 步骤 17: 构建总结 ==='
@@ -215,7 +186,7 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-linux-x64-uos-glibc228
+          name: vscode-reh-linux-x64-uos-glibc228
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
