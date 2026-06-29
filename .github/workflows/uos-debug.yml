@@ -1,4 +1,4 @@
-name: Build VSCode for UOS (Simple)
+name: Build VSCode for UOS (Simple with Logs)
 
 on:
   workflow_dispatch:
@@ -7,40 +7,206 @@ on:
         description: 'VSCode version'
         required: true
         default: '1.116.0'
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120
+
     steps:
-      - name: Install dependencies
+      - name: ⏱️ Step 1/10 - Start build
         run: |
+          echo "=========================================="
+          echo "🚀 Starting VSCode build for UOS"
+          echo "📦 Version: ${{ github.event.inputs.vscode_version }}"
+          echo "🖥️  Runner: $(uname -a)"
+          echo "💾 Memory: $(free -h)"
+          echo "💿 Disk: $(df -h /)"
+          echo "=========================================="
+          date
+
+      - name: ⏱️ Step 2/10 - Install system dependencies
+        run: |
+          echo "=========================================="
+          echo "📦 Installing system dependencies..."
+          echo "=========================================="
           sudo apt-get update
-          sudo apt-get install -y build-essential git python3 libgtk-3-dev libxkbfile-dev libgbm-dev
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            python3 \
+            libgtk-3-dev \
+            libxkbfile-dev \
+            libgbm-dev \
+            libx11-dev \
+            libxss-dev \
+            libxtst-dev \
+            libnss3-dev \
+            libasound2-dev \
+            libglib2.0-dev
+          echo "✅ System dependencies installed"
+          date
 
-      - name: Clone and build
+      - name: ⏱️ Step 3/10 - Install Node.js 18
         run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.vscode_version }} https://github.com/microsoft/vscode.git
-          cd vscode
-
-          # 安装 Node 18
+          echo "=========================================="
+          echo "📦 Installing Node.js 18..."
+          echo "=========================================="
           curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo apt-get install -y nodejs
+          echo "✅ Node.js installed: $(node --version)"
+          echo "✅ npm installed: $(npm --version)"
+          date
 
-          # 安装依赖
-          npm install --no-audit
-
-          # 构建
-          export VSCODE_SKIP_PRELAUNCH=1
-          ./node_modules/.bin/gulp vscode-linux-x64-min
-
-      - name: Package
+      - name: ⏱️ Step 4/10 - Clone VSCode source
         run: |
-          if [ -d "./vscode/VSCode-linux-x64" ]; then
-            tar -czf vscode-uos.tar.gz -C ./vscode VSCode-linux-x64
-          fi
+          echo "=========================================="
+          echo "📥 Cloning VSCode source code..."
+          echo "📦 Version: ${{ github.event.inputs.vscode_version }}"
+          echo "=========================================="
+          git clone --depth 1 --branch ${{ github.event.inputs.vscode_version }} https://github.com/microsoft/vscode.git
+          echo "✅ Clone completed"
+          echo "📁 Directory size: $(du -sh vscode | cut -f1)"
+          date
 
-      - name: Upload
+      - name: ⏱️ Step 5/10 - Verify checkout
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying checkout..."
+          echo "=========================================="
+          cd vscode
+          echo "📁 Files: $(ls -la | head -20)"
+          echo "📄 package.json exists: $(test -f package.json && echo '✅ YES' || echo '❌ NO')"
+          echo "📄 package-lock.json exists: $(test -f package-lock.json && echo '✅ YES' || echo '❌ NO')"
+          echo "📌 Version from package.json: $(grep '"version"' package.json | head -1)"
+          date
+
+      - name: ⏱️ Step 6/10 - Install npm dependencies
+        run: |
+          echo "=========================================="
+          echo "📦 Installing npm dependencies..."
+          echo "⏰ This may take 10-15 minutes..."
+          echo "=========================================="
+          cd vscode
+          echo "Starting npm install at: $(date)"
+          npm install --no-audit --legacy-peer-deps
+          echo "✅ npm install completed at: $(date)"
+          echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "📁 Total directory size: $(du -sh . | cut -f1)"
+          date
+
+      - name: ⏱️ Step 7/10 - Build VSCode (part 1/2)
+        run: |
+          echo "=========================================="
+          echo "🔨 Building VSCode - Part 1/2"
+          echo "⏰ This may take 15-20 minutes..."
+          echo "=========================================="
+          cd vscode
+          export VSCODE_SKIP_PRELAUNCH=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Start build at: $(date)"
+          echo "📊 Memory before build: $(free -h | grep Mem)"
+          ./node_modules/.bin/gulp compile-build
+          echo "✅ compile-build completed at: $(date)"
+          date
+
+      - name: ⏱️ Step 8/10 - Build VSCode (part 2/2)
+        run: |
+          echo "=========================================="
+          echo "🔨 Building VSCode - Part 2/2"
+          echo "⏰ This may take 20-30 minutes..."
+          echo "=========================================="
+          cd vscode
+          export VSCODE_SKIP_PRELAUNCH=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Start build at: $(date)"
+          ./node_modules/.bin/gulp vscode-linux-x64-min
+          echo "✅ vscode-linux-x64-min completed at: $(date)"
+          date
+
+      - name: ⏱️ Step 9/10 - Verify build output
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying build output..."
+          echo "=========================================="
+          cd vscode
+          echo "Searching for VSCode-linux-x64..."
+          if [ -d "./VSCode-linux-x64" ]; then
+            echo "✅ Build found at: ./vscode/VSCode-linux-x64"
+            echo "📁 Directory contents:"
+            ls -la ./VSCode-linux-x64/
+            echo "📁 Size: $(du -sh ./VSCode-linux-x64)"
+            echo "✅ code executable exists: $(test -f ./VSCode-linux-x64/code && echo 'YES' || echo 'NO')"
+          else
+            echo "❌ Build not found!"
+            echo "📁 Searching in current directory..."
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
+            echo "📁 All directories:"
+            ls -la
+            exit 1
+          fi
+          date
+
+      - name: ⏱️ Step 10/10 - Package and upload
+        run: |
+          echo "=========================================="
+          echo "📦 Packaging artifacts..."
+          echo "=========================================="
+          if [ -d "./vscode/VSCode-linux-x64" ]; then
+            echo "Creating startup script..."
+            cd ./vscode/VSCode-linux-x64
+            cat > run-uos.sh << 'EOF'
+            #!/bin/bash
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            echo "=== VSCode UOS Launcher ==="
+            echo "Version: $($SCRIPT_DIR/code --version | head -1)"
+            export ELECTRON_ENABLE_GPU=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            exec "$SCRIPT_DIR/code" --no-sandbox --disable-gpu-sandbox "$@"
+            EOF
+            chmod +x run-uos.sh
+            echo "✅ Startup script created"
+            cd ../..
+
+            echo "Creating package..."
+            tar -czf vscode-uos-${{ github.event.inputs.vscode_version }}.tar.gz \
+              --exclude='*.map' \
+              --exclude='node_modules' \
+              VSCode-linux-x64
+            echo "✅ Package created"
+            echo "📦 Package size: $(du -sh vscode-uos-${{ github.event.inputs.vscode_version }}.tar.gz)"
+            mkdir -p artifacts
+            mv vscode-uos-${{ github.event.inputs.vscode_version }}.tar.gz artifacts/
+            echo "✅ Package moved to artifacts/"
+          else
+            echo "❌ Build not found!"
+            exit 1
+          fi
+          echo "=========================================="
+          echo "🎉 Build completed successfully!"
+          echo "📦 Artifact: vscode-uos-${{ github.event.inputs.vscode_version }}.tar.gz"
+          echo "=========================================="
+          date
+
+      - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-uos
-          path: vscode-uos.tar.gz
+          name: vscode-uos-${{ github.event.inputs.vscode_version }}
+          path: artifacts/vscode-uos-*.tar.gz
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Version: ${{ github.event.inputs.vscode_version }}"
+          echo "⏱️  Started: ${{ job.started }}"
+          echo "⏱️  Completed: $(date)"
+          echo "📁 Artifacts:"
+          ls -la artifacts/ 2>/dev/null || echo "No artifacts"
+          echo "=========================================="
