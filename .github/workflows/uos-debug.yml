@@ -1,0 +1,276 @@
+name: Build VSCode for UOS (Debug Mode)
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug logging'
+        type: boolean
+        default: true
+        required: false
+
+jobs:
+  debug-setup:
+    runs-on: ubuntu-latest  # 先改用ubuntu-latest测试
+    timeout-minutes: 10
+
+    steps:
+      - name: Check GitHub Runner Status
+        run: |
+          echo "=== GITHUB ENVIRONMENT ==="
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Architecture: ${{ runner.arch }}"
+          echo "Runner Name: ${{ runner.name }}"
+          echo "Runner Tool Cache: ${{ runner.tool_cache }}"
+          echo "Workspace: ${{ github.workspace }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
+
+          echo "=== SYSTEM INFORMATION ==="
+          uname -a
+          cat /etc/os-release
+          free -h
+          df -h
+          nproc
+
+          echo "=== NETWORK TEST ==="
+          curl -I https://github.com 2>&1 | head -5
+          curl -I https://api.github.com 2>&1 | head -5
+
+          echo "=== DISK SPACE ==="
+          df -h /
+
+  build-for-uos:
+    needs: debug-setup
+    runs-on: ubuntu-latest  # 使用ubuntu-latest有更多资源
+    timeout-minutes: 120
+
+    steps:
+      - name: Debug - Print environment
+        run: |
+          echo "=== BUILD ENVIRONMENT ==="
+          echo "Job ID: ${{ github.job }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Attempt: ${{ github.run_attempt }}"
+          echo "PATH: $PATH"
+          echo "HOME: $HOME"
+          echo "PWD: $(pwd)"
+
+      - name: Checkout VSCode source
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+          fetch-depth: 1
+          ref: 'refs/tags/1.95.0'
+
+      - name: Debug - Checkout status
+        run: |
+          echo "=== CHECKOUT STATUS ==="
+          ls -la
+          echo "Files count: $(find . -type f | wc -l)"
+          echo "Current branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
+          echo "Last commit: $(git log -1 --oneline 2>/dev/null || echo 'no git')"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18.x'
+
+      - name: Debug - Node and npm versions
+        run: |
+          echo "=== NODE VERSION ==="
+          node --version
+          npm --version
+          echo "NPM registry: $(npm config get registry)"
+          echo "NPM cache: $(npm config get cache)"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.cache/electron
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-vscode-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-vscode-
+
+      - name: Install system dependencies
+        run: |
+          echo "=== INSTALLING SYSTEM DEPENDENCIES ==="
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libxkbfile-dev \
+            libkrb5-dev \
+            libgbm-dev \
+            rpm \
+            libx11-dev \
+            libxss-dev \
+            libxtst-dev \
+            libnss3-dev \
+            libasound2-dev \
+            libglib2.0-dev
+
+          echo "=== CHECK INSTALLED PACKAGES ==="
+          dpkg -l | grep -E "(gtk|gbm|x11|xss|nss|asound|glib)"
+
+      - name: Install yarn and dependencies
+        run: |
+          echo "=== INSTALLING YARN ==="
+          npm install -g yarn@1.22.19
+          yarn --version
+
+          echo "=== INSTALLING NODE DEPENDENCIES ==="
+          # 使用详细输出查看进度
+          yarn install --frozen-lockfile --network-timeout 600000 --verbose
+
+          echo "=== CHECK INSTALLATION ==="
+          du -sh node_modules
+          ls -la node_modules/.bin | head -10
+
+      - name: Compile TypeScript
+        run: |
+          echo "=== COMPILING TYPESCRIPT ==="
+          time yarn compile-build 2>&1 | tee compile-build.log
+          echo "=== COMPILING EXTENSIONS ==="
+          time yarn compile-extensions-build 2>&1 | tee compile-extensions.log
+
+          # 检查编译状态
+          echo "=== COMPILATION STATUS ==="
+          tail -20 compile-build.log
+          tail -20 compile-extensions.log
+
+      - name: Build VSCode (optimized)
+        run: |
+          echo "=== BUILDING VSCODE ==="
+          export VSCODE_SKIP_PRELAUNCH=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          # 开始构建并记录时间
+          echo "Start time: $(date)"
+          time yarn gulp vscode-linux-x64-min 2>&1 | tee build.log
+          echo "End time: $(date)"
+
+          # 检查构建结果
+          echo "=== BUILD STATUS ==="
+          tail -50 build.log
+
+      - name: Find and verify build output
+        run: |
+          echo "=== SEARCHING FOR BUILD OUTPUT ==="
+
+          # 搜索所有可能的输出位置
+          find . -name "VSCode-linux-x64" -type d 2>/dev/null
+          find .. -name "VSCode-linux-x64" -type d 2>/dev/null
+
+          # 检查常见位置
+          echo "Checking ./VSCode-linux-x64:"
+          ls -la ./VSCode-linux-x64 2>/dev/null || echo "Not found"
+
+          echo "Checking ../VSCode-linux-x64:"
+          ls -la ../VSCode-linux-x64 2>/dev/null || echo "Not found"
+
+          echo "Checking ./build/linux:"
+          ls -la ./build/linux 2>/dev/null || echo "Not found"
+
+          # 显示当前目录结构
+          echo "=== CURRENT DIRECTORY STRUCTURE ==="
+          ls -la
+          echo "Top level directories:"
+          find . -maxdepth 2 -type d | head -20
+
+      - name: Create UOS startup scripts
+        run: |
+          echo "=== CREATING UOS STARTUP SCRIPTS ==="
+
+          # 查找构建输出
+          BUILD_DIR=""
+          if [ -d "../VSCode-linux-x64" ]; then
+            BUILD_DIR="../VSCode-linux-x64"
+          elif [ -d "./VSCode-linux-x64" ]; then
+            BUILD_DIR="./VSCode-linux-x64"
+          else
+            echo "ERROR: Build output not found!"
+            echo "Creating dummy files for debugging..."
+            mkdir -p VSCode-linux-x64
+            BUILD_DIR="./VSCode-linux-x64"
+          fi
+
+          cd "$BUILD_DIR"
+
+          # 创建UOS启动脚本
+          cat > run-uos.sh << 'EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          echo "VSCode UOS Launcher"
+          echo "Script directory: $SCRIPT_DIR"
+
+          if [ -f "$SCRIPT_DIR/code" ]; then
+            echo "Starting VSCode with UOS compatibility..."
+            "$SCRIPT_DIR/code" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer "$@"
+          else
+            echo "ERROR: VSCode executable not found!"
+            echo "Files in directory:"
+            ls -la
+            exit 1
+          fi
+          EOF
+          chmod +x run-uos.sh
+
+          echo "Startup script created: $(pwd)/run-uos.sh"
+          cat run-uos.sh
+
+      - name: Package artifacts
+        run: |
+          echo "=== PACKAGING ARTIFACTS ==="
+          mkdir -p artifacts
+
+          # 查找构建目录
+          BUILD_DIR=""
+          if [ -d "../VSCode-linux-x64" ]; then
+            BUILD_DIR="../VSCode-linux-x64"
+            cd ..
+          elif [ -d "./VSCode-linux-x64" ]; then
+            BUILD_DIR="./VSCode-linux-x64"
+          else
+            echo "Creating dummy package for debugging..."
+            mkdir -p dummy-package
+            echo "This is a dummy package" > dummy-package/README.txt
+            tar -czf artifacts/vscode-uos-debug.tar.gz dummy-package/
+            echo "Dummy package created"
+            exit 1
+          fi
+
+          echo "Packaging: $BUILD_DIR"
+          tar -czf artifacts/vscode-uos.tar.gz \
+            --exclude='*.map' \
+            --exclude='node_modules' \
+            "$BUILD_DIR" 2>/dev/null || tar -czf artifacts/vscode-uos.tar.gz "$BUILD_DIR"
+
+          echo "Package size: $(du -h artifacts/vscode-uos.tar.gz | cut -f1)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-uos-debug
+          path: |
+            artifacts/
+            *.log
+            compile-*.log
+            build.log
+          retention-days: 14
+
+      - name: Debug - Final status
+        if: always()
+        run: |
+          echo "=== FINAL STATUS ==="
+          echo "Workflow completed at: $(date)"
+          echo "Success: ${{ job.status }}"
+          echo "Build output exists: ${{ steps.package.outputs.exists }}"
