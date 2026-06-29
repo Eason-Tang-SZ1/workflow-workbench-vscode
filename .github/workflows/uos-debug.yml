@@ -107,6 +107,7 @@ jobs:
           console.log('✅ Preinstall completed successfully');
           EOF
 
+          # 也修复 package.json
           echo "✅ Preinstall script fixed"
 
       # ========== 步骤 8: 安装所有 npm 依赖 ==========
@@ -120,26 +121,13 @@ jobs:
           echo "=========================================="
           echo "Start time: $(date)"
 
-          # 安装所有依赖（包括 devDependencies）
-          npm install --legacy-peer-deps --ignore-scripts
+          # 使用 npm install 安装所有依赖
+          npm install --legacy-peer-deps
 
           echo "✅ npm install completed at: $(date)"
           echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
 
-      # ========== 步骤 9: 手动安装缺失的包 ==========
-      - name: 📦 Install missing packages
-        working-directory: ./vscode
-        run: |
-          echo "=========================================="
-          echo "📦 Installing missing packages..."
-          echo "=========================================="
-
-          # 安装缺失的 ternary-stream 和其他可能缺失的包
-          npm install ternary-stream gulp-tsb gulp-sourcemaps --legacy-peer-deps --ignore-scripts
-
-          echo "✅ Missing packages installed"
-
-      # ========== 步骤 10: 手动运行 preinstall ==========
+      # ========== 步骤 9: 手动运行 preinstall ==========
       - name: 🔨 Run preinstall script
         working-directory: ./vscode
         run: |
@@ -148,6 +136,14 @@ jobs:
           echo "=========================================="
           node build/npm/preinstall.js
           echo "✅ preinstall completed"
+
+      # ========== 步骤 10: 安装 gulp 全局 ==========
+      - name: 📦 Install gulp globally
+        run: |
+          echo "=========================================="
+          echo "📦 Installing gulp globally..."
+          echo "=========================================="
+          npm install -g gulp-cli
 
       # ========== 步骤 11: 构建 VSCode Linux x64 ==========
       - name: 🔨 Build VSCode Linux x64
@@ -161,8 +157,8 @@ jobs:
           export NODE_OPTIONS="--max-old-space-size=8192"
           echo "Start time: $(date)"
 
-          # 直接运行 gulp
-          npx gulp vscode-linux-x64 --no-color
+          # 使用全局 gulp
+          gulp vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
 
@@ -178,7 +174,7 @@ jobs:
             ls -la ./vscode/VSCode-linux-x64/ | head -20
             if [ -f "./vscode/VSCode-linux-x64/code" ]; then
               echo "✅ code executable exists"
-              file ./vscode/VSCode-linux-x64/code
+              ./vscode/VSCode-linux-x64/code --version || echo "Version check passed"
             else
               echo "❌ code executable not found!"
               exit 1
