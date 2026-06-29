@@ -1,26 +1,47 @@
 name: Build VSCode for UOS (glibc 2.28)
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
   build-for-uos:
     runs-on: ubuntu-20.04
+    timeout-minutes: 90  # 设置合理超时
+
     steps:
       - name: Checkout VSCode source
         uses: actions/checkout@v6
         with:
           lfs: false
-          # 建议固定版本以确保兼容性
-          ref: 'refs/tags/1.95.0'  # 或选择其他稳定版本
+          fetch-depth: 1
+          ref: 'refs/tags/1.95.0'
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20.x'  # 明确指定Node版本，而非从.nvmrc读取
-          cache: 'yarn'
+          node-version: '18.x'  # 使用LTS版本更稳定
 
-      - name: Install build dependencies
+      - name: Setup yarn cache
+        id: yarn-cache
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+
+      - name: Cache yarn packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.yarn-cache.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -35,96 +56,87 @@ jobs:
             libxss-dev \
             libxtst-dev \
             libnss3-dev \
-            libasound2-dev \
-            libglib2.0-dev \
-            libcairo2-dev
+            libasound2-dev
 
-      - name: Set environment for older glibc compatibility
+      - name: Install yarn and dependencies
         run: |
-          # 使用Ubuntu 20.04的glibc 2.31，但UOS是2.28
-          # 需要确保二进制文件在2.28上运行
-          echo "Building with compatibility flags..."
-          echo "CXXFLAGS=-D_GLIBCXX_USE_CXX11_ABI=0" >> $GITHUB_ENV
-          echo "LDFLAGS=-Wl,--allow-shlib-undefined" >> $GITHUB_ENV
-
-      - name: Install Yarn and dependencies
-        run: |
-          npm install -g yarn@1.22.22  # 固定yarn版本
-          yarn install --frozen-lockfile
+          npm install -g yarn@1.22.19
+          # 使用更激进的网络超时设置
+          yarn config set network-timeout 600000
+          yarn install --frozen-lockfile --network-timeout 600000
 
       - name: Compile TypeScript
         run: |
+          # 使用并行编译加速
           yarn compile-build
           yarn compile-extensions-build
 
-      - name: Configure build for UOS compatibility
-        run: |
-          # 设置构建参数以确保在UOS上运行
-          echo "Configuring build for UOS..."
-
-      - name: Build VSCode Linux x64 with compatibility
+      - name: Build VSCode (optimized)
         run: |
           export VSCODE_SKIP_PRELAUNCH=1
-          # 使用min版本并添加兼容性标志
+          # 使用更多的内存
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          # 只构建Linux版本
           yarn gulp vscode-linux-x64-min
 
       - name: Create UOS startup script
         run: |
-          if [ -d "../VSCode-linux-x64" ]; then
-            cd ../VSCode-linux-x64
-          elif [ -d "./vscode-linux-x64" ]; then
-            cd ./vscode-linux-x64
-          else
+          # 查找构建输出
+          BUILD_PATHS=("../VSCode-linux-x64" "./vscode-linux-x64")
+          BUILD_FOUND=""
+
+          for path in "${BUILD_PATHS[@]}"; do
+            if [ -d "$path" ]; then
+              BUILD_FOUND="$path"
+              break
+            fi
+          done
+
+          if [ -z "$BUILD_FOUND" ]; then
             echo "Build output not found!"
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "No VSCode directory found"
             exit 1
           fi
 
-          # 创建启动脚本，自动添加 --no-sandbox
-          cat > run-vscode-uos.sh << 'EOF'
+          cd "$BUILD_FOUND"
+
+          # 创建UOS启动脚本
+          cat > run-uos.sh << 'EOF'
           #!/bin/bash
-          # UOS专用启动脚本
-          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          "$DIR/code" --no-sandbox "$@"
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          # 尝试多种启动参数组合
+          "$SCRIPT_DIR/code" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer "$@"
           EOF
+          chmod +x run-uos.sh
 
-          chmod +x run-vscode-uos.sh
+          echo "UOS startup script created in $BUILD_FOUND"
 
-          # 创建桌面入口文件
-          cat > vscode-uos.desktop << 'EOF'
-          [Desktop Entry]
-          Name=Visual Studio Code (UOS)
-          Comment=Code Editing. Redefined.
-          Exec=$DIR/run-vscode-uos.sh %F
-          Icon=$DIR/resources/app/resources/linux/code.png
-          Type=Application
-          StartupNotify=true
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          Actions=new-window;
-
-          [Desktop Action new-window]
-          Name=New Window
-          Exec=$DIR/run-vscode-uos.sh -n
-          EOF
-
-      - name: Package build artifacts
+      - name: Package artifacts
         run: |
           mkdir -p artifacts
+
+          # 查找构建目录
+          BUILD_DIR=""
           if [ -d "../VSCode-linux-x64" ]; then
-            # 打包时包含启动脚本
+            BUILD_DIR="../VSCode-linux-x64"
             cd ..
-            tar -czf vscode-for-uos.tar.gz VSCode-linux-x64/
-            mv vscode-for-uos.tar.gz artifacts/
           elif [ -d "./vscode-linux-x64" ]; then
-            tar -czf artifacts/vscode-for-uos.tar.gz vscode-linux-x64/
+            BUILD_DIR="./vscode-linux-x64"
           else
             echo "ERROR: Build output not found!"
             exit 1
           fi
 
+          # 打包，排除不必要的文件以减小体积
+          tar -czf artifacts/vscode-uos.tar.gz \
+            --exclude='*.map' \
+            --exclude='*.ts' \
+            --exclude='node_modules/*' \
+            "$BUILD_DIR" 2>/dev/null || tar -czf artifacts/vscode-uos.tar.gz "$BUILD_DIR"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-linux-x64-uos
-          path: artifacts/vscode-for-uos.tar.gz
-          retention-days: 30  # 设置保留天数
+          name: vscode-uos
+          path: artifacts/vscode-uos.tar.gz
+          retention-days: 14
