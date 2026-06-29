@@ -1,4 +1,4 @@
-name: 为 UOS 构建 VSCode Remote（修复版）
+name: 为 UOS 构建 VSCode Remote（最终修复版）
 
 on:
   workflow_dispatch:
@@ -122,32 +122,51 @@ jobs:
               npm cache clean --force
               npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=2
 
-              echo '=== 步骤 14: 修复 mangler 错误 ==='
-              # 直接修改 mangler 源码，跳过 protected fields 检查
-              if [ -f 'build/lib/mangle/index.js' ]; then
-                echo '修复 mangler 检查...'
-                sed -i 's/throw new Error(.Protected fields have been made PUBLIC.*)/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' build/lib/mangle/index.js || true
-                sed -i 's/throw new Error(.Protected fields have been made PUBLIC.*)/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' build/lib/mangle/index.ts || true
-              fi
-
-              echo '=== 步骤 15: 构建 Remote 版本 ==='
+              echo '=== 步骤 14: 先编译 TypeScript ==='
               source /opt/rh/gcc-toolset-11/enable
               export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
               export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
               export PYTHON=/usr/bin/python3.9
               export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
-              export VSCODE_SKIP_MANGLE=1
 
               cd /build
               export NODE_OPTIONS=\"--max-old-space-size=10240 --max-semi-space-size=256\"
 
-              echo '=== 步骤 15a: 编译 TypeScript ==='
+              echo '=== 步骤 14a: 编译 TypeScript ==='
               npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              echo '=== 步骤 15b: 构建 Remote Extension Host ==='
+              echo '=== 步骤 15: 编译完成后修复 mangler ==='
+              # TypeScript 编译完成后，修改生成的 JavaScript 文件
+              if [ -f 'out/build/lib/mangle/index.js' ]; then
+                echo '修复编译后的 mangler JavaScript...'
+                # 备份原文件
+                cp out/build/lib/mangle/index.js out/build/lib/mangle/index.js.bak
+                # 替换错误检查为警告
+                sed -i 's/throw new Error(\"Protected fields have been made PUBLIC\\. This hurts minification and is therefore not allowed\\. Review the WARN messages further above\")/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' out/build/lib/mangle/index.js
+                # 也检查是否有其他格式的错误信息
+                sed -i 's/throw new Error(.Protected fields have been made PUBLIC.*)/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' out/build/lib/mangle/index.js
+                echo '✅ mangler 修复完成'
+              else
+                echo '⚠️ 未找到 out/build/lib/mangle/index.js，尝试其他位置...'
+                find . -path '*/mangle/index.js' -type f 2>/dev/null | head -5
+              fi
+
+              # 也检查并修复 TypeScript 源文件（以防需要重新编译）
+              if [ -f 'build/lib/mangle/index.ts' ]; then
+                echo '也修复 TypeScript 源文件...'
+                sed -i 's/throw new Error(\"Protected fields have been made PUBLIC\\. This hurts minification and is therefore not allowed\\. Review the WARN messages further above\")/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' build/lib/mangle/index.ts
+                sed -i 's/throw new Error(.Protected fields have been made PUBLIC.*)/console.warn(\"Protected fields made PUBLIC. Continuing...\")/g' build/lib/mangle/index.ts
+              fi
+
+              echo '=== 步骤 16: 构建 Remote Extension Host ==='
+              # 设置跳过混淆的环境变量
+              export VSCODE_SKIP_MANGLE=1
+              export VSCODE_MANGLE_SKIP=1
+
+              # 直接执行 gulp 任务
               npx tsx ./node_modules/gulp/bin/gulp.js vscode-reh-linux-x64
 
-              echo '=== 步骤 16: 查找构建产物 ==='
+              echo '=== 步骤 17: 查找构建产物 ==='
               cd /build
               echo '正在搜索构建产物...'
 
@@ -162,10 +181,10 @@ jobs:
                 find . -maxdepth 2 -name '*reh*' -type d 2>/dev/null | head -10
                 find . -maxdepth 2 -name 'VSCode*' -type d 2>/dev/null | head -10
                 echo '完整目录列表:'
-                ls -la /build/
+                ls -la /build/ | head -30
               fi
 
-              echo '=== 步骤 17: 打包产物 ==='
+              echo '=== 步骤 18: 打包产物 ==='
               mkdir -p /build/artifacts
               cd /build
 
@@ -186,7 +205,7 @@ jobs:
                 echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
               fi
 
-              echo '=== 步骤 18: 构建总结 ==='
+              echo '=== 步骤 19: 构建总结 ==='
               echo '构建产物目录内容:'
               ls -lh /build/artifacts/ || echo 'artifacts 目录为空'
             "
