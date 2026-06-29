@@ -97,7 +97,6 @@ jobs:
           echo "=========================================="
           cd vscode
 
-          # 创建 JS 版本
           cat > build/npm/preinstall.js << 'EOF'
           console.log('Running preinstall script (JS version)...');
           console.log('Node version:', process.version);
@@ -107,7 +106,6 @@ jobs:
           console.log('✅ Preinstall completed successfully');
           EOF
 
-          # 也修复 package.json
           echo "✅ Preinstall script fixed"
 
       # ========== 步骤 8: 安装所有 npm 依赖 ==========
@@ -121,7 +119,6 @@ jobs:
           echo "=========================================="
           echo "Start time: $(date)"
 
-          # 使用 npm install 安装所有依赖
           npm install --legacy-peer-deps
 
           echo "✅ npm install completed at: $(date)"
@@ -157,34 +154,57 @@ jobs:
           export NODE_OPTIONS="--max-old-space-size=8192"
           echo "Start time: $(date)"
 
-          # 使用全局 gulp
           gulp vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
 
-      # ========== 步骤 12: 验证构建输出 ==========
+      # ========== 步骤 12: 验证构建输出（修正路径） ==========
       - name: 🔍 Verify build output
         run: |
           echo "=========================================="
           echo "🔍 Verifying build output..."
           echo "=========================================="
 
-          if [ -d "./vscode/VSCode-linux-x64" ]; then
+          # 构建输出在 vscode 的父目录，而不是 vscode 内部
+          echo "Checking multiple locations..."
+          echo "Current directory: $(pwd)"
+          echo "Files in current dir:"
+          ls -la
+          echo ""
+          echo "Files in vscode dir:"
+          ls -la vscode/ | head -10
+          echo ""
+          echo "Looking for VSCode-linux-x64..."
+
+          # 检查所有可能的位置
+          if [ -d "./VSCode-linux-x64" ]; then
+            echo "✅ Build found at: ./VSCode-linux-x64"
+            BUILD_DIR="./VSCode-linux-x64"
+          elif [ -d "./vscode/VSCode-linux-x64" ]; then
             echo "✅ Build found at: ./vscode/VSCode-linux-x64"
-            ls -la ./vscode/VSCode-linux-x64/ | head -20
-            if [ -f "./vscode/VSCode-linux-x64/code" ]; then
-              echo "✅ code executable exists"
-              ./vscode/VSCode-linux-x64/code --version || echo "Version check passed"
-            else
-              echo "❌ code executable not found!"
-              exit 1
-            fi
+            BUILD_DIR="./vscode/VSCode-linux-x64"
           else
-            echo "❌ Build not found!"
+            echo "❌ Build not found in expected locations!"
             echo "Searching for code executable..."
-            find ./vscode -name "code" -type f 2>/dev/null | head -10
+            find . -name "code" -type f 2>/dev/null | head -10
+            echo "Searching for VSCode-linux-x64 directory..."
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null
             exit 1
           fi
+
+          echo "📁 Directory contents:"
+          ls -la $BUILD_DIR | head -20
+
+          if [ -f "$BUILD_DIR/code" ]; then
+            echo "✅ code executable exists"
+            $BUILD_DIR/code --version || echo "Version check passed"
+          else
+            echo "❌ code executable not found!"
+            exit 1
+          fi
+
+          # 保存构建路径供后续步骤使用
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ========== 步骤 13: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
@@ -192,7 +212,12 @@ jobs:
           echo "=========================================="
           echo "🚀 Creating UOS startup scripts..."
           echo "=========================================="
-          cd ./vscode/VSCode-linux-x64
+
+          # 使用之前找到的构建目录
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          echo "Build directory: $BUILD_DIR"
+
+          cd "$BUILD_DIR"
 
           cat > run-uos.sh << 'EOF'
           #!/bin/bash
@@ -227,14 +252,17 @@ jobs:
           mkdir -p artifacts
           VERSION="${{ github.event.inputs.vscode_version || '1.116.0' }}"
 
-          cd ./vscode
-          tar -czf "../artifacts/vscode-uos-${VERSION}.tar.gz" \
-            --exclude='*.map' \
-            --exclude='*.ts' \
-            --exclude='node_modules' \
-            --exclude='.git' \
-            VSCode-linux-x64
-          cd ..
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          echo "Build directory: $BUILD_DIR"
+
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "❌ Build directory not found: $BUILD_DIR"
+            exit 1
+          fi
+
+          tar -czf "artifacts/vscode-uos-${VERSION}.tar.gz" \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
 
           echo "✅ Package created"
           echo "📦 Package size: $(du -sh artifacts/vscode-uos-${VERSION}.tar.gz)"
@@ -261,7 +289,11 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             ls -la artifacts/
-            echo "📥 On UOS: tar -xzf vscode-uos-*.tar.gz && cd VSCode-linux-x64 && ./run-uos.sh"
+            echo ""
+            echo "📥 Download and use on UOS:"
+            echo "tar -xzf vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}.tar.gz"
+            echo "cd VSCode-linux-x64"
+            echo "./run-uos.sh"
           else
             echo "❌ Build failed. Check logs above."
           fi
