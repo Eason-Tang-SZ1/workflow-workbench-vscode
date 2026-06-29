@@ -34,14 +34,8 @@ jobs:
           if [ -f "vscode/package.json" ]; then
             echo "VSCode version: $(cat vscode/package.json | grep '"version"' | head -1)"
           fi
-          # VSCode 1.116.0 使用 package-lock.json 而不是 yarn.lock
           if [ -f "vscode/package-lock.json" ]; then
             echo "package-lock.json found ✅"
-          else
-            echo "ERROR: package-lock.json not found!"
-            echo "Available files:"
-            ls -la vscode/ | grep -E "lock|json"
-            exit 1
           fi
 
       - name: Setup Node.js
@@ -74,7 +68,9 @@ jobs:
             libgdk-pixbuf2.0-dev \
             libsecret-1-dev \
             libxcb-shape0-dev \
-            libxcb-xfixes0-dev
+            libxcb-xfixes0-dev \
+            python3 \
+            python3-pip
 
       - name: Cache npm dependencies
         uses: actions/cache@v4
@@ -88,17 +84,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-vscode-
 
-      - name: Install npm dependencies
+      - name: Install npm dependencies (with TypeScript support)
         working-directory: ./vscode
         run: |
           npm --version
           node --version
-          # VSCode 1.116.0 使用 npm 安装
+
+          # 首先全局安装 ts-node 和 typescript
+          npm install -g ts-node typescript
+
+          # 设置环境变量让 node 支持 TypeScript
+          export NODE_OPTIONS="--loader ts-node/esm"
+
+          # 安装依赖，忽略脚本错误
+          npm ci --prefer-offline --no-audit --progress=false --ignore-scripts || true
+
+          # 手动运行 preinstall 脚本（使用 ts-node）
+          echo "Running preinstall script with ts-node..."
+          npx ts-node --esm build/npm/preinstall.ts
+
+          # 重新运行安装以完成依赖安装
           npm ci --prefer-offline --no-audit --progress=false
 
       - name: Compile TypeScript
         working-directory: ./vscode
         run: |
+          export NODE_OPTIONS="--max-old-space-size=4096"
           npm run compile-build
           npm run compile-extensions-build
 
@@ -107,7 +118,6 @@ jobs:
         run: |
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=4096"
-          # VSCode 1.116.0 使用 npm run gulp
           npm run gulp vscode-linux-x64-min
 
       - name: Find and verify build output
@@ -116,7 +126,6 @@ jobs:
           find ./vscode -name "VSCode-linux-x64" -type d 2>/dev/null
           find . -name "VSCode-linux-x64" -type d 2>/dev/null
 
-          # 检查可能的输出位置
           for dir in "./vscode/VSCode-linux-x64" "./vscode/../VSCode-linux-x64" "./VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               echo "Found build output: $dir"
@@ -126,7 +135,6 @@ jobs:
 
       - name: Create UOS startup scripts
         run: |
-          # 查找构建输出
           BUILD_DIR=""
           if [ -d "./vscode/VSCode-linux-x64" ]; then
             BUILD_DIR="./vscode/VSCode-linux-x64"
@@ -134,30 +142,24 @@ jobs:
             BUILD_DIR="./VSCode-linux-x64"
           else
             echo "ERROR: Build output not found!"
-            echo "Searching for any VSCode directory:"
             find . -name "*VSCode*" -type d 2>/dev/null | head -10
             exit 1
           fi
 
           cd "$BUILD_DIR"
 
-          # 验证 code 可执行文件存在
           if [ ! -f "./code" ]; then
-            echo "ERROR: code executable not found in $BUILD_DIR"
-            echo "Files in directory:"
+            echo "ERROR: code executable not found!"
             ls -la
             exit 1
           fi
 
-          # 创建 UOS 启动脚本
           cat > run-uos.sh << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           echo "=== VSCode UOS Launcher ==="
           echo "Version: 1.116.0"
-          echo "Script directory: $SCRIPT_DIR"
 
-          # 检测 UOS 系统
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
             echo "Detected UOS system, enabling compatibility mode..."
             export ELECTRON_ENABLE_GPU=0
@@ -165,8 +167,6 @@ jobs:
             export NODE_OPTIONS="--max-old-space-size=4096"
           fi
 
-          # 检查是否设置了不安全的运行
-          echo "Starting VSCode with UOS compatibility..."
           exec "$SCRIPT_DIR/code" \
             --no-sandbox \
             --disable-gpu-sandbox \
@@ -177,8 +177,7 @@ jobs:
           EOF
           chmod +x run-uos.sh
 
-          echo "Startup script created successfully"
-          cat run-uos.sh
+          echo "Startup script created"
 
       - name: Package artifacts
         run: |
@@ -193,7 +192,6 @@ jobs:
             exit 1
           fi
 
-          # 打包
           VERSION="${{ github.event.inputs.vscode_version || '1.116.0' }}"
           cd "$(dirname "$BUILD_DIR")"
           tar -czf "$OLDPWD/artifacts/vscode-uos-${VERSION}.tar.gz" \
@@ -211,27 +209,3 @@ jobs:
           name: vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}
           path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
-
-      - name: Create release notes
-        if: success()
-        run: |
-          cat > artifacts/README.md << 'EOF'
-          # VSCode 1.116.0 for UOS (统信UOS)
-
-          ## 构建信息
-          - Version: 1.116.0
-          - Build Date: $(date)
-          - Architecture: x64
-          - Package Manager: npm
-          - Compatible with: UOS (glibc 2.28+)
-
-          ## 安装方法
-          ```bash
-          # 1. 解压
-          tar -xzf vscode-uos-1.116.0.tar.gz
-
-          # 2. 进入目录
-          cd VSCode-linux-x64
-
-          # 3. 运行
-          ./run-uos.sh
