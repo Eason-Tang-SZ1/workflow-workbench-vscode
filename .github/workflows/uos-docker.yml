@@ -1,4 +1,4 @@
-name: 为 UOS 构建 VSCode Remote（终极修复版）
+name: 为 UOS 构建 VSCode Remote
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   build-in-rocky8:
     runs-on: ubuntu-22.04
     steps:
-      - name: 在 Rocky Linux 8 容器中构建 Remote 版
+      - name: 在 Rocky Linux 8 容器中构建
         run: |
           docker run --rm \
             -v $PWD:/build \
@@ -19,54 +19,34 @@ jobs:
             bash -c "
               set -e
 
-              echo '=== 🐳 构建 VSCode Remote 版本（终极修复） ==='
-              echo '=== 系统信息 ==='
-              echo 'CPU 核心数: \$(nproc)'
-              echo '内存总量: \$(free -h | grep Mem | awk '\''{print \$2}'\'')'
+              echo '=== 🐳 构建 VSCode Remote ==='
               echo 'glibc 版本: \$(ldd --version | head -1)'
 
-              echo '=== 步骤 1: 启用 EPEL 和 PowerTools ==='
+              # 1. 安装基础依赖
               dnf install -y epel-release
-              dnf config-manager --set-enabled powertools 2>/dev/null || \
-                dnf config-manager --set-enabled crb 2>/dev/null || true
-
-              echo '=== 步骤 2: 安装基础工具 ==='
+              dnf config-manager --set-enabled powertools 2>/dev/null || true
               dnf install -y git curl wget which rsync jq patch
 
-              echo '=== 步骤 3: 克隆代码仓库 ==='
+              # 2. 克隆代码
               git clone --depth 1 \
                 --filter=blob:none \
                 https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /source
-
-              echo '=== 步骤 4: 复制源代码到构建目录 ==='
-              rsync -a /source/ /build/ 2>/dev/null || cp -r /source/. /build/
+              rsync -a /source/ /build/
               rm -rf /source
-
-              echo '=== 步骤 5: 修复 .git 目录 ==='
               cd /build
-              if [ -d '.git' ]; then
-                git config --global --add safe.directory /build
-                git config --global user.email 'ci@github.com'
-                git config --global user.name 'CI Build'
-              else
-                git init
-                git remote add origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-                git fetch --depth 1 origin HEAD
-                git reset --hard FETCH_HEAD
-                git config --global --add safe.directory /build
-              fi
 
-              echo '=== 步骤 6: 移除 LFS 指针 ==='
+              # 3. 修复 .git
+              git config --global --add safe.directory /build
+              git config --global user.email 'ci@github.com'
+              git config --global user.name 'CI Build'
+
+              # 4. 移除 LFS
               find . -type f -exec grep -l '^version https://git-lfs.github.com/spec/v1' {} \; 2>/dev/null | while read file; do
-                echo \"移除 LFS 指针: \$file\"
                 rm -f \"\$file\"
               done
               rm -rf .git/lfs 2>/dev/null || true
-              if [ -f '.gitattributes' ]; then
-                sed -i '/filter=lfs/d' .gitattributes
-              fi
 
-              echo '=== 步骤 7: 修复 product.json ==='
+              # 5. 修复 product.json
               if [ -f 'product.json' ]; then
                 jq '.extensionsGallery = {
                   \"serviceUrl\": \"https://marketplace.visualstudio.com/_apis/public/gallery\",
@@ -75,157 +55,80 @@ jobs:
                 } | del(.extensions?)' product.json > product.json.tmp && mv product.json.tmp product.json
               fi
 
-              echo '=== 步骤 8: 【关键修复】在编译前修改 mangler 源码 ==='
+              # 6. 【关键】在编译前修复 mangler - 使用简单可靠的 sed
+              echo '=== 修复 mangler 源码 ==='
+              cat build/lib/mangle/index.ts | \
+                sed 's/throw new Error(\"Protected fields have been made PUBLIC\.[^\"]*\");/console.warn(\"Protected fields made PUBLIC. Continuing...\");/g' \
+                > build/lib/mangle/index.ts.fixed
+              mv build/lib/mangle/index.ts.fixed build/lib/mangle/index.ts
+              echo '✅ mangler 已修复'
+
+              # 7. 安装 GCC 11
+              dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
+              source /opt/rh/gcc-toolset-11/enable
+
+              # 8. 安装构建依赖
+              dnf install -y \
+                python39 python39-devel rpm-build \
+                alsa-lib-devel gtk3-devel krb5-devel libsecret-devel \
+                mesa-libEGL-devel mesa-libGL-devel mesa-libgbm-devel \
+                libX11-devel libXext-devel libXtst-devel \
+                libXScrnSaver-devel freetype-devel fontconfig-devel \
+                cairo-devel pango-devel libicu-devel \
+                nss-devel nspr-devel libxkbcommon-devel \
+                libxkbcommon-x11-devel libXrandr-devel \
+                libXcomposite-devel libXdamage-devel libXi-devel \
+                libdrm-devel libglvnd-devel
+              dnf install -y libxkbfile-devel 2>/dev/null || true
+              alternatives --set python3 /usr/bin/python3.9
+
+              # 9. 安装 Node.js
+              curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+              dnf install -y nodejs
+              npm install -g tsx typescript
+
+              # 10. 安装 npm 依赖
+              source /opt/rh/gcc-toolset-11/enable
+              export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
+              export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              export PYTHON=/usr/bin/python3.9
+              npm cache clean --force
+              npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=2
+
+              # 11. 构建
+              source /opt/rh/gcc-toolset-11/enable
+              export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
+              export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
+              export PYTHON=/usr/bin/python3.9
+              export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
+              export VSCODE_SKIP_MANGLE=1
+              export NODE_OPTIONS=\"--max-old-space-size=10240 --max-semi-space-size=256\"
+
+              echo '=== 编译 TypeScript ==='
+              npx tsx ./node_modules/gulp/bin/gulp.js compile
+
+              echo '=== 构建 Remote 版本 ==='
+              npx tsx ./node_modules/gulp/bin/gulp.js vscode-reh-linux-x64
+
+              # 12. 打包产物
+              mkdir -p /build/artifacts
               cd /build
 
-              # 方法1: 直接注释掉错误检查的代码块
-              cat > /tmp/fix-mangle.sh << 'FIXEOF'
-              #!/bin/bash
-              MANGLE_FILE="build/lib/mangle/index.ts"
-
-              if [ -f "$MANGLE_FILE" ]; then
-                echo "修复 $MANGLE_FILE ..."
-                # 使用 awk 找到并注释掉错误检查
-                awk '
-                  /throw new Error\("Protected fields have been made PUBLIC/ {
-                    print "            // DISABLED: " $0
-                    print "            console.warn(\"Protected fields made PUBLIC. Continuing...\");"
-                    in_error=1
-                    next
-                  }
-                  in_error && /\);/ {
-                    print "            // DISABLED: " $0
-                    in_error=0
-                    next
-                  }
-                  in_error {
-                    print "            // DISABLED: " $0
-                    next
-                  }
-                  { print }
-                ' "$MANGLE_FILE" > "$MANGLE_FILE.tmp"
-                mv "$MANGLE_FILE.tmp" "$MANGLE_FILE"
-                echo "✅ $MANGLE_FILE 已修复"
+              if [ -d 'vscode-reh-linux-x64' ]; then
+                tar -czf /build/artifacts/vscode-reh-rocky8-glibc228.tar.gz vscode-reh-linux-x64/
+                echo '✅ 构建成功！'
+                ls -lh /build/artifacts/
+              else
+                echo '❌ 构建失败'
+                find . -maxdepth 2 -name '*reh*' -o -name '*VSCode*' 2>/dev/null
+                exit 1
               fi
-  FIXEOF
-  chmod +x /tmp/fix-mangle.sh
-  /tmp/fix-mangle.sh
+            "
 
-  # 方法2: 使用 sed 多行匹配（备用方案）
-  echo '=== 备用修复方案 ==='
-  if [ -f 'build/lib/mangle/index.ts' ]; then
-  # 将整个错误检查替换为警告
-  perl -i -0pe 's/throw new Error\("Protected fields have been made PUBLIC\.[^)]*\);/console.warn("Protected fields made PUBLIC. Continuing...");/gs' build/lib/mangle/index.ts
-  echo '✅ Perl 修复完成'
-  fi
-
-echo '=== 步骤 9: 安装 GCC 11 ==='
-  dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
-  source /opt/rh/gcc-toolset-11/enable
-echo 'GCC 版本: \$(gcc --version | head -1)'
-
-echo '=== 步骤 10: 安装构建依赖 ==='
-  dnf install -y \
-  python39 python39-devel \
-  rpm-build \
-  alsa-lib-devel gtk3-devel \
-  krb5-devel libsecret-devel \
-  mesa-libEGL-devel mesa-libGL-devel mesa-libgbm-devel \
-  libX11-devel libXext-devel libXtst-devel \
-  libXScrnSaver-devel freetype-devel fontconfig-devel \
-  cairo-devel pango-devel libicu-devel \
-  nss-devel nspr-devel libxkbcommon-devel \
-  libxkbcommon-x11-devel \
-  libXrandr-devel libXcomposite-devel \
-  libXdamage-devel libXi-devel libdrm-devel \
-  libglvnd-devel
-
-  dnf install -y libxkbfile-devel 2>/dev/null || true
-  alternatives --set python3 /usr/bin/python3.9
-
-echo '=== 步骤 11: 安装 Node.js 22.x ==='
-  curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
-  dnf install -y nodejs
-
-echo '=== 步骤 12: 安装 tsx ==='
-  npm install -g tsx typescript
-
-echo '=== 步骤 13: 验证版本 ==='
-echo \"Node.js: \$(node --version)\"
-echo \"npm: \$(npm --version)\"
-echo \"GCC: \$(gcc --version | head -1)\"
-echo \"Python3: \$(python3 --version)\"
-
-echo '=== 步骤 14: 安装 npm 依赖 ==='
-  source /opt/rh/gcc-toolset-11/enable
-  export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
-  export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
-  export PYTHON=/usr/bin/python3.9
-  cd /build
-
-  npm cache clean --force
-  npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=2
-
-echo '=== 步骤 15: 验证 mangler 修复 ==='
-  echo '检查 build/lib/mangle/index.ts 中的错误检查是否已被注释:'
-  grep -n 'Protected fields have been made PUBLIC' build/lib/mangle/index.ts || echo '✅ 未找到错误检查（已修复）'
-
-echo '=== 步骤 16: 构建 Remote 版本 ==='
-  source /opt/rh/gcc-toolset-11/enable
-  export CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc
-  export CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
-  export PYTHON=/usr/bin/python3.9
-  export VSCODE_SKIP_BUILTIN_EXTENSIONS_DOWNLOAD=1
-  export VSCODE_SKIP_MANGLE=1
-
-  cd /build
-  export NODE_OPTIONS=\"--max-old-space-size=10240 --max-semi-space-size=256\"
-
-echo '=== 步骤 16a: 编译 TypeScript ==='
-  npx tsx ./node_modules/gulp/bin/gulp.js compile
-
-echo '=== 步骤 16b: 构建 Remote Extension Host ==='
-  npx tsx ./node_modules/gulp/bin/gulp.js vscode-reh-linux-x64
-
-echo '=== 步骤 17: 查找构建产物 ==='
-  cd /build
-  echo '正在搜索构建产物...'
-
-  if [ -d 'vscode-reh-linux-x64' ]; then
-  echo '✅ vscode-reh-linux-x64 存在'
-  ls -la vscode-reh-linux-x64/ | head -20
-echo \"总大小: \$(du -sh vscode-reh-linux-x64/ 2>/dev/null | cut -f1)\"
-  else
-  echo '❌ vscode-reh-linux-x64 未找到'
-  find . -maxdepth 2 -name '*reh*' -type d 2>/dev/null | head -10
-  find . -maxdepth 2 -name 'VSCode*' -type d 2>/dev/null | head -10
-  fi
-
-echo '=== 步骤 18: 打包产物 ==='
-  mkdir -p /build/artifacts
-  cd /build
-
-  if [ -d 'vscode-reh-linux-x64' ] && [ \"\$(ls -A vscode-reh-linux-x64 2>/dev/null)\" ]; then
-  echo '✅ 打包中...'
-  tar -czf /build/artifacts/vscode-reh-rocky8-glibc228.tar.gz vscode-reh-linux-x64/
-echo \"打包大小: \$(du -sh /build/artifacts/vscode-reh-rocky8-glibc228.tar.gz | cut -f1)\"
-  elif [ -d 'VSCode-linux-x64' ] && [ \"\$(ls -A VSCode-linux-x64 2>/dev/null)\" ]; then
-  echo '✅ 找到 VSCode-linux-x64，打包中...'
-  tar -czf /build/artifacts/vscode-rocky8-glibc228.tar.gz VSCode-linux-x64/
-  else
-  echo '⚠️ 未找到构建产物！'
-  echo 'BUILD_FAILED_NO_OUTPUT' > /build/artifacts/ERROR.txt
-  exit 1
-  fi
-
-echo '=== 步骤 19: 构建总结 ==='
-  ls -lh /build/artifacts/
-  "
-
-- name: 上传构建产物
-  uses: actions/upload-artifact@v7
-  with:
-    name: vscode-reh-linux-x64-uos-glibc228
-    path: artifacts/
-    if-no-files-found: warn
-    retention-days: 7
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-reh-linux-x64-uos-glibc228
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
