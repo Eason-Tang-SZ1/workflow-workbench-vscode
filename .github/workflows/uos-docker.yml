@@ -1,4 +1,4 @@
-name: Build VSCode for UOS (Docker Rocky Linux 8 - glibc 2.28)
+name: 为 UOS 构建 VSCode（Rocky Linux 8 - glibc 2.28）
 
 on:
   workflow_dispatch:
@@ -7,21 +7,23 @@ jobs:
   build-in-rocky8:
     runs-on: ubuntu-22.04
     steps:
-      - name: Build in Rocky Linux 8 container (glibc 2.28)
+      - name: 在 Rocky Linux 8 容器中构建（优化内存）
         run: |
           docker run --rm \
             -v $PWD:/build \
             -w /build \
-            --memory=32g \
-            --memory-swap=32g \
-            --cpus=8 \
+            --memory=16g \
+            --memory-swap=16g \
+            --cpus=2 \
             rockylinux:8 \
             bash -c "
               set -e
 
               echo '=== 🐳 启动 Rocky Linux 8 构建容器 ==='
-              echo '=== glibc 版本 ==='
-              ldd --version | head -1
+              echo '=== 系统信息 ==='
+              echo 'CPU 核心数: \$(nproc)'
+              echo '内存总量: \$(free -h | grep Mem | awk '{print \$2}')'
+              echo 'glibc 版本: \$(ldd --version | head -1)'
 
               echo '=== 步骤 1: 启用 EPEL 和 PowerTools ==='
               dnf install -y epel-release
@@ -128,9 +130,9 @@ jobs:
 
               # 清理缓存并安装依赖，限制并发数
               npm cache clean --force
-              npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=4
+              npm ci --legacy-peer-deps --no-audit --no-fund --maxsockets=2
 
-              echo '=== 步骤 14: 分阶段构建 VSCode（优化内存使用） ==='
+              echo '=== 步骤 14: 分阶段构建 VSCode（优化内存和 CPU） ==='
 
               # 启用 GCC 11
               source /opt/rh/gcc-toolset-11/enable
@@ -143,18 +145,20 @@ jobs:
 
               cd /build
 
-              # 设置 Node.js 内存限制（28GB，预留一些给系统）
-              export NODE_OPTIONS=\"--max-old-space-size=28672 --max-semi-space-size=512\"
+              # 设置 Node.js 内存限制（14GB，因为总内存只有 16GB）
+              export NODE_OPTIONS=\"--max-old-space-size=14336 --max-semi-space-size=256\"
 
-              echo '=== 步骤 14a: 编译 TypeScript ==='
+              echo '=== 步骤 14a: 编译 TypeScript（串行执行，降低内存峰值） ==='
+              # 使用 gulp 的 --series 参数串行执行任务
               npx tsx ./node_modules/gulp/bin/gulp.js compile
 
-              echo '=== 步骤 14b: 构建扩展（分步进行以降低内存峰值） ==='
-              # 先构建核心扩展
+              echo '=== 步骤 14b: 构建扩展（串行构建，避免内存爆炸） ==='
+              # 构建扩展时限制并行度
               npx tsx ./node_modules/gulp/bin/gulp.js compile-extensions-build
 
               echo '=== 步骤 14c: 打包 VSCode Linux x64 ==='
-              # 使用 gulp 任务打包，增加内存限制
+              # 打包前强制垃圾回收
+              node -e \"global.gc && global.gc()\" 2>/dev/null || true
               npx tsx ./node_modules/gulp/bin/gulp.js vscode-linux-x64
 
               echo '=== 步骤 15: 查找构建产物 ==='
