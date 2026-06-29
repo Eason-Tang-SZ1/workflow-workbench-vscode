@@ -15,28 +15,39 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      # 注意：这里改为克隆 VSCode 源码，而不是使用当前仓库
       - name: Checkout VSCode source
         uses: actions/checkout@v6
         with:
-          repository: microsoft/vscode  # 明确指定VSCode仓库
+          repository: microsoft/vscode  # 关键：克隆 VSCode 官方仓库
           lfs: false
           fetch-depth: 1
           ref: ${{ github.event.inputs.vscode_version || '1.116.0' }}
+          path: vscode  # 克隆到 vscode 子目录
 
       - name: Debug - Verify checkout
         run: |
           echo "=== CHECKOUT STATUS ==="
           echo "Current directory: $(pwd)"
-          echo "Files count: $(find . -type f | wc -l)"
-          echo "Git describe: $(git describe --tags 2>/dev/null || echo 'no tag')"
-          echo "Version from package.json: $(cat package.json 2>/dev/null | grep '"version"' | head -1 || echo 'not found')"
-          echo "Current branch/tag: $(git branch --show-current 2>/dev/null || git describe --tags 2>/dev/null || echo 'detached')"
+          ls -la
+          echo "VSCode source directory:"
+          ls -la vscode/ | head -20
+          if [ -f "vscode/package.json" ]; then
+            echo "VSCode version: $(cat vscode/package.json | grep '"version"' | head -1)"
+          fi
+          if [ -f "vscode/yarn.lock" ]; then
+            echo "yarn.lock found"
+          else
+            echo "ERROR: yarn.lock not found!"
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20.x'  # VSCode 1.116.0 需要 Node 20
+          node-version: '20.x'
           cache: 'yarn'
+          cache-dependency-path: vscode/yarn.lock  # 指定 lock 文件位置
 
       - name: Install system dependencies
         run: |
@@ -64,43 +75,44 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            node_modules
-            .yarn/cache
+            vscode/node_modules
             ~/.cache/electron
             ~/.cache/ms-playwright
-          key: ${{ runner.os }}-vscode-${{ hashFiles('yarn.lock') }}
+            ~/.yarn/cache
+          key: ${{ runner.os }}-vscode-${{ hashFiles('vscode/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-vscode-
 
       - name: Install yarn and dependencies
+        working-directory: ./vscode  # 在 vscode 目录中执行
         run: |
           npm install -g yarn@1.22.22
           yarn --version
-          # VSCode 1.116.0 使用新的构建系统
           yarn install --frozen-lockfile --network-timeout 600000
 
       - name: Compile TypeScript
+        working-directory: ./vscode
         run: |
           yarn compile-build
           yarn compile-extensions-build
 
       - name: Build VSCode Linux x64
+        working-directory: ./vscode
         run: |
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=4096"
-          # VSCode 1.116.0 的构建命令
           yarn gulp vscode-linux-x64-min
 
-      - name: Find build output
+      - name: Find and verify build output
         run: |
           echo "=== SEARCHING FOR BUILD OUTPUT ==="
+          find ./vscode -name "VSCode-linux-x64" -type d 2>/dev/null
           find . -name "VSCode-linux-x64" -type d 2>/dev/null
-          find .. -name "VSCode-linux-x64" -type d 2>/dev/null
 
           # 检查可能的输出位置
-          for dir in "./VSCode-linux-x64" "../VSCode-linux-x64" "./out" "./build"; do
+          for dir in "./vscode/VSCode-linux-x64" "./vscode/../VSCode-linux-x64" "./VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
-              echo "Found: $dir"
+              echo "Found build output: $dir"
               ls -la "$dir" | head -20
             fi
           done
@@ -109,23 +121,20 @@ jobs:
         run: |
           # 查找构建输出
           BUILD_DIR=""
-          if [ -d "../VSCode-linux-x64" ]; then
-            BUILD_DIR="../VSCode-linux-x64"
+          if [ -d "./vscode/VSCode-linux-x64" ]; then
+            BUILD_DIR="./vscode/VSCode-linux-x64"
           elif [ -d "./VSCode-linux-x64" ]; then
             BUILD_DIR="./VSCode-linux-x64"
           else
             echo "ERROR: Build output not found!"
-            echo "Creating debug info..."
-            echo "Current directory contents:"
-            ls -la
-            echo "Searching for code executable:"
-            find . -name "code" -type f 2>/dev/null | head -10
+            echo "Searching for any VSCode directory:"
+            find . -name "*VSCode*" -type d 2>/dev/null | head -10
             exit 1
           fi
 
           cd "$BUILD_DIR"
 
-          # 验证code可执行文件存在
+          # 验证 code 可执行文件存在
           if [ ! -f "./code" ]; then
             echo "ERROR: code executable not found in $BUILD_DIR"
             echo "Files in directory:"
@@ -133,22 +142,21 @@ jobs:
             exit 1
           fi
 
-          # 创建UOS启动脚本
+          # 创建 UOS 启动脚本
           cat > run-uos.sh << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           echo "=== VSCode UOS Launcher ==="
-          echo "Version: 1.116.0"
           echo "Script directory: $SCRIPT_DIR"
 
-          # 检查是否在UOS环境
+          # 检测 UOS 系统
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
             echo "Detected UOS system, enabling compatibility mode..."
             export ELECTRON_ENABLE_GPU=0
             export LIBGL_ALWAYS_SOFTWARE=1
           fi
 
-          # 启动VSCode
+          # 启动 VSCode
           exec "$SCRIPT_DIR/code" \
             --no-sandbox \
             --disable-gpu-sandbox \
@@ -159,36 +167,14 @@ jobs:
           EOF
           chmod +x run-uos.sh
 
-          # 创建桌面入口文件
-          cat > vscode-uos.desktop << 'EOF'
-          [Desktop Entry]
-          Version=1.0
-          Name=Visual Studio Code (UOS)
-          Comment=Code Editing. Redefined.
-          Exec=/path/to/VSCode-linux-x64/run-uos.sh %F
-          Icon=/path/to/VSCode-linux-x64/resources/app/resources/linux/code.png
-          Terminal=false
-          Type=Application
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupWMClass=Code
-          Actions=new-window;
-
-          [Desktop Action new-window]
-          Name=New Window
-          Exec=/path/to/VSCode-linux-x64/run-uos.sh -n
-          EOF
-
           echo "Startup script created successfully"
-          cat run-uos.sh
 
       - name: Package artifacts
         run: |
           mkdir -p artifacts
           BUILD_DIR=""
-          if [ -d "../VSCode-linux-x64" ]; then
-            BUILD_DIR="../VSCode-linux-x64"
-            cd ..
+          if [ -d "./vscode/VSCode-linux-x64" ]; then
+            BUILD_DIR="./vscode/VSCode-linux-x64"
           elif [ -d "./VSCode-linux-x64" ]; then
             BUILD_DIR="./VSCode-linux-x64"
           else
@@ -196,45 +182,16 @@ jobs:
             exit 1
           fi
 
-          # 打包，排除不必要的文件
-          tar -czf artifacts/vscode-uos-1.116.0.tar.gz \
-            --exclude='*.map' \
-            --exclude='node_modules' \
-            --exclude='.git' \
-            --exclude='*.ts' \
-            "$BUILD_DIR" 2>/dev/null || tar -czf artifacts/vscode-uos-1.116.0.tar.gz "$BUILD_DIR"
+          # 打包
+          tar -czf artifacts/vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}.tar.gz \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
 
-          echo "Package created: $(du -h artifacts/vscode-uos-1.116.0.tar.gz)"
+          echo "Package created: $(du -h artifacts/vscode-uos-*.tar.gz)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-uos-1.116.0
-          path: artifacts/vscode-uos-1.116.0.tar.gz
+          name: vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}
+          path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
-
-      - name: Create release notes
-        if: success()
-        run: |
-          cat > artifacts/README.md << 'EOF'
-          # VSCode 1.116.0 for UOS (统信UOS)
-
-          ## 构建信息
-          - Version: 1.116.0
-          - Build Date: $(date)
-          - Architecture: x64
-          - Compatible with: UOS (glibc 2.28+)
-
-          ## 安装方法
-          1. 解压: `tar -xzf vscode-uos-1.116.0.tar.gz`
-          2. 进入目录: `cd VSCode-linux-x64`
-          3. 运行: `./run-uos.sh`
-
-          ## 特性
-          - 自动启用 UOS 兼容模式
-          - 默认禁用沙箱（--no-sandbox）
-          - 支持 Wayland 显示服务器
-          - 包含桌面快捷方式文件
-
-          ## 注意事项
-          - 如果遇到显示问题，尝试设置环境变量：
