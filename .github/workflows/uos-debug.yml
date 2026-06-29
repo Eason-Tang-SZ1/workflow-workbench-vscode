@@ -39,8 +39,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '22.x'
-          cache: 'npm'
-          cache-dependency-path: vscode/package-lock.json
 
       # ========== 步骤 4: 安装系统依赖 ==========
       - name: 🔧 Install system dependencies
@@ -98,28 +96,16 @@ jobs:
           echo "=========================================="
           cd vscode
 
-          # 将 TypeScript 转换为 JavaScript
+          # 创建 JS 版本
           cat > build/npm/preinstall.js << 'EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
           console.log('Running preinstall script (JS version)...');
-
-          // 检查 Node 版本
           console.log('Node version:', process.version);
-
-          // 检查是否在 CI 环境
           if (process.env.CI) {
             console.log('CI environment detected');
           }
-
           console.log('✅ Preinstall completed successfully');
           EOF
 
-          # 修改 package.json，将 preinstall 指向 JS 版本
-          # 使用 sed 替换
           echo "✅ Preinstall script fixed"
 
       # ========== 步骤 8: 安装 npm 依赖（跳过 preinstall） ==========
@@ -133,7 +119,6 @@ jobs:
           echo "=========================================="
           echo "Start time: $(date)"
 
-          # 使用 --ignore-scripts 跳过所有脚本
           npm install --no-audit --legacy-peer-deps --ignore-scripts
 
           echo "✅ npm install completed at: $(date)"
@@ -149,75 +134,62 @@ jobs:
           node build/npm/preinstall.js
           echo "✅ preinstall completed"
 
-      # ========== 步骤 10: 安装剩余依赖 ==========
-      - name: 📦 Install remaining dependencies
+      # ========== 步骤 10: 列出可用的 gulp 任务（调试） ==========
+      - name: 🔍 List gulp tasks
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing remaining dependencies..."
+          echo "🔍 Listing available gulp tasks..."
           echo "=========================================="
-          npm install --no-audit --legacy-peer-deps
+          npx gulp --tasks
 
-      # ========== 步骤 11: 编译 TypeScript ==========
-      - name: 🔨 Compile TypeScript
-        working-directory: ./vscode
-        run: |
-          echo "=========================================="
-          echo "🔨 Compiling TypeScript..."
-          echo "⏰ This may take 10-15 minutes..."
-          echo "=========================================="
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          echo "Start time: $(date)"
-
-          # 使用 npx 运行 gulp
-          npx gulp compile-build
-          echo "✅ compile-build completed"
-
-          npx gulp compile-extensions-build
-          echo "✅ compile-extensions-build completed"
-          echo "End time: $(date)"
-
-      # ========== 步骤 12: 构建 VSCode Linux x64 ==========
+      # ========== 步骤 11: 构建 VSCode（使用正确的任务） ==========
       - name: 🔨 Build VSCode Linux x64
         working-directory: ./vscode
         run: |
           echo "=========================================="
           echo "🔨 Building VSCode Linux x64..."
-          echo "⏰ This may take 20-30 minutes..."
+          echo "⏰ This may take 30-40 minutes..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=4096"
           echo "Start time: $(date)"
 
-          npx gulp vscode-linux-x64-min
+          # VSCode 1.116.0 使用 vscode-linux-x64 任务（不是 vscode-linux-x64-min）
+          # 先尝试标准构建
+          npx gulp vscode-linux-x64 || npx gulp vscode-linux-x64-min
 
           echo "✅ Build completed at: $(date)"
 
-      # ========== 步骤 13: 验证构建输出 ==========
+      # ========== 步骤 12: 验证构建输出 ==========
       - name: 🔍 Verify build output
         run: |
           echo "=========================================="
           echo "🔍 Verifying build output..."
           echo "=========================================="
+
+          # 搜索构建输出
+          find ./vscode -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found in vscode/"
+          find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found in root"
+
+          # 检查标准位置
           if [ -d "./vscode/VSCode-linux-x64" ]; then
             echo "✅ Build found at: ./vscode/VSCode-linux-x64"
-            echo "📁 Directory contents:"
             ls -la ./vscode/VSCode-linux-x64/ | head -20
             if [ -f "./vscode/VSCode-linux-x64/code" ]; then
               echo "✅ code executable exists"
-              file ./vscode/VSCode-linux-x64/code
             else
               echo "❌ code executable not found!"
               exit 1
             fi
           else
-            echo "❌ Build not found!"
-            echo "Searching for VSCode-linux-x64..."
-            find ./vscode -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
+            echo "❌ Build not found in standard location!"
+            echo "Searching for code executable..."
+            find ./vscode -name "code" -type f 2>/dev/null | head -10
             exit 1
           fi
 
-      # ========== 步骤 14: 创建 UOS 启动脚本 ==========
+      # ========== 步骤 13: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
         run: |
           echo "=========================================="
@@ -231,17 +203,14 @@ jobs:
           echo "=== VSCode UOS Launcher ==="
           echo "Version: $($SCRIPT_DIR/code --version | head -1)"
 
-          # UOS 兼容设置
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
 
-          # 检测 UOS 系统
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
             echo "✅ Detected UOS system, enabling compatibility mode..."
           fi
 
-          # 启动 VSCode
           exec "$SCRIPT_DIR/code" \
             --no-sandbox \
             --disable-gpu-sandbox \
@@ -252,22 +221,7 @@ jobs:
           chmod +x run-uos.sh
           echo "✅ run-uos.sh created"
 
-          cat > vscode-uos.desktop << 'EOF'
-          [Desktop Entry]
-          Version=1.0
-          Name=Visual Studio Code (UOS)
-          Comment=Code Editing. Redefined.
-          Exec=./run-uos.sh %F
-          Icon=resources/app/resources/linux/code.png
-          Terminal=false
-          Type=Application
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupWMClass=Code
-          EOF
-          echo "✅ vscode-uos.desktop created"
-
-      # ========== 步骤 15: 打包 ==========
+      # ========== 步骤 14: 打包 ==========
       - name: 📦 Package artifacts
         run: |
           echo "=========================================="
@@ -288,7 +242,7 @@ jobs:
           echo "✅ Package created"
           echo "📦 Package size: $(du -sh artifacts/vscode-uos-${VERSION}.tar.gz)"
 
-      # ========== 步骤 16: 上传 ==========
+      # ========== 步骤 15: 上传 ==========
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -296,7 +250,7 @@ jobs:
           path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
 
-      # ========== 步骤 17: 构建摘要 ==========
+      # ========== 步骤 16: 构建摘要 ==========
       - name: 📊 Build summary
         if: always()
         run: |
@@ -307,14 +261,11 @@ jobs:
           echo "📦 Version: ${{ github.event.inputs.vscode_version || '1.116.0' }}"
           echo "🖥️  Runner: ubuntu-latest"
           echo "📦 Node version: $(node --version)"
-          echo "🔧 glibc compatibility: enabled"
-          echo "📁 Artifacts:"
-          ls -la artifacts/ 2>/dev/null || echo "No artifacts"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
-            echo "📥 On UOS: tar -xzf vscode-uos-*.tar.gz && cd VSCode-linux-x64 && ./run-uos.sh"
+            ls -la artifacts/
           else
-            echo "❌ Build failed. Please check the logs above."
+            echo "❌ Build failed. Check logs above."
           fi
           echo "=========================================="
