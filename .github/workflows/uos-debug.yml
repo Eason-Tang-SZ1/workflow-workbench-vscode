@@ -15,15 +15,14 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 注意：这里改为克隆 VSCode 源码，而不是使用当前仓库
       - name: Checkout VSCode source
         uses: actions/checkout@v6
         with:
-          repository: microsoft/vscode  # 关键：克隆 VSCode 官方仓库
+          repository: microsoft/vscode
           lfs: false
           fetch-depth: 1
           ref: ${{ github.event.inputs.vscode_version || '1.116.0' }}
-          path: vscode  # 克隆到 vscode 子目录
+          path: vscode
 
       - name: Debug - Verify checkout
         run: |
@@ -35,10 +34,13 @@ jobs:
           if [ -f "vscode/package.json" ]; then
             echo "VSCode version: $(cat vscode/package.json | grep '"version"' | head -1)"
           fi
-          if [ -f "vscode/yarn.lock" ]; then
-            echo "yarn.lock found"
+          # VSCode 1.116.0 使用 package-lock.json 而不是 yarn.lock
+          if [ -f "vscode/package-lock.json" ]; then
+            echo "package-lock.json found ✅"
           else
-            echo "ERROR: yarn.lock not found!"
+            echo "ERROR: package-lock.json not found!"
+            echo "Available files:"
+            ls -la vscode/ | grep -E "lock|json"
             exit 1
           fi
 
@@ -46,8 +48,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '20.x'
-          cache: 'yarn'
-          cache-dependency-path: vscode/yarn.lock  # 指定 lock 文件位置
+          cache: 'npm'
+          cache-dependency-path: vscode/package-lock.json
 
       - name: Install system dependencies
         run: |
@@ -69,39 +71,44 @@ jobs:
             libcairo2-dev \
             libpango1.0-dev \
             libatk1.0-dev \
-            libgdk-pixbuf2.0-dev
+            libgdk-pixbuf2.0-dev \
+            libsecret-1-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
 
-      - name: Cache dependencies
+      - name: Cache npm dependencies
         uses: actions/cache@v4
         with:
           path: |
             vscode/node_modules
+            ~/.npm
             ~/.cache/electron
             ~/.cache/ms-playwright
-            ~/.yarn/cache
-          key: ${{ runner.os }}-vscode-${{ hashFiles('vscode/yarn.lock') }}
+          key: ${{ runner.os }}-npm-vscode-${{ hashFiles('vscode/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-vscode-
+            ${{ runner.os }}-npm-vscode-
 
-      - name: Install yarn and dependencies
-        working-directory: ./vscode  # 在 vscode 目录中执行
+      - name: Install npm dependencies
+        working-directory: ./vscode
         run: |
-          npm install -g yarn@1.22.22
-          yarn --version
-          yarn install --frozen-lockfile --network-timeout 600000
+          npm --version
+          node --version
+          # VSCode 1.116.0 使用 npm 安装
+          npm ci --prefer-offline --no-audit --progress=false
 
       - name: Compile TypeScript
         working-directory: ./vscode
         run: |
-          yarn compile-build
-          yarn compile-extensions-build
+          npm run compile-build
+          npm run compile-extensions-build
 
       - name: Build VSCode Linux x64
         working-directory: ./vscode
         run: |
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=4096"
-          yarn gulp vscode-linux-x64-min
+          # VSCode 1.116.0 使用 npm run gulp
+          npm run gulp vscode-linux-x64-min
 
       - name: Find and verify build output
         run: |
@@ -147,6 +154,7 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           echo "=== VSCode UOS Launcher ==="
+          echo "Version: 1.116.0"
           echo "Script directory: $SCRIPT_DIR"
 
           # 检测 UOS 系统
@@ -154,9 +162,11 @@ jobs:
             echo "Detected UOS system, enabling compatibility mode..."
             export ELECTRON_ENABLE_GPU=0
             export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
           fi
 
-          # 启动 VSCode
+          # 检查是否设置了不安全的运行
+          echo "Starting VSCode with UOS compatibility..."
           exec "$SCRIPT_DIR/code" \
             --no-sandbox \
             --disable-gpu-sandbox \
@@ -168,6 +178,7 @@ jobs:
           chmod +x run-uos.sh
 
           echo "Startup script created successfully"
+          cat run-uos.sh
 
       - name: Package artifacts
         run: |
@@ -183,9 +194,14 @@ jobs:
           fi
 
           # 打包
-          tar -czf artifacts/vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}.tar.gz \
-            -C "$(dirname "$BUILD_DIR")" \
+          VERSION="${{ github.event.inputs.vscode_version || '1.116.0' }}"
+          cd "$(dirname "$BUILD_DIR")"
+          tar -czf "$OLDPWD/artifacts/vscode-uos-${VERSION}.tar.gz" \
+            --exclude='*.map' \
+            --exclude='*.ts' \
+            --exclude='node_modules' \
             "$(basename "$BUILD_DIR")"
+          cd "$OLDPWD"
 
           echo "Package created: $(du -h artifacts/vscode-uos-*.tar.gz)"
 
@@ -195,3 +211,27 @@ jobs:
           name: vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}
           path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
+
+      - name: Create release notes
+        if: success()
+        run: |
+          cat > artifacts/README.md << 'EOF'
+          # VSCode 1.116.0 for UOS (统信UOS)
+
+          ## 构建信息
+          - Version: 1.116.0
+          - Build Date: $(date)
+          - Architecture: x64
+          - Package Manager: npm
+          - Compatible with: UOS (glibc 2.28+)
+
+          ## 安装方法
+          ```bash
+          # 1. 解压
+          tar -xzf vscode-uos-1.116.0.tar.gz
+
+          # 2. 进入目录
+          cd VSCode-linux-x64
+
+          # 3. 运行
+          ./run-uos.sh
