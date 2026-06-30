@@ -12,7 +12,7 @@ on:
 jobs:
   build-for-uos:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     steps:
       # ========== 步骤 1: 环境信息 ==========
@@ -67,7 +67,9 @@ jobs:
             libxcb-xfixes0-dev \
             libxkbcommon-x11-dev \
             python3 \
-            git
+            git \
+            wget \
+            curl
 
       # ========== 步骤 5: 设置 glibc 兼容性 ==========
       - name: 🔄 Set glibc compatibility for UOS
@@ -85,6 +87,7 @@ jobs:
             ~/.npm
             ~/.cache/electron
             ~/.cache/ms-playwright
+            ~/.cache/vscode-extension-downloads
           key: ${{ runner.os }}-npm22-vscode-${{ hashFiles('vscode/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm22-vscode-
@@ -117,52 +120,21 @@ jobs:
           echo "Start time: $(date)"
           echo "=========================================="
 
-          # 安装所有依赖（包括 devDependencies）
           npm install --legacy-peer-deps --ignore-scripts
 
           echo "✅ npm install completed at: $(date)"
           echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
 
-      # ========== 步骤 9: 安装 VSCode 特有的构建工具 ==========
-      - name: 📦 Install VSCode build tools
+      # ========== 步骤 9: 安装构建工具 ==========
+      - name: 📦 Install build tools
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing VSCode-specific build tools..."
-          echo "=========================================="
-
-          # VSCode 特有的包
-          npm install --legacy-peer-deps \
-            vscode-gulp-watch \
-            vscode-ripgrep \
-            vscode-nls \
-            vscode-extension-telemetry \
-            vscode-languageserver \
-            vscode-languageclient \
-            vscode-jsonrpc \
-            vscode-test \
-            vscode-uri \
-            vscode-textbuffer \
-            vscode-debugprotocol \
-            vscode-debugadapter \
-            vscode-chrome-debug-core \
-            vscode-js-debug \
-            @vscode/test-electron \
-            @vscode/test-web \
-            @vscode/l10n \
-            2>/dev/null || true
-
-          echo "✅ VSCode build tools installed"
-
-      # ========== 步骤 10: 安装通用构建工具 ==========
-      - name: 📦 Install general build tools
-        working-directory: ./vscode
-        run: |
-          echo "=========================================="
-          echo "📦 Installing general build tools..."
+          echo "📦 Installing build tools..."
           echo "=========================================="
 
           npm install --legacy-peer-deps \
+            vscode-gulp-watch \
             esbuild \
             jsonc-parser \
             ternary-stream \
@@ -173,72 +145,30 @@ jobs:
             gulp-sourcemaps \
             gulp-filter \
             gulp-rename \
-            gulp-uglify \
-            gulp-clean-css \
-            gulp-htmlmin \
             gulp-sort \
             gulp-concat \
             gulp-if \
-            gulp-plumber \
             gulp-replace \
             gulp-size \
             gulp-tap \
             gulp-zip \
             gulp-newer \
-            gulp-changed \
-            gulp-cached \
-            gulp-remember \
             gulp-flatten \
             gulp-footer \
             gulp-header \
-            gulp-wrap \
             gulp-data \
             gulp-template \
             gulp-inject \
-            gulp-insert \
             gulp-file \
             gulp-touch \
-            gulp-watch \
-            gulp-livereload \
-            gulp-connect \
-            gulp-open \
-            gulp-load-plugins \
             @types/gulp \
             typescript \
             @types/node \
-            electron \
             2>/dev/null || true
 
-          echo "✅ General build tools installed"
+          echo "✅ Build tools installed"
 
-      # ========== 步骤 11: 验证关键包 ==========
-      - name: 🔍 Verify critical packages
-        working-directory: ./vscode
-        run: |
-          echo "=========================================="
-          echo "🔍 Verifying critical packages..."
-          echo "=========================================="
-
-          CRITICAL_PKGS="vscode-gulp-watch esbuild jsonc-parser ternary-stream gulp-merge-json gulp-tsb"
-          MISSING=""
-
-          for pkg in $CRITICAL_PKGS; do
-            if [ -d "node_modules/$pkg" ]; then
-              echo "✅ $pkg"
-            else
-              echo "❌ $pkg MISSING"
-              MISSING="$MISSING $pkg"
-            fi
-          done
-
-          if [ -n "$MISSING" ]; then
-            echo "Installing missing packages: $MISSING"
-            npm install $MISSING --legacy-peer-deps
-          fi
-
-          echo "✅ All critical packages verified"
-
-      # ========== 步骤 12: 手动运行 preinstall ==========
+      # ========== 步骤 10: 手动运行 preinstall ==========
       - name: 🔨 Run preinstall script
         working-directory: ./vscode
         run: |
@@ -248,38 +178,50 @@ jobs:
           node build/npm/preinstall.js
           echo "✅ preinstall completed"
 
-      # ========== 步骤 13: 构建 VSCode Linux x64 ==========
+      # ========== 步骤 11: 设置 Git 配置以加速扩展下载 ==========
+      - name: ⚙️ Configure Git for faster extension downloads
+        run: |
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
+
+      # ========== 步骤 12: 构建 VSCode Linux x64（使用 min 版本） ==========
       - name: 🔨 Build VSCode Linux x64
         working-directory: ./vscode
         run: |
           echo "=========================================="
           echo "🔨 Building VSCode Linux x64..."
-          echo "⏰ This may take 30-40 minutes..."
+          echo "⏰ This may take 20-30 minutes..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=8192"
+          export ELECTRON_SKIP_BINARY_DOWNLOAD=1
           echo "Start time: $(date)"
 
-          # 使用本地 gulp
-          ./node_modules/.bin/gulp vscode-linux-x64 --no-color
+          # 使用 min 版本（更小，更快）
+          ./node_modules/.bin/gulp vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
-      # ========== 步骤 14: 验证构建输出 ==========
+      # ========== 步骤 13: 验证构建输出 ==========
       - name: 🔍 Verify build output
         run: |
           echo "=========================================="
           echo "🔍 Verifying build output..."
           echo "=========================================="
 
-          if [ -d "./VSCode-linux-x64" ]; then
-            BUILD_DIR="./VSCode-linux-x64"
-            echo "✅ Build found at: $BUILD_DIR"
-          elif [ -d "./vscode/VSCode-linux-x64" ]; then
-            BUILD_DIR="./vscode/VSCode-linux-x64"
-            echo "✅ Build found at: $BUILD_DIR"
-          else
+          # 检查多个可能的位置
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64"; do
+            if [ -d "$dir" ]; then
+              BUILD_DIR="$dir"
+              echo "✅ Build found at: $BUILD_DIR"
+              break
+            fi
+          done
+
+          if [ -z "$BUILD_DIR" ]; then
             echo "❌ Build not found!"
+            echo "Searching..."
             find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
@@ -296,7 +238,7 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      # ========== 步骤 15: 创建 UOS 启动脚本 ==========
+      # ========== 步骤 14: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
         run: |
           echo "=========================================="
@@ -316,7 +258,6 @@ jobs:
           export ELECTRON_DISABLE_SANDBOX=1
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
-          export DISPLAY=:0
 
           if [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
@@ -364,7 +305,7 @@ jobs:
 
           echo "✅ Startup scripts created"
 
-      # ========== 步骤 16: 打包 ==========
+      # ========== 步骤 15: 打包 ==========
       - name: 📦 Package artifacts
         run: |
           echo "=========================================="
@@ -390,7 +331,7 @@ jobs:
           echo "✅ Package created"
           echo "📦 Package size: $(du -sh artifacts/vscode-uos-${VERSION}.tar.gz)"
 
-      # ========== 步骤 17: 上传 ==========
+      # ========== 步骤 16: 上传 ==========
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -398,7 +339,7 @@ jobs:
           path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
 
-      # ========== 步骤 18: 构建摘要 ==========
+      # ========== 步骤 17: 构建摘要 ==========
       - name: 📊 Build summary
         if: always()
         run: |
@@ -412,6 +353,9 @@ jobs:
             echo "🎉 Build completed successfully!"
             ls -la artifacts/
             echo ""
-            echo "📥 On UOS: tar -xzf vscode-uos-*.tar.gz && cd VSCode-linux-x64 && ./start-vscode.sh"
+            echo "📥 On UOS:"
+            echo "  1. tar -xzf vscode-uos-*.tar.gz"
+            echo "  2. cd VSCode-linux-x64"
+            echo "  3. ./start-vscode.sh"
           fi
           echo "=========================================="
