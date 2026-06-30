@@ -1,13 +1,12 @@
-# .github/workflows/build-vscode-uos.yml
 name: Build VSCode for UOS (Official Source)
 
 on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to build (e.g., main, 1.116.0)'
+        description: 'Branch to build (e.g., main)'
         required: true
-        default: '1.116.0'
+        default: 'main'  # 改为 main
 
 jobs:
   build:
@@ -16,7 +15,7 @@ jobs:
 
     steps:
       # ============================================================
-      # 1. 检出您的仓库源码 (这应该是官方 VSCode 的 Fork)
+      # 1. 检出您的仓库源码
       # ============================================================
       - name: 📥 Checkout your repository
         uses: actions/checkout@v6
@@ -33,7 +32,7 @@ jobs:
           node-version: '20.x'
 
       # ============================================================
-      # 3. 安装系统级编译依赖 (用于编译原生模块)
+      # 3. 安装系统级编译依赖
       # ============================================================
       - name: 🔧 Install system dependencies
         run: |
@@ -150,7 +149,6 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 针对 UOS 的环境变量优化
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -158,7 +156,6 @@ jobs:
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
 
-          # 检测并选择正确的可执行文件
           if [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
           elif [ -f "$SCRIPT_DIR/code" ]; then
@@ -171,7 +168,6 @@ jobs:
           echo "=== VSCode UOS Launcher ==="
           echo "Version: $($EXEC --version | head -1)"
 
-          # 通过 --no-sandbox 等参数启动
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
