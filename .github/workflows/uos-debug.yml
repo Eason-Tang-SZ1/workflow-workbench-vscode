@@ -97,33 +97,49 @@ jobs:
           echo "=========================================="
           cd vscode
 
+          # 备份并创建 JS 版本
+          cp build/npm/preinstall.ts build/npm/preinstall.ts.bak 2>/dev/null || true
           cat > build/npm/preinstall.js << 'EOF'
           console.log('Running preinstall script (JS version)...');
           console.log('Node version:', process.version);
           console.log('✅ Preinstall completed successfully');
           EOF
 
+          # 修改 package.json
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo "✅ Preinstall script fixed"
 
-      # ========== 步骤 8: 安装所有依赖和 gulp 插件 ==========
-      - name: 📦 Install all dependencies
+      # ========== 步骤 8: 安装 npm 依赖 ==========
+      - name: 📦 Install npm dependencies
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing all dependencies..."
+          echo "📦 Installing npm dependencies..."
           echo "Node version: $(node --version)"
           echo "npm version: $(npm --version)"
-          echo "=========================================="
           echo "Start time: $(date)"
+          echo "=========================================="
 
           # 安装所有依赖
           npm install --legacy-peer-deps --ignore-scripts
 
-          # 安装所有 gulp 相关插件（VSCode 构建需要的）
-          echo "📦 Installing gulp plugins..."
+          echo "✅ npm install completed at: $(date)"
+          echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
+
+      # ========== 步骤 9: 安装所有构建工具和 gulp 插件 ==========
+      - name: 📦 Install ALL build tools and gulp plugins
+        working-directory: ./vscode
+        run: |
+          echo "=========================================="
+          echo "📦 Installing ALL build tools and gulp plugins..."
+          echo "=========================================="
+
+          # 一次性安装所有可能需要的构建工具
           npm install --legacy-peer-deps \
+            esbuild \
             ternary-stream \
+            gulp \
+            gulp-cli \
             gulp-merge-json \
             gulp-tsb \
             gulp-sourcemaps \
@@ -139,9 +155,6 @@ jobs:
             gulp-mocha \
             gulp-istanbul \
             gulp-coveralls \
-            gulp-jsdoc \
-            gulp-jsdoc3 \
-            gulp-jsdoc-to-markdown \
             gulp-sort \
             gulp-concat \
             gulp-if \
@@ -175,12 +188,12 @@ jobs:
             gulp-connect \
             gulp-open \
             gulp-load-plugins \
+            @types/gulp \
             2>/dev/null || true
 
-          echo "✅ npm install completed at: $(date)"
-          echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "✅ All build tools installed"
 
-      # ========== 步骤 9: 验证关键包 ==========
+      # ========== 步骤 10: 验证关键包 ==========
       - name: 🔍 Verify critical packages
         working-directory: ./vscode
         run: |
@@ -188,7 +201,7 @@ jobs:
           echo "🔍 Verifying critical packages..."
           echo "=========================================="
 
-          CRITICAL_PKGS="ternary-stream gulp-merge-json gulp-tsb gulp-sort gulp-sourcemaps gulp-filter"
+          CRITICAL_PKGS="esbuild ternary-stream gulp-merge-json gulp-tsb gulp-sort gulp-sourcemaps"
           MISSING=""
 
           for pkg in $CRITICAL_PKGS; do
@@ -207,7 +220,7 @@ jobs:
 
           echo "✅ All critical packages verified"
 
-      # ========== 步骤 10: 手动运行 preinstall ==========
+      # ========== 步骤 11: 手动运行 preinstall ==========
       - name: 🔨 Run preinstall script
         working-directory: ./vscode
         run: |
@@ -216,11 +229,6 @@ jobs:
           echo "=========================================="
           node build/npm/preinstall.js
           echo "✅ preinstall completed"
-
-      # ========== 步骤 11: 安装 gulp 全局 ==========
-      - name: 📦 Install gulp globally
-        run: |
-          npm install -g gulp-cli
 
       # ========== 步骤 12: 构建 VSCode Linux x64 ==========
       - name: 🔨 Build VSCode Linux x64
@@ -254,20 +262,27 @@ jobs:
             echo "✅ Build found at: $BUILD_DIR"
           else
             echo "❌ Build not found!"
-            find . -name "VSCode-linux-x64" -type d 2>/dev/null
+            echo "Searching..."
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
 
+          echo "📁 Directory contents:"
+          ls -la $BUILD_DIR | head -30
+
           if [ -f "$BUILD_DIR/code-oss" ]; then
             echo "✅ Found: code-oss"
+            EXEC_NAME="code-oss"
           elif [ -f "$BUILD_DIR/code" ]; then
             echo "✅ Found: code"
+            EXEC_NAME="code"
           else
             echo "❌ No executable found!"
             exit 1
           fi
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
       # ========== 步骤 14: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
@@ -289,6 +304,7 @@ jobs:
           export ELECTRON_DISABLE_SANDBOX=1
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
 
           if [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
@@ -301,9 +317,10 @@ jobs:
 
           echo "=== VSCode UOS Launcher ==="
           echo "Version: $($EXEC --version | head -1)"
+          echo "Executable: $EXEC"
 
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
-              echo "✅ Detected UOS system"
+              echo "✅ Detected UOS system, enabling compatibility mode..."
           fi
 
           exec "$EXEC" \
@@ -311,11 +328,33 @@ jobs:
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
+              --enable-features=UseOzonePlatform \
+              --ozone-platform=x11 \
               "$@"
           EOF
 
           chmod +x start-vscode.sh
-          echo "✅ start-vscode.sh created"
+
+          cat > vscode-uos.desktop << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=VSCode for UOS
+          Comment=Visual Studio Code for UOS
+          Exec=./start-vscode.sh %F
+          Icon=code.png
+          Terminal=false
+          Categories=Development;IDE;
+          StartupNotify=true
+          StartupWMClass=Code
+          EOF
+
+          # 复制图标
+          if [ -f "resources/app/resources/linux/code.png" ]; then
+              cp resources/app/resources/linux/code.png ./
+          fi
+
+          echo "✅ Startup scripts created"
 
       # ========== 步骤 15: 打包 ==========
       - name: 📦 Package artifacts
@@ -333,8 +372,11 @@ jobs:
             exit 1
           fi
 
+          # 确保脚本有执行权限
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
+          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
+          # 打包
           tar -czf "artifacts/vscode-uos-${VERSION}.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
@@ -364,6 +406,13 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             ls -la artifacts/
+            echo ""
+            echo "📥 Download: vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}.tar.gz"
+            echo ""
+            echo "📌 On UOS:"
+            echo "  1. tar -xzf vscode-uos-*.tar.gz"
+            echo "  2. cd VSCode-linux-x64"
+            echo "  3. ./start-vscode.sh"
           else
             echo "❌ Build failed. Check logs above."
           fi
