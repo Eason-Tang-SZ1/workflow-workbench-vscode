@@ -59,18 +59,7 @@ jobs:
             git
 
       # ============================================================
-      # 4. 全局安装 ts-node
-      # ============================================================
-      - name: 📦 Install ts-node globally
-        run: |
-          echo "=========================================="
-          echo "Installing ts-node..."
-          echo "=========================================="
-          npm install -g ts-node typescript
-          echo "✅ ts-node installed"
-
-      # ============================================================
-      # 5. 修复 preinstall.ts 和 postinstall.ts
+      # 4. 修复 preinstall.ts 和 postinstall.ts
       # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -92,13 +81,8 @@ jobs:
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
           echo "✅ postinstall.ts patched"
 
-          echo "=========================================="
-          echo "Updated package.json scripts:"
-          grep -E '"preinstall"|"postinstall"' package.json
-          echo "=========================================="
-
       # ============================================================
-      # 6. 安装项目依赖
+      # 5. 安装项目依赖
       # ============================================================
       - name: 📦 Install dependencies
         run: |
@@ -108,43 +92,41 @@ jobs:
           npm install --legacy-peer-deps
 
       # ============================================================
-      # 7. 设置 Node.js 选项以支持 TypeScript
+      # 6. 安装 tsx (TypeScript 执行器)
       # ============================================================
-      - name: 🔧 Configure Node.js for TypeScript
+      - name: 📦 Install tsx
         run: |
           echo "=========================================="
-          echo "Configuring Node.js to handle TypeScript files..."
+          echo "Installing tsx..."
           echo "=========================================="
-          # 设置环境变量
-          echo "NODE_OPTIONS=\"--loader ts-node/esm --max-old-space-size=8192\"" >> $GITHUB_ENV
-          echo "TS_NODE_PROJECT=\"./build/tsconfig.json\"" >> $GITHUB_ENV
-          echo "✅ Node.js configured"
+          npm install -g tsx
+          echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 编译 TypeScript（使用 ts-node）
+      # 7. 编译 TypeScript（使用 tsx）
       # ============================================================
       - name: 🔨 Compile TypeScript
         run: |
           echo "=========================================="
           echo "Compiling TypeScript..."
           echo "=========================================="
-          export NODE_OPTIONS="--loader ts-node/esm --max-old-space-size=8192"
-          export TS_NODE_PROJECT="./build/tsconfig.json"
+          export VSCODE_SKIP_PRELAUNCH=1
+          export NODE_OPTIONS="--max-old-space-size=8192"
 
           echo "Start time: $(date)"
 
-          # 使用 ts-node 运行 gulp
-          npx ts-node --esm node_modules/gulp/bin/gulp.js compile-build-with-mangling
+          # 使用 tsx 运行 gulp
+          npx tsx node_modules/gulp/bin/gulp.js compile-build-with-mangling
 
           echo "✅ compile-build completed"
 
-          npx ts-node --esm node_modules/gulp/bin/gulp.js compile-extensions-build
+          npx tsx node_modules/gulp/bin/gulp.js compile-extensions-build
 
           echo "✅ compile-extensions-build completed"
           echo "End time: $(date)"
 
       # ============================================================
-      # 9. 构建 Linux x64 版本
+      # 8. 构建 Linux x64 版本
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -153,17 +135,16 @@ jobs:
           echo "⏰ This may take 20-30 minutes..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
-          export NODE_OPTIONS="--loader ts-node/esm --max-old-space-size=8192"
-          export TS_NODE_PROJECT="./build/tsconfig.json"
+          export NODE_OPTIONS="--max-old-space-size=8192"
 
           echo "Start time: $(date)"
 
-          npx ts-node --esm node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 10. 验证构建产物
+      # 9. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -186,7 +167,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 为 UOS 创建启动脚本 (已含 --no-sandbox)
+      # 10. 为 UOS 创建启动脚本 (已含 --no-sandbox)
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -232,7 +213,7 @@ jobs:
           echo "✅ start-vscode.sh created successfully at $BUILD_DIR"
 
       # ============================================================
-      # 12. 打包成 tar.gz
+      # 11. 打包成 tar.gz
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -258,7 +239,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传构建产物
+      # 12. 上传构建产物
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -268,7 +249,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 构建摘要
+      # 13. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
