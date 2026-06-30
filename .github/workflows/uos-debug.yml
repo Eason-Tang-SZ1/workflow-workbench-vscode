@@ -12,7 +12,7 @@ on:
 jobs:
   build-for-uos:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     steps:
       # ========== 步骤 1: 环境信息 ==========
@@ -124,14 +124,18 @@ jobs:
           echo "✅ npm install completed at: $(date)"
           echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
 
-      # ========== 步骤 9: 安装构建工具 ==========
-      - name: 📦 Install build tools
+      # ========== 步骤 9: 安装所有必需的构建工具 ==========
+      - name: 📦 Install all required build tools
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing build tools..."
+          echo "📦 Installing all required build tools..."
           echo "=========================================="
 
+          # 确保 vscode-gulp-watch 被安装
+          npm install vscode-gulp-watch --legacy-peer-deps
+
+          # 安装所有其他需要的包
           npm install --legacy-peer-deps \
             esbuild \
             jsonc-parser \
@@ -166,6 +170,14 @@ jobs:
 
           echo "✅ Build tools installed"
 
+          # 验证 vscode-gulp-watch 是否安装
+          if [ -d "node_modules/vscode-gulp-watch" ]; then
+            echo "✅ vscode-gulp-watch confirmed installed"
+          else
+            echo "❌ vscode-gulp-watch NOT found! Retrying..."
+            npm install vscode-gulp-watch --legacy-peer-deps --force
+          fi
+
       # ========== 步骤 10: 手动运行 preinstall ==========
       - name: 🔨 Run preinstall script
         working-directory: ./vscode
@@ -183,13 +195,9 @@ jobs:
           echo "⚙️ Configuring build environment..."
           echo "=========================================="
 
-          # 设置环境变量跳过扩展下载
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-
-          # 也设置到当前会话
-          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
-          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
 
           echo "✅ Build environment configured"
 
@@ -207,7 +215,7 @@ jobs:
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           echo "Start time: $(date)"
 
-          # 直接构建 - 使用 min 版本更快
+          # 使用 vscode-linux-x64-min
           ./node_modules/.bin/gulp vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
