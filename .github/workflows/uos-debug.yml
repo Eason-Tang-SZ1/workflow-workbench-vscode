@@ -12,7 +12,7 @@ on:
 jobs:
   build-for-uos:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 120
 
     steps:
       # ========== 步骤 1: 环境信息 ==========
@@ -124,58 +124,20 @@ jobs:
           echo "✅ npm install completed at: $(date)"
           echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
 
-      # ========== 步骤 9: 安装所有必需的构建工具 ==========
-      - name: 📦 Install all required build tools
+      # ========== 步骤 9: 安装 vscode-gulp-watch ==========
+      - name: 📦 Install vscode-gulp-watch
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing all required build tools..."
+          echo "📦 Installing vscode-gulp-watch..."
           echo "=========================================="
+          npm install vscode-gulp-watch --legacy-peer-deps --force
 
-          # 确保 vscode-gulp-watch 被安装
-          npm install vscode-gulp-watch --legacy-peer-deps
-
-          # 安装所有其他需要的包
-          npm install --legacy-peer-deps \
-            esbuild \
-            jsonc-parser \
-            ternary-stream \
-            gulp \
-            gulp-cli \
-            gulp-merge-json \
-            gulp-tsb \
-            gulp-sourcemaps \
-            gulp-filter \
-            gulp-rename \
-            gulp-sort \
-            gulp-concat \
-            gulp-if \
-            gulp-replace \
-            gulp-size \
-            gulp-tap \
-            gulp-zip \
-            gulp-newer \
-            gulp-flatten \
-            gulp-footer \
-            gulp-header \
-            gulp-data \
-            gulp-template \
-            gulp-inject \
-            gulp-file \
-            gulp-touch \
-            @types/gulp \
-            typescript \
-            @types/node \
-            2>/dev/null || true
-
-          echo "✅ Build tools installed"
-
-          # 验证 vscode-gulp-watch 是否安装
           if [ -d "node_modules/vscode-gulp-watch" ]; then
-            echo "✅ vscode-gulp-watch confirmed installed"
+            echo "✅ vscode-gulp-watch installed"
           else
-            echo "❌ vscode-gulp-watch NOT found! Retrying..."
-            npm install vscode-gulp-watch --legacy-peer-deps --force
+            echo "❌ vscode-gulp-watch installation failed"
+            exit 1
           fi
 
       # ========== 步骤 10: 手动运行 preinstall ==========
@@ -188,25 +150,12 @@ jobs:
           node build/npm/preinstall.js
           echo "✅ preinstall completed"
 
-      # ========== 步骤 11: 设置环境变量跳过扩展下载 ==========
-      - name: ⚙️ Configure build environment
-        run: |
-          echo "=========================================="
-          echo "⚙️ Configuring build environment..."
-          echo "=========================================="
-
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-
-          echo "✅ Build environment configured"
-
-      # ========== 步骤 12: 构建 VSCode Linux x64 ==========
-      - name: 🔨 Build VSCode Linux x64
+      # ========== 步骤 11: 使用 npm run 构建 ==========
+      - name: 🔨 Build VSCode using npm run
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "🔨 Building VSCode Linux x64..."
+          echo "🔨 Building VSCode using npm run..."
           echo "⏰ This may take 20-30 minutes..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
@@ -215,26 +164,30 @@ jobs:
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           echo "Start time: $(date)"
 
-          # 使用 vscode-linux-x64-min
-          ./node_modules/.bin/gulp vscode-linux-x64-min --no-color
+          # 使用 npm run 脚本构建
+          npm run gulp -- vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
-      # ========== 步骤 13: 验证构建输出 ==========
+      # ========== 步骤 12: 验证构建输出 ==========
       - name: 🔍 Verify build output
         run: |
           echo "=========================================="
           echo "🔍 Verifying build output..."
           echo "=========================================="
 
-          if [ -d "./VSCode-linux-x64" ]; then
-            BUILD_DIR="./VSCode-linux-x64"
-            echo "✅ Build found at: $BUILD_DIR"
-          elif [ -d "./vscode/VSCode-linux-x64" ]; then
-            BUILD_DIR="./vscode/VSCode-linux-x64"
-            echo "✅ Build found at: $BUILD_DIR"
-          else
+          # 检查多个可能的位置
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "./vscode/../VSCode-linux-x64"; do
+            if [ -d "$dir" ]; then
+              BUILD_DIR="$dir"
+              echo "✅ Build found at: $BUILD_DIR"
+              break
+            fi
+          done
+
+          if [ -z "$BUILD_DIR" ]; then
             echo "❌ Build not found!"
+            echo "Searching..."
             find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
@@ -251,7 +204,7 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      # ========== 步骤 14: 创建 UOS 启动脚本 ==========
+      # ========== 步骤 13: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
         run: |
           echo "=========================================="
@@ -318,7 +271,7 @@ jobs:
 
           echo "✅ Startup scripts created"
 
-      # ========== 步骤 15: 打包 ==========
+      # ========== 步骤 14: 打包 ==========
       - name: 📦 Package artifacts
         run: |
           echo "=========================================="
@@ -344,7 +297,7 @@ jobs:
           echo "✅ Package created"
           echo "📦 Package size: $(du -sh artifacts/vscode-uos-${VERSION}.tar.gz)"
 
-      # ========== 步骤 16: 上传 ==========
+      # ========== 步骤 15: 上传 ==========
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -352,7 +305,7 @@ jobs:
           path: artifacts/vscode-uos-*.tar.gz
           retention-days: 30
 
-      # ========== 步骤 17: 构建摘要 ==========
+      # ========== 步骤 16: 构建摘要 ==========
       - name: 📊 Build summary
         if: always()
         run: |
