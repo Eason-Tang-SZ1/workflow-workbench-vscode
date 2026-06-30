@@ -92,7 +92,47 @@ jobs:
           npm install --legacy-peer-deps
 
       # ============================================================
-      # 6. 安装 tsx (TypeScript 执行器)
+      # 6. 安装所有缺失的构建依赖
+      # ============================================================
+      - name: 📦 Install missing build dependencies
+        run: |
+          echo "=========================================="
+          echo "Installing missing build dependencies..."
+          echo "=========================================="
+
+          # VSCode 构建需要的额外依赖
+          npm install --legacy-peer-deps \
+            ternary-stream \
+            vscode-gulp-watch \
+            esbuild \
+            jsonc-parser \
+            gulp-merge-json \
+            gulp-tsb \
+            gulp-sourcemaps \
+            gulp-filter \
+            gulp-rename \
+            gulp-sort \
+            gulp-concat \
+            gulp-if \
+            gulp-replace \
+            gulp-size \
+            gulp-tap \
+            gulp-zip \
+            gulp-newer \
+            gulp-flatten \
+            gulp-footer \
+            gulp-header \
+            gulp-data \
+            gulp-template \
+            gulp-inject \
+            gulp-file \
+            gulp-touch \
+            2>/dev/null || true
+
+          echo "✅ Missing dependencies installed"
+
+      # ============================================================
+      # 7. 安装 tsx (TypeScript 执行器)
       # ============================================================
       - name: 📦 Install tsx
         run: |
@@ -103,7 +143,7 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 7. 编译 TypeScript（使用 tsx）
+      # 8. 编译 TypeScript（使用 tsx）
       # ============================================================
       - name: 🔨 Compile TypeScript
         run: |
@@ -126,7 +166,7 @@ jobs:
           echo "End time: $(date)"
 
       # ============================================================
-      # 8. 构建 Linux x64 版本
+      # 9. 构建 Linux x64 版本
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -144,7 +184,7 @@ jobs:
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 9. 验证构建产物
+      # 10. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -167,7 +207,7 @@ jobs:
           fi
 
       # ============================================================
-      # 10. 为 UOS 创建启动脚本 (已含 --no-sandbox)
+      # 11. 为 UOS 创建启动脚本 (已含 --no-sandbox)
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -213,7 +253,7 @@ jobs:
           echo "✅ start-vscode.sh created successfully at $BUILD_DIR"
 
       # ============================================================
-      # 11. 打包成 tar.gz
+      # 12. 打包成 tar.gz
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -239,7 +279,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 12. 上传构建产物
+      # 13. 上传构建产物
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -249,7 +289,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 13. 构建摘要
+      # 14. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
