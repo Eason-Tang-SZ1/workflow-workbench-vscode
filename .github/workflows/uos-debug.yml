@@ -158,53 +158,58 @@ jobs:
 
           echo "✅ Build completed at: $(date)"
 
-      # ========== 步骤 12: 验证构建输出（修正路径） ==========
+      # ========== 步骤 12: 验证构建输出（修正：检查 code-oss） ==========
       - name: 🔍 Verify build output
         run: |
           echo "=========================================="
           echo "🔍 Verifying build output..."
           echo "=========================================="
 
-          # 构建输出在 vscode 的父目录，而不是 vscode 内部
-          echo "Checking multiple locations..."
-          echo "Current directory: $(pwd)"
-          echo "Files in current dir:"
-          ls -la
-          echo ""
-          echo "Files in vscode dir:"
-          ls -la vscode/ | head -10
-          echo ""
-          echo "Looking for VSCode-linux-x64..."
-
-          # 检查所有可能的位置
+          # 构建输出在 vscode 的父目录
+          BUILD_DIR=""
           if [ -d "./VSCode-linux-x64" ]; then
-            echo "✅ Build found at: ./VSCode-linux-x64"
             BUILD_DIR="./VSCode-linux-x64"
+            echo "✅ Build found at: $BUILD_DIR"
           elif [ -d "./vscode/VSCode-linux-x64" ]; then
-            echo "✅ Build found at: ./vscode/VSCode-linux-x64"
             BUILD_DIR="./vscode/VSCode-linux-x64"
+            echo "✅ Build found at: $BUILD_DIR"
           else
-            echo "❌ Build not found in expected locations!"
-            echo "Searching for code executable..."
-            find . -name "code" -type f 2>/dev/null | head -10
-            echo "Searching for VSCode-linux-x64 directory..."
+            echo "❌ Build not found!"
             find . -name "VSCode-linux-x64" -type d 2>/dev/null
             exit 1
           fi
 
           echo "📁 Directory contents:"
-          ls -la $BUILD_DIR | head -20
+          ls -la $BUILD_DIR | head -30
 
+          # 检查可执行文件（可能是 code 或 code-oss）
           if [ -f "$BUILD_DIR/code" ]; then
-            echo "✅ code executable exists"
-            $BUILD_DIR/code --version || echo "Version check passed"
+            echo "✅ Found: code"
+            EXEC_NAME="code"
+          elif [ -f "$BUILD_DIR/code-oss" ]; then
+            echo "✅ Found: code-oss (OSS version)"
+            EXEC_NAME="code-oss"
           else
-            echo "❌ code executable not found!"
+            echo "❌ No executable found!"
+            echo "Searching for executable files:"
+            find $BUILD_DIR -maxdepth 1 -type f -executable | head -10
             exit 1
           fi
 
-          # 保存构建路径供后续步骤使用
+          # 显示版本信息
+          echo "📌 Version:"
+          $BUILD_DIR/$EXEC_NAME --version || echo "Version check passed"
+
+          # 创建软链接 code -> code-oss（为了兼容）
+          if [ "$EXEC_NAME" == "code-oss" ]; then
+            echo "Creating symlink: code -> code-oss"
+            ln -sf code-oss $BUILD_DIR/code
+            echo "✅ Symlink created"
+          fi
+
+          # 保存路径供后续步骤使用
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
       # ========== 步骤 13: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
@@ -213,9 +218,10 @@ jobs:
           echo "🚀 Creating UOS startup scripts..."
           echo "=========================================="
 
-          # 使用之前找到的构建目录
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          EXEC_NAME="${EXEC_NAME:-code-oss}"
           echo "Build directory: $BUILD_DIR"
+          echo "Executable: $EXEC_NAME"
 
           cd "$BUILD_DIR"
 
@@ -223,7 +229,19 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           echo "=== VSCode UOS Launcher ==="
-          echo "Version: $($SCRIPT_DIR/code --version | head -1)"
+
+          # 检查可执行文件
+          if [ -f "$SCRIPT_DIR/code-oss" ]; then
+            EXEC="$SCRIPT_DIR/code-oss"
+          elif [ -f "$SCRIPT_DIR/code" ]; then
+            EXEC="$SCRIPT_DIR/code"
+          else
+            echo "❌ VSCode executable not found!"
+            exit 1
+          fi
+
+          echo "Version: $($EXEC --version | head -1)"
+          echo "Executable: $EXEC"
 
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -233,7 +251,7 @@ jobs:
             echo "✅ Detected UOS system, enabling compatibility mode..."
           fi
 
-          exec "$SCRIPT_DIR/code" \
+          exec "$EXEC" \
             --no-sandbox \
             --disable-gpu-sandbox \
             --disable-software-rasterizer \
@@ -242,6 +260,22 @@ jobs:
 
           chmod +x run-uos.sh
           echo "✅ run-uos.sh created"
+
+          # 创建桌面入口文件
+          cat > vscode-uos.desktop << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Name=Visual Studio Code - OSS (UOS)
+          Comment=Code Editing. Redefined.
+          Exec=./run-uos.sh %F
+          Icon=resources/app/resources/linux/code.png
+          Terminal=false
+          Type=Application
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupWMClass=Code
+          EOF
+          echo "✅ vscode-uos.desktop created"
 
       # ========== 步骤 14: 打包 ==========
       - name: 📦 Package artifacts
@@ -260,6 +294,7 @@ jobs:
             exit 1
           fi
 
+          # 打包整个目录
           tar -czf "artifacts/vscode-uos-${VERSION}.tar.gz" \
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
