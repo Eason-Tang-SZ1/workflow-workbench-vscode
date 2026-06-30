@@ -97,19 +97,16 @@ jobs:
           echo "=========================================="
           cd vscode
 
-          # 备份并创建 JS 版本
-          cp build/npm/preinstall.ts build/npm/preinstall.ts.bak 2>/dev/null || true
           cat > build/npm/preinstall.js << 'EOF'
           console.log('Running preinstall script (JS version)...');
           console.log('Node version:', process.version);
           console.log('✅ Preinstall completed successfully');
           EOF
 
-          # 修改 package.json
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo "✅ Preinstall script fixed"
 
-      # ========== 步骤 8: 安装 npm 依赖 ==========
+      # ========== 步骤 8: 安装所有 npm 依赖 ==========
       - name: 📦 Install npm dependencies
         working-directory: ./vscode
         run: |
@@ -126,17 +123,18 @@ jobs:
           echo "✅ npm install completed at: $(date)"
           echo "📁 node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')"
 
-      # ========== 步骤 9: 安装所有构建工具和 gulp 插件 ==========
-      - name: 📦 Install ALL build tools and gulp plugins
+      # ========== 步骤 9: 安装所有构建工具和依赖包 ==========
+      - name: 📦 Install ALL build tools and dependencies
         working-directory: ./vscode
         run: |
           echo "=========================================="
-          echo "📦 Installing ALL build tools and gulp plugins..."
+          echo "📦 Installing ALL build tools and dependencies..."
           echo "=========================================="
 
-          # 一次性安装所有可能需要的构建工具
+          # 一次性安装所有可能需要的构建工具和依赖包
           npm install --legacy-peer-deps \
             esbuild \
+            jsonc-parser \
             ternary-stream \
             gulp \
             gulp-cli \
@@ -189,6 +187,11 @@ jobs:
             gulp-open \
             gulp-load-plugins \
             @types/gulp \
+            typescript \
+            @types/node \
+            electron \
+            playwright \
+            @playwright/test \
             2>/dev/null || true
 
           echo "✅ All build tools installed"
@@ -201,7 +204,7 @@ jobs:
           echo "🔍 Verifying critical packages..."
           echo "=========================================="
 
-          CRITICAL_PKGS="esbuild ternary-stream gulp-merge-json gulp-tsb gulp-sort gulp-sourcemaps"
+          CRITICAL_PKGS="esbuild jsonc-parser ternary-stream gulp-merge-json gulp-tsb gulp-sort gulp-sourcemaps"
           MISSING=""
 
           for pkg in $CRITICAL_PKGS; do
@@ -272,17 +275,14 @@ jobs:
 
           if [ -f "$BUILD_DIR/code-oss" ]; then
             echo "✅ Found: code-oss"
-            EXEC_NAME="code-oss"
           elif [ -f "$BUILD_DIR/code" ]; then
             echo "✅ Found: code"
-            EXEC_NAME="code"
           else
             echo "❌ No executable found!"
             exit 1
           fi
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-          echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
       # ========== 步骤 14: 创建 UOS 启动脚本 ==========
       - name: 🚀 Create UOS startup scripts
@@ -317,7 +317,6 @@ jobs:
 
           echo "=== VSCode UOS Launcher ==="
           echo "Version: $($EXEC --version | head -1)"
-          echo "Executable: $EXEC"
 
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
               echo "✅ Detected UOS system, enabling compatibility mode..."
@@ -349,7 +348,6 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # 复制图标
           if [ -f "resources/app/resources/linux/code.png" ]; then
               cp resources/app/resources/linux/code.png ./
           fi
@@ -372,11 +370,8 @@ jobs:
             exit 1
           fi
 
-          # 确保脚本有执行权限
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
-          # 打包
           tar -czf "artifacts/vscode-uos-${VERSION}.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
@@ -406,14 +401,5 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             ls -la artifacts/
-            echo ""
-            echo "📥 Download: vscode-uos-${{ github.event.inputs.vscode_version || '1.116.0' }}.tar.gz"
-            echo ""
-            echo "📌 On UOS:"
-            echo "  1. tar -xzf vscode-uos-*.tar.gz"
-            echo "  2. cd VSCode-linux-x64"
-            echo "  3. ./start-vscode.sh"
-          else
-            echo "❌ Build failed. Check logs above."
           fi
           echo "=========================================="
