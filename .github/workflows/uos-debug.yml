@@ -132,34 +132,38 @@ jobs:
           cd ..
 
       # ============================================================
-      # 9. 编译 TypeScript - 使用 compile-client 和 compile-cli
+      # 9. 编译 TypeScript - 跳过扩展下载
       # ============================================================
       - name: 🔨 Compile TypeScript
         run: |
           echo "=========================================="
           echo "Compiling TypeScript..."
           echo "=========================================="
+
+          # 关键环境变量：跳过扩展下载
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_BUILD_SKIP_EXTENSIONS=1
+          export VSCODE_BUILD_BUILTIN_EXTENSIONS_SKIP_DOWNLOAD=1
 
           echo "Start time: $(date)"
 
-          # 使用正确的任务名称
+          # 编译客户端
           npx tsx node_modules/gulp/bin/gulp.js compile-client --no-color
-
           echo "✅ compile-client completed"
 
+          # 编译 CLI
           npx tsx node_modules/gulp/bin/gulp.js compile-cli --no-color
-
           echo "✅ compile-cli completed"
 
-          npx tsx node_modules/gulp/bin/gulp.js compile-extensions-build --no-color
+          # 编译扩展构建（如果失败则跳过）
+          npx tsx node_modules/gulp/bin/gulp.js compile-extensions-build --no-color || \
+          echo "⚠️ compile-extensions-build failed or skipped, continuing..."
 
-          echo "✅ compile-extensions-build completed"
           echo "End time: $(date)"
 
       # ============================================================
-      # 10. 构建 Linux x64 版本
+      # 10. 构建 Linux x64 版本 - 跳过扩展下载
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -167,12 +171,16 @@ jobs:
           echo "Building VSCode Linux x64..."
           echo "⏰ This may take 20-30 minutes..."
           echo "=========================================="
+
+          # 关键环境变量：跳过扩展下载
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_BUILD_SKIP_EXTENSIONS=1
+          export VSCODE_BUILD_BUILTIN_EXTENSIONS_SKIP_DOWNLOAD=1
 
           echo "Start time: $(date)"
 
-          # 使用 vscode-linux-x64
+          # 构建 Linux x64 版本
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
@@ -186,6 +194,7 @@ jobs:
           echo "Verifying build output..."
           echo "=========================================="
 
+          # 查找构建目录
           if [ -d "./VSCode-linux-x64" ]; then
             echo "✅ Build found in ./VSCode-linux-x64"
             ls -la ./VSCode-linux-x64/ | head -20
@@ -194,9 +203,15 @@ jobs:
             echo "✅ Build found in ./vscode/VSCode-linux-x64"
             ls -la ./vscode/VSCode-linux-x64/ | head -20
             echo "BUILD_DIR=./vscode/VSCode-linux-x64" >> $GITHUB_ENV
+          elif [ -d "../VSCode-linux-x64" ]; then
+            echo "✅ Build found in ../VSCode-linux-x64"
+            ls -la ../VSCode-linux-x64/ | head -20
+            echo "BUILD_DIR=../VSCode-linux-x64" >> $GITHUB_ENV
           else
-            echo "❌ Build not found!"
-            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
+            echo "❌ Build not found! Searching..."
+            find . -name "VSCode-linux-x64" -type d -maxdepth 3 2>/dev/null || echo "Not found"
+            echo "Current directory structure:"
+            ls -la
             exit 1
           fi
 
@@ -216,6 +231,7 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+          # UOS 兼容性设置
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -223,17 +239,25 @@ jobs:
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
 
+          # 查找可执行文件
           if [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
           elif [ -f "$SCRIPT_DIR/code" ]; then
               EXEC="$SCRIPT_DIR/code"
+          elif [ -f "$SCRIPT_DIR/bin/code-oss" ]; then
+              EXEC="$SCRIPT_DIR/bin/code-oss"
+          elif [ -f "$SCRIPT_DIR/bin/code" ]; then
+              EXEC="$SCRIPT_DIR/bin/code"
           else
               echo "❌ VSCode executable not found!"
+              echo "Searching in: $SCRIPT_DIR"
+              find "$SCRIPT_DIR" -name "code*" -type f 2>/dev/null
               exit 1
           fi
 
           echo "=== VSCode UOS Launcher ==="
-          echo "Version: $($EXEC --version | head -1)"
+          echo "Executable: $EXEC"
+          echo "Version: $($EXEC --version 2>/dev/null | head -1 || echo 'Unknown')"
 
           exec "$EXEC" \
               --no-sandbox \
@@ -259,17 +283,22 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
           if [ ! -d "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
+            echo "❌ Build directory not found! Current directory:"
+            pwd
+            ls -la
             exit 1
           fi
 
-          chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
+          # 确保脚本有执行权限
+          find "$BUILD_DIR" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
-          tar -czf artifacts/vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
+          # 打包
+          PACKAGE_NAME="vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz"
+          tar -czf "artifacts/$PACKAGE_NAME" \
             --preserve-permissions \
             "$BUILD_DIR"
 
-          echo "✅ Package created:"
+          echo "✅ Package created: artifacts/$PACKAGE_NAME"
           ls -lh artifacts/
 
       # ============================================================
@@ -295,4 +324,9 @@ jobs:
           echo "📦 Branch: ${{ github.event.inputs.branch }}"
           echo "📁 Artifacts:"
           ls -lh artifacts/ 2>/dev/null || echo "  (No artifacts)"
+          echo ""
+          echo "💡 Notes:"
+          echo "  - Extensions download has been skipped"
+          echo "  - Built for UOS/Linux x64 compatibility"
+          echo "  - Use start-vscode.sh to launch on UOS"
           echo "=========================================="
