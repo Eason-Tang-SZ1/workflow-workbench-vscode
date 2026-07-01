@@ -120,22 +120,38 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【关键】编译 TypeScript - 使用 compile-build（无 mangler）
+      # 8. 列出可用的 gulp 任务（调试）
+      # ============================================================
+      - name: 🔍 List gulp tasks
+        run: |
+          echo "=========================================="
+          echo "Listing available gulp tasks..."
+          echo "=========================================="
+          cd build
+          npx tsx ../node_modules/gulp/bin/gulp.js --tasks
+          cd ..
+
+      # ============================================================
+      # 9. 编译 TypeScript - 使用 compile-client 和 compile-cli
       # ============================================================
       - name: 🔨 Compile TypeScript
         run: |
           echo "=========================================="
-          echo "Compiling TypeScript (without mangler)..."
+          echo "Compiling TypeScript..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=8192"
 
           echo "Start time: $(date)"
 
-          # ✅ 正确：使用 compile-build（不启用 mangler）
-          npx tsx node_modules/gulp/bin/gulp.js compile-build --no-color
+          # 使用正确的任务名称
+          npx tsx node_modules/gulp/bin/gulp.js compile-client --no-color
 
-          echo "✅ compile-build completed"
+          echo "✅ compile-client completed"
+
+          npx tsx node_modules/gulp/bin/gulp.js compile-cli --no-color
+
+          echo "✅ compile-cli completed"
 
           npx tsx node_modules/gulp/bin/gulp.js compile-extensions-build --no-color
 
@@ -143,7 +159,7 @@ jobs:
           echo "End time: $(date)"
 
       # ============================================================
-      # 9. 【关键】构建 - 使用 vscode-linux-x64（无 mangler）
+      # 10. 构建 Linux x64 版本
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -156,13 +172,13 @@ jobs:
 
           echo "Start time: $(date)"
 
-          # ✅ 正确：使用 vscode-linux-x64（不启用 mangler）
+          # 使用 vscode-linux-x64
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 10. 验证构建产物
+      # 11. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -185,7 +201,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -231,7 +247,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 12. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -257,7 +273,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -267,7 +283,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 构建摘要
+      # 15. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
