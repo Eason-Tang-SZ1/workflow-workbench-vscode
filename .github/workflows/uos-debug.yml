@@ -120,19 +120,19 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 禁用 mangler 并编译
+      # 8. 【关键】编译 TypeScript - 使用 compile-build（无 mangler）
       # ============================================================
-      - name: 🔨 Disable mangler and compile
+      - name: 🔨 Compile TypeScript
         run: |
           echo "=========================================="
-          echo "Disabling mangler and compiling TypeScript..."
+          echo "Compiling TypeScript (without mangler)..."
           echo "=========================================="
           export VSCODE_SKIP_PRELAUNCH=1
           export NODE_OPTIONS="--max-old-space-size=8192"
 
           echo "Start time: $(date)"
 
-          # 使用 gulp compile-build 代替 compile-build-with-mangling
+          # ✅ 正确：使用 compile-build（不启用 mangler）
           npx tsx node_modules/gulp/bin/gulp.js compile-build --no-color
 
           echo "✅ compile-build completed"
@@ -143,7 +143,7 @@ jobs:
           echo "End time: $(date)"
 
       # ============================================================
-      # 9. 构建 Linux x64 版本（也禁用 mangler）
+      # 9. 【关键】构建 - 使用 vscode-linux-x64（无 mangler）
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -156,7 +156,7 @@ jobs:
 
           echo "Start time: $(date)"
 
-          # 使用 vscode-linux-x64（不带 mangling）
+          # ✅ 正确：使用 vscode-linux-x64（不启用 mangler）
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
