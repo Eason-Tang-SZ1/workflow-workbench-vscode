@@ -66,7 +66,7 @@ jobs:
       - name: 🔧 Fix TypeScript scripts
         run: |
           echo "=========================================="
-          echo "Fixing TypeScript scripts (preinstall/postinstall)..."
+          echo "Fixing TypeScript scripts..."
           echo "=========================================="
 
           cat > build/npm/preinstall.js << 'EOF'
@@ -122,69 +122,53 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【关键】修改产品配置，禁用扩展市场
+      # 8. 【核心】禁用内置扩展下载，保留预构建扩展
       # ============================================================
-      - name: 🔧 Disable marketplace extensions
+      - name: ⚙️ Disable built-in extension download
         run: |
           echo "=========================================="
-          echo "Disabling marketplace extensions..."
+          echo "Disabling built-in extension download..."
           echo "=========================================="
 
-          # 备份并修改 product.json，移除扩展市场配置
-          if [ -f "product.json" ]; then
-            cp product.json product.json.bak
-            # 使用 jq 移除扩展市场相关配置
-            if command -v jq &> /dev/null; then
-              jq 'del(.extensionsGallery)' product.json > product.json.tmp
-              jq 'del(.extensionEnabledApiProposals)' product.json.tmp > product.json.tmp2
-              mv product.json.tmp2 product.json
-            else
-              # 如果没有 jq，使用 sed 简单替换
-              sed -i 's/"extensionsGallery": {[^}]*},//g' product.json
-              sed -i 's/"extensionEnabledApiProposals": {[^}]*},//g' product.json
-            fi
-            echo "✅ product.json modified"
-            cat product.json
+          # 创建空的 builtInExtensions.json 来覆盖默认配置
+          mkdir -p .vscode
+          cat > .vscode/builtInExtensions.json << 'EOF'
+          {
+            "extensions": [],
+            "disabled": true
+          }
+          EOF
+
+          # 修改 build/lib/builtInExtensions.ts 来跳过下载
+          if [ -f "build/lib/builtInExtensions.ts" ]; then
+            sed -i 's/const shouldDownload = !isWeb;/const shouldDownload = false;/' build/lib/builtInExtensions.ts
           fi
 
-      # ============================================================
-      # 9. 【关键】设置所有跳过变量
-      # ============================================================
-      - name: ⚙️ Set environment variables
-        run: |
-          echo "=========================================="
-          echo "Setting environment variables..."
-          echo "=========================================="
-          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
-          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
-          export VSCODE_SKIP_PRELAUNCH=1
-          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-          echo "✅ Environment variables set"
+          echo "✅ Built-in extension download disabled"
 
       # ============================================================
-      # 10. 构建 VSCode
+      # 9. 构建 VSCode Linux x64 (min 版本)
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
           echo "=========================================="
           echo "Building VSCode Linux x64..."
-          echo "⏰ This may take 30-40 minutes..."
+          echo "⏰ This may take 20-30 minutes..."
           echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
-          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start time: $(date)"
 
-          # 使用 vscode-linux-x64
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+          # 使用 min 版本（不会尝试下载额外扩展）
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 11. 验证构建产物
+      # 10. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -207,7 +191,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 11. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -258,7 +242,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 12. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -284,7 +268,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 13. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -294,7 +278,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 15. 构建摘要
+      # 14. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
