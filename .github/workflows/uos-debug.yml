@@ -1,17 +1,17 @@
-name: Build VSCode for UOS (Official Source)
+name: Build Custom VSCode for UOS
 
 on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to build (e.g., main)'
+        description: 'Branch to build'
         required: true
         default: 'main'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 150
 
     steps:
       # ============================================================
@@ -57,115 +57,32 @@ jobs:
             libgdk-pixbuf2.0-dev \
             python3 \
             git \
-            jq
+            wget \
+            curl
 
       # ============================================================
-      # 4. 修复 product.json - 解码 base64 URL
-      # ============================================================
-      - name: 🔧 Fix product.json URLs
-        run: |
-          echo "=========================================="
-          echo "Fixing product.json URLs..."
-          echo "=========================================="
-
-          if [ -f "product.json" ]; then
-            cp product.json product.json.bak
-
-            # 使用 Node.js 解码 base64 URL 并修复配置
-            node << 'NODEEOF'
-          const fs = require('fs');
-          const product = JSON.parse(fs.readFileSync('product.json', 'utf8'));
-
-          // 解码 base64 编码的 URL
-          function decodeBase64Url(str) {
-            if (!str || typeof str !== 'string') return str;
-            // 检查是否是 base64 编码的 URL（包含 /gallery/ 或类似路径特征）
-            if (str.match(/^[A-Za-z0-9+/=]+$/) && str.length > 20) {
-              try {
-                const decoded = Buffer.from(str, 'base64').toString('utf-8');
-                if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
-                  console.log(`Decoded base64 URL: ${str.substring(0, 50)}... -> ${decoded}`);
-                  return decoded;
-                }
-              } catch (e) {
-                console.log(`Failed to decode: ${str.substring(0, 50)}...`);
-              }
-            }
-            return str;
-          }
-
-          // 修复 extensionsGallery
-          if (product.extensionsGallery) {
-            console.log('Original extensionsGallery:', JSON.stringify(product.extensionsGallery, null, 2));
-
-            // 解码 serviceUrl 和 cacheUrl
-            if (product.extensionsGallery.serviceUrl) {
-              product.extensionsGallery.serviceUrl = decodeBase64Url(product.extensionsGallery.serviceUrl);
-            }
-            if (product.extensionsGallery.cacheUrl) {
-              product.extensionsGallery.cacheUrl = decodeBase64Url(product.extensionsGallery.cacheUrl);
-            }
-            if (product.extensionsGallery.itemUrl) {
-              product.extensionsGallery.itemUrl = decodeBase64Url(product.extensionsGallery.itemUrl);
-            }
-
-            console.log('Fixed extensionsGallery:', JSON.stringify(product.extensionsGallery, null, 2));
-          }
-
-          // 如果没有 extensionsGallery，使用公共市场
-          if (!product.extensionsGallery) {
-            product.extensionsGallery = {
-              serviceUrl: "https://marketplace.visualstudio.com/_apis/public/gallery",
-              cacheUrl: "https://vscode.blob.core.windows.net/gallery/index",
-              itemUrl: "https://marketplace.visualstudio.com/items"
-            };
-            console.log('Added default extensionsGallery');
-          }
-
-          // 确保 URL 格式正确
-          if (product.extensionsGallery) {
-            Object.keys(product.extensionsGallery).forEach(key => {
-              const url = product.extensionsGallery[key];
-              if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
-                console.log(`Warning: ${key} has invalid URL: ${url}`);
-              }
-            });
-          }
-
-          fs.writeFileSync('product.json', JSON.stringify(product, null, 2));
-          console.log('✅ product.json fixed');
-          NODEEOF
-
-            # 显示修复后的配置
-            echo "Fixed product.json extensionsGallery:"
-            node -e "const p=require('./product.json'); console.log(JSON.stringify(p.extensionsGallery, null, 2))"
-          else
-            echo "⚠️ product.json not found"
-          fi
-
-      # ============================================================
-      # 5. 修复 preinstall.ts 和 postinstall.ts
+      # 4. 修复 preinstall.ts 和 postinstall.ts
       # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
           echo "=========================================="
-          echo "Fixing TypeScript scripts..."
+          echo "Fixing TypeScript scripts (preinstall/postinstall)..."
           echo "=========================================="
 
           cat > build/npm/preinstall.js << 'EOF'
-          console.log('✅ Preinstall script executed successfully.');
+          console.log('✅ Preinstall script (JS version) executed successfully.');
           EOF
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo "✅ preinstall.ts patched"
 
           cat > build/npm/postinstall.js << 'EOF'
-          console.log('✅ Postinstall script executed successfully.');
+          console.log('✅ Postinstall script (JS version) executed successfully.');
           EOF
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
           echo "✅ postinstall.ts patched"
 
       # ============================================================
-      # 6. 安装项目依赖
+      # 5. 安装项目依赖
       # ============================================================
       - name: 📦 Install dependencies
         run: |
@@ -175,15 +92,14 @@ jobs:
           npm install --legacy-peer-deps
 
       # ============================================================
-      # 7. 安装构建依赖
+      # 6. 安装缺失的构建依赖
       # ============================================================
-      - name: 📦 Install build dependencies
+      - name: 📦 Install missing build dependencies
         run: |
           echo "=========================================="
-          echo "Installing build dependencies..."
+          echo "Installing missing build dependencies..."
           echo "=========================================="
           npm install --legacy-peer-deps \
-            @vscode/vsce \
             ternary-stream \
             vscode-gulp-watch \
             esbuild \
@@ -195,10 +111,10 @@ jobs:
             gulp-rename \
             gulp-sort \
             2>/dev/null || true
-          echo "✅ Build dependencies installed"
+          echo "✅ Missing dependencies installed"
 
       # ============================================================
-      # 8. 安装 tsx
+      # 7. 安装 tsx
       # ============================================================
       - name: 📦 Install tsx
         run: |
@@ -206,131 +122,41 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 9. 修复 fetch.ts - 处理 base64 URL
+      # 8. 设置环境变量跳过扩展下载
       # ============================================================
-      - name: 🔧 Fix fetch.ts to decode base64 URLs
+      - name: ⚙️ Set environment variables
         run: |
           echo "=========================================="
-          echo "Fixing fetch.ts URL handling..."
+          echo "Setting environment variables..."
           echo "=========================================="
-
-          FETCH_FILE="build/lib/fetch.ts"
-
-          if [ -f "$FETCH_FILE" ]; then
-            cp "$FETCH_FILE" "$FETCH_FILE.bak"
-
-            # 在 fetchUrl 函数前添加 URL 解码逻辑
-            node << 'NODEEOF'
-          const fs = require('fs');
-          let content = fs.readFileSync('build/lib/fetch.ts', 'utf8');
-
-          // 在文件开头添加 URL 解码函数
-          const decodeFunction = `
-          // Patched: Decode base64 encoded URLs
-          function decodeUrl(url: string): string {
-            if (!url || typeof url !== 'string') return url;
-            // Check if URL is base64 encoded
-            if (/^[A-Za-z0-9+/=]+$/.test(url) && url.length > 20) {
-              try {
-                const decoded = Buffer.from(url, 'base64').toString('utf-8');
-                if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
-                  console.log(\`[fetch] Decoded base64 URL: \${decoded}\`);
-                  return decoded;
-                }
-              } catch (e) {
-                // Not base64, continue
-              }
-            }
-            return url;
-          }
-          `;
-
-          // 在 import 语句后插入
-          content = content.replace(
-            /(import.*from.*;\n)/,
-            '$1\n' + decodeFunction
-          );
-
-          // 在 fetchUrl 函数中调用 decodeUrl
-          content = content.replace(
-            /export async function fetchUrl\(url: string/,
-            `export async function fetchUrl(url: string`
-          );
-
-          // 在 fetchUrl 函数体开头添加 URL 解码
-          content = content.replace(
-            /(export async function fetchUrl\(url: string.*?\{)/,
-            `$1\n  url = decodeUrl(url);`
-          );
-
-          // 在 fetchUrls 中也添加解码
-          content = content.replace(
-            /(export function fetchUrls\(urls: string\[\].*?\{)/,
-            `$1\n  urls = urls.map(url => decodeUrl(url));`
-          );
-
-          fs.writeFileSync('build/lib/fetch.ts', content);
-          console.log('✅ fetch.ts patched with URL decoding');
-          NODEEOF
-
-            echo "✅ fetch.ts patched"
-          else
-            echo "⚠️ fetch.ts not found"
-          fi
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "✅ Environment variables set"
 
       # ============================================================
-      # 10. 列出 gulp 任务
-      # ============================================================
-      - name: 🔍 List gulp tasks
-        run: |
-          echo "=========================================="
-          echo "Listing available gulp tasks..."
-          echo "=========================================="
-          cd build
-          npx tsx ../node_modules/gulp/bin/gulp.js --tasks 2>&1 || true
-          cd ..
-
-      # ============================================================
-      # 11. 编译 TypeScript
-      # ============================================================
-      - name: 🔨 Compile TypeScript
-        run: |
-          echo "=========================================="
-          echo "Compiling TypeScript..."
-          echo "=========================================="
-
-          export NODE_OPTIONS="--max-old-space-size=8192"
-
-          echo "Start time: $(date)"
-
-          npx tsx node_modules/gulp/bin/gulp.js compile-client --no-color
-          echo "✅ compile-client completed"
-
-          npx tsx node_modules/gulp/bin/gulp.js compile-cli --no-color
-          echo "✅ compile-cli completed"
-
-          echo "End time: $(date)"
-
-      # ============================================================
-      # 12. 构建 VSCode Linux x64
+      # 9. 构建 VSCode（跳过扩展下载）
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
           echo "=========================================="
           echo "Building VSCode Linux x64..."
-          echo "⏰ This may take 30-60 minutes..."
+          echo "⏰ This may take 30-40 minutes..."
           echo "=========================================="
-
           export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          export VSCODE_SKIP_PRELAUNCH=1
 
           echo "Start time: $(date)"
 
+          # 使用 vscode-linux-x64
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 13. 验证构建产物
+      # 10. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -338,51 +164,22 @@ jobs:
           echo "Verifying build output..."
           echo "=========================================="
 
-          # 查找构建目录
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "✅ Build found in $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
-            echo "Searching for VSCode-linux-x64..."
-            find / -name "VSCode-linux-x64" -type d -maxdepth 5 2>/dev/null | head -5
+          if [ -d "./VSCode-linux-x64" ]; then
+            echo "✅ Build found in ./VSCode-linux-x64"
+            ls -la ./VSCode-linux-x64/ | head -20
+            echo "BUILD_DIR=./VSCode-linux-x64" >> $GITHUB_ENV
+          elif [ -d "./vscode/VSCode-linux-x64" ]; then
+            echo "✅ Build found in ./vscode/VSCode-linux-x64"
+            ls -la ./vscode/VSCode-linux-x64/ | head -20
+            echo "BUILD_DIR=./vscode/VSCode-linux-x64" >> $GITHUB_ENV
+          else
+            echo "❌ Build not found!"
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
 
-          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-
-          # 检查关键文件
-          echo ""
-          echo "Checking build contents..."
-
-          if [ -f "$BUILD_DIR/code-oss" ] || [ -f "$BUILD_DIR/code" ] || [ -f "$BUILD_DIR/bin/code-oss" ]; then
-            echo "✅ Executable found"
-          else
-            echo "❌ No executable found!"
-            find "$BUILD_DIR" -name "code*" -type f 2>/dev/null | head -5
-          fi
-
-          if [ -d "$BUILD_DIR/resources/app" ]; then
-            echo "✅ app resources found"
-          fi
-
-          if [ -d "$BUILD_DIR/extensions" ]; then
-            EXT_COUNT=$(find "$BUILD_DIR/extensions" -maxdepth 1 -type d | wc -l)
-            echo "✅ $EXT_COUNT extensions included"
-          fi
-
-          echo ""
-          echo "Build directory structure:"
-          ls -la "$BUILD_DIR/" | head -30
-
       # ============================================================
-      # 14. 创建 UOS 启动脚本
+      # 11. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -391,46 +188,34 @@ jobs:
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
           cd "$BUILD_DIR"
 
-          cat > start-vscode.sh << 'UOSEOF'
+          cat > start-vscode.sh << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # UOS/Deepin 兼容性设置
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
           export ELECTRON_DISABLE_SANDBOX=1
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
 
-          # 查找可执行文件
-          EXEC=""
-          for candidate in \
-            "$SCRIPT_DIR/code-oss" \
-            "$SCRIPT_DIR/code" \
-            "$SCRIPT_DIR/bin/code-oss" \
-            "$SCRIPT_DIR/bin/code"; do
-            if [ -f "$candidate" ]; then
-              EXEC="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$EXEC" ]; then
+          if [ -f "$SCRIPT_DIR/code-oss" ]; then
+              EXEC="$SCRIPT_DIR/code-oss"
+          elif [ -f "$SCRIPT_DIR/code" ]; then
+              EXEC="$SCRIPT_DIR/code"
+          else
               echo "❌ VSCode executable not found!"
-              echo "Available files:"
-              find "$SCRIPT_DIR" -name "code*" -type f 2>/dev/null | head -10
               exit 1
           fi
 
-          echo "=== VSCode for UOS ==="
-          echo "Executable: $EXEC"
+          echo "=== Custom VSCode UOS Launcher ==="
+          echo "Version: $($EXEC --version | head -1)"
 
-          # 显示版本信息
-          if [ -x "$EXEC" ]; then
-            "$EXEC" --version 2>/dev/null | head -3 || true
+          if grep -q "UOS" /etc/os-release 2>/dev/null; then
+              echo "✅ Detected UOS system"
           fi
 
           exec "$EXEC" \
@@ -439,26 +224,58 @@ jobs:
               --disable-software-rasterizer \
               --disable-gpu \
               "$@"
-          UOSEOF
+          EOF
 
           chmod +x start-vscode.sh
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 15. 创建安装说明
+      # 12. 打包
       # ============================================================
-      - name: 📝 Create README
+      - name: 📦 Package artifacts
         run: |
+          echo "=========================================="
+          echo "Packaging artifacts..."
+          echo "=========================================="
+          mkdir -p artifacts
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          cd "$BUILD_DIR"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "❌ Build directory not found!"
+            exit 1
+          fi
 
-          cat > README_UOS.md << 'EOF'
-          # VSCode for UOS (统信UOS)
+          chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
 
-          ## 安装方法
+          tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
+            --preserve-permissions \
+            "$BUILD_DIR"
 
-          1. 解压文件：
-             ```bash
-             tar -xzf vscode-uos-*.tar.gz
-             cd VSCode-linux-x64
+          echo "✅ Package created:"
+          ls -lh artifacts/
+
+      # ============================================================
+      # 13. 上传
+      # ============================================================
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-vscode-uos
+          path: artifacts/custom-vscode-uos-*.tar.gz
+          retention-days: 30
+
+      # ============================================================
+      # 14. 构建摘要
+      # ============================================================
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Branch: ${{ github.event.inputs.branch }}"
+          echo "📁 Artifacts:"
+          ls -lh artifacts/ 2>/dev/null || echo "  (No artifacts)"
+          echo "=========================================="
