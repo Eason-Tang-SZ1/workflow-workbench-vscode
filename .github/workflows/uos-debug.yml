@@ -113,45 +113,50 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 直接删除扩展下载任务
+      # 8. 手动编译 TypeScript（跳过扩展下载）
       # ============================================================
-      - name: 🔧 Remove extension download tasks
+      - name: 🔨 Compile TypeScript
         run: |
-          echo "Removing extension download tasks..."
+          echo "=========================================="
+          echo "Compiling TypeScript..."
+          echo "=========================================="
+          export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
-          # 删除 bundle-marketplace-extensions-build 任务定义
-          if [ -f "build/gulpfile.extensions.ts" ]; then
-            # 用空实现替换
-            sed -i '/gulp.task.*bundle-marketplace-extensions-build/,/});/d' build/gulpfile.extensions.ts
-            echo "✅ Removed bundle-marketplace-extensions-build task"
-          fi
+          echo "Start time: $(date)"
 
-          # 修改 gulpfile.vscode.ts 移除依赖
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.ts
-            echo "✅ Removed dependency from gulpfile.vscode.ts"
-          fi
+          # 直接编译客户端和 CLI
+          npx tsx node_modules/gulp/bin/gulp.js compile-client --no-color
+          npx tsx node_modules/gulp/bin/gulp.js compile-cli --no-color
 
-          # 修改 gulpfile.vscode.js 如果存在
-          if [ -f "build/gulpfile.vscode.js" ]; then
-            sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.js
-            echo "✅ Removed dependency from gulpfile.vscode.js"
-          fi
-
-          echo "✅ Extension download tasks removed"
+          echo "✅ TypeScript compilation completed at: $(date)"
 
       # ============================================================
-      # 9. 设置环境变量
+      # 9. 手动构建扩展（跳过市场扩展下载）
       # ============================================================
-      - name: ⚙️ Set environment variables
+      - name: 🔨 Build extensions
         run: |
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "=========================================="
+          echo "Building extensions..."
+          echo "=========================================="
+          export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+
+          echo "Start time: $(date)"
+
+          # 编译扩展（跳过市场扩展）
+          npx tsx node_modules/gulp/bin/gulp.js compile-extensions-build --no-color
+
+          echo "✅ Extensions build completed at: $(date)"
 
       # ============================================================
-      # 10. 构建 VSCode Linux x64
+      # 10. 构建 VSCode Linux x64（直接构建，不通过 gulp 任务）
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -167,7 +172,8 @@ jobs:
 
           echo "Start time: $(date)"
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          # 直接运行构建脚本，跳过扩展下载任务
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color --skip-extensions
 
           echo "✅ Build completed at: $(date)"
 
@@ -188,6 +194,8 @@ jobs:
           else
             echo "❌ Build not found!"
             find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
+            # 尝试查找任何构建产物
+            find . -name "code-oss" -type f 2>/dev/null || echo "No code-oss found"
             exit 1
           fi
 
