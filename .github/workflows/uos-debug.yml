@@ -122,45 +122,28 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【核心】修改构建脚本完全禁用扩展下载
+      # 8. 完全禁用扩展下载
       # ============================================================
-      - name: 🔧 Completely disable extension downloads
+      - name: 🔧 Disable extension downloads
         run: |
           echo "=========================================="
-          echo "Completely disabling extension downloads..."
+          echo "Disabling extension downloads..."
           echo "=========================================="
 
-          # 方法1：删除 builtInExtensions 配置
-          if [ -f "build/lib/builtInExtensions.ts" ]; then
-            cat > build/lib/builtInExtensions.ts << 'EOF'
-            export const builtInExtensions: any[] = [];
-            export const shouldDownloadBuiltInExtensions = false;
-            EOF
-            echo "✅ builtInExtensions.ts modified"
-          fi
-
-          # 方法2：创建空的内置扩展列表
+          # 创建空的内置扩展列表
           mkdir -p .vscode
-          cat > .vscode/builtInExtensions.json << 'EOF'
-          {
-            "extensions": [],
-            "disabled": true
-          }
-          EOF
-          echo "✅ .vscode/builtInExtensions.json created"
+          echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
 
-          # 方法3：修改 product.json 移除扩展市场
+          # 创建空的 build/builtInExtensions.json
+          echo '[]' > build/builtInExtensions.json
+
+          # 修改 product.json
           if [ -f "product.json" ]; then
             sed -i '/"extensionsGallery":/,/},/d' product.json
             sed -i '/"extensionEnabledApiProposals":/,/}/d' product.json
-            echo "✅ product.json modified"
           fi
 
-          # 方法4：创建空的 build/builtInExtensions.json
-          cat > build/builtInExtensions.json << 'EOF'
-          []
-          EOF
-          echo "✅ build/builtInExtensions.json created"
+          echo "✅ Extension downloads disabled"
 
       # ============================================================
       # 9. 设置环境变量
@@ -189,7 +172,6 @@ jobs:
 
           echo "Start time: $(date)"
 
-          # 使用 min 版本
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
