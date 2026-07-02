@@ -65,30 +65,24 @@ jobs:
       # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
-          echo "=========================================="
           echo "Fixing TypeScript scripts..."
-          echo "=========================================="
-
           cat > build/npm/preinstall.js << 'EOF'
           console.log('✅ Preinstall script (JS version) executed successfully.');
           EOF
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-          echo "✅ preinstall.ts patched"
 
           cat > build/npm/postinstall.js << 'EOF'
           console.log('✅ Postinstall script (JS version) executed successfully.');
           EOF
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
-          echo "✅ postinstall.ts patched"
+          echo "✅ TypeScript scripts fixed"
 
       # ============================================================
       # 5. 安装项目依赖
       # ============================================================
       - name: 📦 Install dependencies
         run: |
-          echo "=========================================="
           echo "Installing npm dependencies..."
-          echo "=========================================="
           npm install --legacy-peer-deps
 
       # ============================================================
@@ -96,9 +90,7 @@ jobs:
       # ============================================================
       - name: 📦 Install missing build dependencies
         run: |
-          echo "=========================================="
           echo "Installing missing build dependencies..."
-          echo "=========================================="
           npm install --legacy-peer-deps \
             ternary-stream \
             vscode-gulp-watch \
@@ -109,8 +101,7 @@ jobs:
             gulp-sourcemaps \
             gulp-filter \
             gulp-rename \
-            gulp-sort \
-            2>/dev/null || true
+            gulp-sort 2>/dev/null || true
           echo "✅ Missing dependencies installed"
 
       # ============================================================
@@ -122,62 +113,33 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【核心】禁用扩展下载 - 修改源文件
+      # 8. 禁用扩展下载 - 直接重写源文件
       # ============================================================
-      - name: 🔧 Disable extension downloads in source
+      - name: 🔧 Disable extension downloads
         run: |
-          echo "=========================================="
-          echo "Disabling extension downloads in source..."
-          echo "=========================================="
+          echo "Disabling extension downloads..."
 
-          # 方法1: 修改 build/lib/extensions.ts
-          if [ -f "build/lib/extensions.ts" ]; then
-            # 替换 fetchUrls 函数为直接返回
-            cat > build/lib/extensions.ts.patch << 'EOF'
-          // PATCHED: Disable extension downloads
-          export async function fetchUrls(urls: string[], options: IRequestOptions): Promise<void> {
-            console.log('⚠️ Extension downloads disabled for UOS build');
+          # 重写 build/lib/extensions.ts
+          echo 'export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("⚠️ Extension downloads disabled");
             return Promise.resolve();
-          }
-          EOF
+          }' > build/lib/extensions.ts
 
-            # 查找并替换函数定义
-            sed -i '/export async function fetchUrls/,/}/c\
-          export async function fetchUrls(urls: string[], options: IRequestOptions): Promise<void> {\
-            console.log('\''⚠️ Extension downloads disabled for UOS build'\'');\
-            return Promise.resolve();\
-          }' build/lib/extensions.ts
+          # 重写 build/lib/builtInExtensions.ts
+          echo 'export const builtInExtensions = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions = [];
+          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
 
-            echo "✅ build/lib/extensions.ts patched"
-          fi
-
-          # 方法2: 修改 build/lib/builtInExtensions.ts
-          if [ -f "build/lib/builtInExtensions.ts" ]; then
-            cat > build/lib/builtInExtensions.ts << 'EOF'
-            export const builtInExtensions: any[] = [];
-            export const shouldDownloadBuiltInExtensions = false;
-            export const webBuiltInExtensions: any[] = [];
-            export const shouldDownloadWebBuiltInExtensions = false;
-            EOF
-            echo "✅ build/lib/builtInExtensions.ts patched"
-          fi
-
-      # ============================================================
-      # 9. 创建空的扩展列表
-      # ============================================================
-      - name: 📝 Create empty extension lists
-        run: |
-          echo "=========================================="
-          echo "Creating empty extension lists..."
-          echo "=========================================="
-
+          # 创建空扩展列表
           mkdir -p .vscode
           echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
           echo '[]' > build/builtInExtensions.json
-          echo "✅ Empty extension lists created"
+
+          echo "✅ Extension downloads disabled"
 
       # ============================================================
-      # 10. 设置环境变量
+      # 9. 设置环境变量
       # ============================================================
       - name: ⚙️ Set environment variables
         run: |
@@ -187,7 +149,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 11. 构建 VSCode Linux x64
+      # 10. 构建 VSCode Linux x64
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -208,14 +170,11 @@ jobs:
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 12. 验证构建产物
+      # 11. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
-          echo "=========================================="
           echo "Verifying build output..."
-          echo "=========================================="
-
           if [ -d "./VSCode-linux-x64" ]; then
             echo "✅ Build found in ./VSCode-linux-x64"
             ls -la ./VSCode-linux-x64/ | head -20
@@ -231,14 +190,11 @@ jobs:
           fi
 
       # ============================================================
-      # 13. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
-          echo "=========================================="
           echo "Creating UOS startup script..."
-          echo "=========================================="
-
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
@@ -282,15 +238,12 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 14. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
-          echo "=========================================="
           echo "Packaging artifacts..."
-          echo "=========================================="
           mkdir -p artifacts
-
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
           if [ ! -d "$BUILD_DIR" ]; then
@@ -299,7 +252,6 @@ jobs:
           fi
 
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
-
           tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
             --preserve-permissions \
             "$BUILD_DIR"
@@ -308,7 +260,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 15. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -318,7 +270,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 16. 构建摘要
+      # 15. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
