@@ -122,15 +122,24 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【核心】禁用内置扩展下载，保留预构建扩展
+      # 8. 【核心】修改构建脚本完全禁用扩展下载
       # ============================================================
-      - name: ⚙️ Disable built-in extension download
+      - name: 🔧 Completely disable extension downloads
         run: |
           echo "=========================================="
-          echo "Disabling built-in extension download..."
+          echo "Completely disabling extension downloads..."
           echo "=========================================="
 
-          # 创建空的 builtInExtensions.json 来覆盖默认配置
+          # 方法1：删除 builtInExtensions 配置
+          if [ -f "build/lib/builtInExtensions.ts" ]; then
+            cat > build/lib/builtInExtensions.ts << 'EOF'
+            export const builtInExtensions: any[] = [];
+            export const shouldDownloadBuiltInExtensions = false;
+            EOF
+            echo "✅ builtInExtensions.ts modified"
+          fi
+
+          # 方法2：创建空的内置扩展列表
           mkdir -p .vscode
           cat > .vscode/builtInExtensions.json << 'EOF'
           {
@@ -138,16 +147,33 @@ jobs:
             "disabled": true
           }
           EOF
+          echo "✅ .vscode/builtInExtensions.json created"
 
-          # 修改 build/lib/builtInExtensions.ts 来跳过下载
-          if [ -f "build/lib/builtInExtensions.ts" ]; then
-            sed -i 's/const shouldDownload = !isWeb;/const shouldDownload = false;/' build/lib/builtInExtensions.ts
+          # 方法3：修改 product.json 移除扩展市场
+          if [ -f "product.json" ]; then
+            sed -i '/"extensionsGallery":/,/},/d' product.json
+            sed -i '/"extensionEnabledApiProposals":/,/}/d' product.json
+            echo "✅ product.json modified"
           fi
 
-          echo "✅ Built-in extension download disabled"
+          # 方法4：创建空的 build/builtInExtensions.json
+          cat > build/builtInExtensions.json << 'EOF'
+          []
+          EOF
+          echo "✅ build/builtInExtensions.json created"
 
       # ============================================================
-      # 9. 构建 VSCode Linux x64 (min 版本)
+      # 9. 设置环境变量
+      # ============================================================
+      - name: ⚙️ Set environment variables
+        run: |
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+
+      # ============================================================
+      # 10. 构建 VSCode Linux x64 (min 版本)
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -159,16 +185,17 @@ jobs:
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start time: $(date)"
 
-          # 使用 min 版本（不会尝试下载额外扩展）
+          # 使用 min 版本
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 10. 验证构建产物
+      # 11. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -191,7 +218,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -242,7 +269,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 12. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -268,7 +295,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -278,7 +305,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 构建摘要
+      # 15. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
