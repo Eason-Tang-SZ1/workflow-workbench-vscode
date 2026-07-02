@@ -122,31 +122,54 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 完全禁用扩展下载
+      # 8. 【核心】修改 gulpfile 跳过有问题的任务
       # ============================================================
-      - name: 🔧 Disable extension downloads
+      - name: 🔧 Patch gulpfile to skip marketplace extensions
         run: |
           echo "=========================================="
-          echo "Disabling extension downloads..."
+          echo "Patching gulpfile to skip marketplace extensions..."
           echo "=========================================="
 
-          # 创建空的内置扩展列表
-          mkdir -p .vscode
-          echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
+          # 查找并修改 gulpfile.extensions.ts
+          if [ -f "build/gulpfile.extensions.ts" ]; then
+            # 备份
+            cp build/gulpfile.extensions.ts build/gulpfile.extensions.ts.bak
 
-          # 创建空的 build/builtInExtensions.json
-          echo '[]' > build/builtInExtensions.json
+            # 注释掉 bundle-marketplace-extensions-build 任务
+            sed -i 's/gulp.task('\''bundle-marketplace-extensions-build'\'',/\/\/ &/' build/gulpfile.extensions.ts
+            sed -i 's/function bundleMarketplaceExtensions()/\/\/ &/' build/gulpfile.extensions.ts
+            sed -i 's/export function bundleMarketplaceExtensions()/\/\/ &/' build/gulpfile.extensions.ts
 
-          # 修改 product.json
-          if [ -f "product.json" ]; then
-            sed -i '/"extensionsGallery":/,/},/d' product.json
-            sed -i '/"extensionEnabledApiProposals":/,/}/d' product.json
+            echo "✅ build/gulpfile.extensions.ts patched"
           fi
 
-          echo "✅ Extension downloads disabled"
+          # 查找并修改 gulpfile.vscode.ts
+          if [ -f "build/gulpfile.vscode.ts" ]; then
+            cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
+
+            # 注释掉对 bundle-marketplace-extensions-build 的依赖
+            sed -i 's/"bundle-marketplace-extensions-build",/\/\/ &/' build/gulpfile.vscode.ts
+
+            echo "✅ build/gulpfile.vscode.ts patched"
+          fi
 
       # ============================================================
-      # 9. 设置环境变量
+      # 9. 创建空的扩展列表
+      # ============================================================
+      - name: 📝 Create empty extension list
+        run: |
+          echo "=========================================="
+          echo "Creating empty extension lists..."
+          echo "=========================================="
+
+          mkdir -p .vscode
+          echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
+          echo '[]' > build/builtInExtensions.json
+
+          echo "✅ Empty extension lists created"
+
+      # ============================================================
+      # 10. 设置环境变量
       # ============================================================
       - name: ⚙️ Set environment variables
         run: |
@@ -156,7 +179,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 10. 构建 VSCode Linux x64 (min 版本)
+      # 11. 构建 VSCode Linux x64
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -172,12 +195,12 @@ jobs:
 
           echo "Start time: $(date)"
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 11. 验证构建产物
+      # 12. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -200,7 +223,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 13. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -251,7 +274,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -277,7 +300,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 15. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -287,7 +310,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 15. 构建摘要
+      # 16. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
