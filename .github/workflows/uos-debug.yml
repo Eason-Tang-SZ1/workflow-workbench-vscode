@@ -113,30 +113,32 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 禁用扩展下载 - 直接重写源文件
+      # 8. 直接删除扩展下载任务
       # ============================================================
-      - name: 🔧 Disable extension downloads
+      - name: 🔧 Remove extension download tasks
         run: |
-          echo "Disabling extension downloads..."
+          echo "Removing extension download tasks..."
 
-          # 重写 build/lib/extensions.ts
-          echo 'export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ Extension downloads disabled");
-            return Promise.resolve();
-          }' > build/lib/extensions.ts
+          # 删除 bundle-marketplace-extensions-build 任务定义
+          if [ -f "build/gulpfile.extensions.ts" ]; then
+            # 用空实现替换
+            sed -i '/gulp.task.*bundle-marketplace-extensions-build/,/});/d' build/gulpfile.extensions.ts
+            echo "✅ Removed bundle-marketplace-extensions-build task"
+          fi
 
-          # 重写 build/lib/builtInExtensions.ts
-          echo 'export const builtInExtensions = [];
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions = [];
-          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
+          # 修改 gulpfile.vscode.ts 移除依赖
+          if [ -f "build/gulpfile.vscode.ts" ]; then
+            sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.ts
+            echo "✅ Removed dependency from gulpfile.vscode.ts"
+          fi
 
-          # 创建空扩展列表
-          mkdir -p .vscode
-          echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
-          echo '[]' > build/builtInExtensions.json
+          # 修改 gulpfile.vscode.js 如果存在
+          if [ -f "build/gulpfile.vscode.js" ]; then
+            sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.js
+            echo "✅ Removed dependency from gulpfile.vscode.js"
+          fi
 
-          echo "✅ Extension downloads disabled"
+          echo "✅ Extension download tasks removed"
 
       # ============================================================
       # 9. 设置环境变量
