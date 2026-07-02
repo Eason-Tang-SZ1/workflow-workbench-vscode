@@ -122,41 +122,50 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 【核心】修改 gulpfile 跳过有问题的任务
+      # 8. 【核心】禁用扩展下载 - 修改源文件
       # ============================================================
-      - name: 🔧 Patch gulpfile to skip marketplace extensions
+      - name: 🔧 Disable extension downloads in source
         run: |
           echo "=========================================="
-          echo "Patching gulpfile to skip marketplace extensions..."
+          echo "Disabling extension downloads in source..."
           echo "=========================================="
 
-          # 查找并修改 gulpfile.extensions.ts
-          if [ -f "build/gulpfile.extensions.ts" ]; then
-            # 备份
-            cp build/gulpfile.extensions.ts build/gulpfile.extensions.ts.bak
+          # 方法1: 修改 build/lib/extensions.ts
+          if [ -f "build/lib/extensions.ts" ]; then
+            # 替换 fetchUrls 函数为直接返回
+            cat > build/lib/extensions.ts.patch << 'EOF'
+          // PATCHED: Disable extension downloads
+          export async function fetchUrls(urls: string[], options: IRequestOptions): Promise<void> {
+            console.log('⚠️ Extension downloads disabled for UOS build');
+            return Promise.resolve();
+          }
+          EOF
 
-            # 注释掉 bundle-marketplace-extensions-build 任务
-            sed -i 's/gulp.task('\''bundle-marketplace-extensions-build'\'',/\/\/ &/' build/gulpfile.extensions.ts
-            sed -i 's/function bundleMarketplaceExtensions()/\/\/ &/' build/gulpfile.extensions.ts
-            sed -i 's/export function bundleMarketplaceExtensions()/\/\/ &/' build/gulpfile.extensions.ts
+            # 查找并替换函数定义
+            sed -i '/export async function fetchUrls/,/}/c\
+          export async function fetchUrls(urls: string[], options: IRequestOptions): Promise<void> {\
+            console.log('\''⚠️ Extension downloads disabled for UOS build'\'');\
+            return Promise.resolve();\
+          }' build/lib/extensions.ts
 
-            echo "✅ build/gulpfile.extensions.ts patched"
+            echo "✅ build/lib/extensions.ts patched"
           fi
 
-          # 查找并修改 gulpfile.vscode.ts
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
-
-            # 注释掉对 bundle-marketplace-extensions-build 的依赖
-            sed -i 's/"bundle-marketplace-extensions-build",/\/\/ &/' build/gulpfile.vscode.ts
-
-            echo "✅ build/gulpfile.vscode.ts patched"
+          # 方法2: 修改 build/lib/builtInExtensions.ts
+          if [ -f "build/lib/builtInExtensions.ts" ]; then
+            cat > build/lib/builtInExtensions.ts << 'EOF'
+            export const builtInExtensions: any[] = [];
+            export const shouldDownloadBuiltInExtensions = false;
+            export const webBuiltInExtensions: any[] = [];
+            export const shouldDownloadWebBuiltInExtensions = false;
+            EOF
+            echo "✅ build/lib/builtInExtensions.ts patched"
           fi
 
       # ============================================================
       # 9. 创建空的扩展列表
       # ============================================================
-      - name: 📝 Create empty extension list
+      - name: 📝 Create empty extension lists
         run: |
           echo "=========================================="
           echo "Creating empty extension lists..."
@@ -165,7 +174,6 @@ jobs:
           mkdir -p .vscode
           echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
           echo '[]' > build/builtInExtensions.json
-
           echo "✅ Empty extension lists created"
 
       # ============================================================
@@ -195,7 +203,7 @@ jobs:
 
           echo "Start time: $(date)"
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
