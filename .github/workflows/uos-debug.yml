@@ -113,91 +113,59 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 直接注释掉 gulpfile.extensions.ts 中所有扩展任务
+      # 8. 禁用扩展下载 - 修改 fetch.ts
       # ============================================================
-      - name: 🔧 Disable all extension tasks
+      - name: 🔧 Disable extension downloads
         run: |
           echo "=========================================="
-          echo "Disabling all extension tasks in gulpfile..."
+          echo "Disabling extension downloads..."
           echo "=========================================="
 
-          # 直接删除整个 gulpfile.extensions.ts 并替换为空实现
-          cat > build/gulpfile.extensions.ts << 'EOF'
-          import { Stream } from 'stream';
-          import * as gulp from 'gulp';
+          # 直接修改 fetch.ts 让所有下载失败时返回空
+          if [ -f "build/lib/fetch.ts" ]; then
+            cp build/lib/fetch.ts build/lib/fetch.ts.bak
 
-          // ============================================
-          // 所有扩展任务已被禁用（UOS 构建）
-          // ============================================
+            cat > build/lib/fetch.ts << 'EOF'
+            import { Stream } from 'stream';
 
-          // 创建一个空的完成信号流
-          function emptyStream(): Stream {
-            const s = new Stream.Readable();
-            s._read = function() { this.push(null); };
-            return s;
-          }
+            export async function fetchUrls(urls: string[], options: any): Promise<void> {
+              console.log('⚠️ Extension downloads disabled for UOS build');
+              return Promise.resolve();
+            }
 
-          // 定义空的扩展任务
-          export function compileExtensionsBuild(done: any) {
-            console.log('⚠️ Extension compilation skipped for UOS build');
-            done();
-          }
+            export function fetchUrl(url: string, options?: any): Promise<Buffer> {
+              console.log('⚠️ Extension download skipped:', url);
+              return Promise.resolve(Buffer.from(''));
+            }
 
-          export function bundleMarketplaceExtensionsBuild(done: any) {
-            console.log('⚠️ Marketplace extensions skipped for UOS build');
-            done();
-          }
+            export function fetchStream(url: string, options?: any): Stream {
+              console.log('⚠️ Extension stream skipped:', url);
+              const s = new Stream.Readable();
+              s._read = function() { this.push(null); };
+              return s;
+            }
+            EOF
 
-          export function bundleNonNativeLocalExtensionsBuild(done: any) {
-            console.log('⚠️ Non-native local extensions skipped for UOS build');
-            done();
-          }
+            echo "✅ fetch.ts patched"
+          fi
 
-          export function bundleLocalExtensionsBuild(done: any) {
-            console.log('⚠️ Local extensions skipped for UOS build');
-            done();
-          }
+      # ============================================================
+      # 9. 修改 builtInExtensions.ts
+      # ============================================================
+      - name: 🔧 Patch builtInExtensions.ts
+        run: |
+          echo "Patching build/lib/builtInExtensions.ts..."
 
-          export function bundleCopilotExtensionBuild(done: any) {
-            console.log('⚠️ Copilot extension skipped for UOS build');
-            done();
-          }
-
-          export function bundleCopilotChatExtensionBuild(done: any) {
-            console.log('⚠️ Copilot Chat extension skipped for UOS build');
-            done();
-          }
-
-          // 注册 gulp 任务（空实现）
-          gulp.task('compile-extensions-build', compileExtensionsBuild);
-          gulp.task('bundle-marketplace-extensions-build', bundleMarketplaceExtensionsBuild);
-          gulp.task('bundle-non-native-local-extensions-build', bundleNonNativeLocalExtensionsBuild);
-          gulp.task('bundle-local-extensions-build', bundleLocalExtensionsBuild);
-          gulp.task('bundle-copilot-extension-build', bundleCopilotExtensionBuild);
-          gulp.task('bundle-copilot-chat-extension-build', bundleCopilotChatExtensionBuild);
+          cat > build/lib/builtInExtensions.ts << 'EOF'
+          export const builtInExtensions: any[] = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;
+          export const getExtensionDownloadStream = function() { return []; };
+          export const getExtensionStream = function() { return []; };
           EOF
 
-          echo "✅ build/gulpfile.extensions.ts replaced"
-
-      # ============================================================
-      # 9. 修改 gulpfile.vscode.ts 移除扩展依赖
-      # ============================================================
-      - name: 🔧 Patch gulpfile.vscode.ts
-        run: |
-          echo "Patching build/gulpfile.vscode.ts..."
-
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
-
-            # 删除所有对扩展任务的依赖
-            sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.ts
-            sed -i '/"bundle-non-native-local-extensions-build",/d' build/gulpfile.vscode.ts
-            sed -i '/"bundle-local-extensions-build",/d' build/gulpfile.vscode.ts
-            sed -i '/"bundle-copilot-extension-build",/d' build/gulpfile.vscode.ts
-            sed -i '/"bundle-copilot-chat-extension-build",/d' build/gulpfile.vscode.ts
-
-            echo "✅ gulpfile.vscode.ts patched"
-          fi
+          echo "✅ builtInExtensions.ts patched"
 
       # ============================================================
       # 10. 设置环境变量
