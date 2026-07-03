@@ -113,83 +113,74 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 完整重写 extensions.ts
+      # 8. 直接注释掉 gulpfile.extensions.ts 中所有扩展任务
       # ============================================================
-      - name: 🔧 Replace extensions.ts
+      - name: 🔧 Disable all extension tasks
         run: |
-          echo "Replacing build/lib/extensions.ts..."
+          echo "=========================================="
+          echo "Disabling all extension tasks in gulpfile..."
+          echo "=========================================="
 
-          cat > build/lib/extensions.ts << 'EOF'
+          # 直接删除整个 gulpfile.extensions.ts 并替换为空实现
+          cat > build/gulpfile.extensions.ts << 'EOF'
           import { Stream } from 'stream';
+          import * as gulp from 'gulp';
 
-          // 禁用所有扩展下载
-          export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log('⚠️ Extension downloads disabled for UOS build');
-            return Promise.resolve();
-          }
+          // ============================================
+          // 所有扩展任务已被禁用（UOS 构建）
+          // ============================================
 
-          export function fromMarketplace(): any[] {
-            console.log('⚠️ Marketplace extensions disabled');
-            return [];
-          }
-
-          export function packageMarketplaceExtensionsStream(): Stream {
-            console.log('⚠️ Package marketplace extensions disabled');
+          // 创建一个空的完成信号流
+          function emptyStream(): Stream {
             const s = new Stream.Readable();
             s._read = function() { this.push(null); };
             return s;
           }
 
-          export function packageNonNativeLocalExtensionsStream(): Stream {
-            console.log('⚠️ Non-native local extensions disabled');
-            const s = new Stream.Readable();
-            s._read = function() { this.push(null); };
-            return s;
+          // 定义空的扩展任务
+          export function compileExtensionsBuild(done: any) {
+            console.log('⚠️ Extension compilation skipped for UOS build');
+            done();
           }
 
-          export function packageLocalExtensionsStream(): Stream {
-            console.log('⚠️ Local extensions disabled');
-            const s = new Stream.Readable();
-            s._read = function() { this.push(null); };
-            return s;
+          export function bundleMarketplaceExtensionsBuild(done: any) {
+            console.log('⚠️ Marketplace extensions skipped for UOS build');
+            done();
           }
 
-          export function packageExtensionsStream(): Stream {
-            console.log('⚠️ All extensions disabled');
-            const s = new Stream.Readable();
-            s._read = function() { this.push(null); };
-            return s;
+          export function bundleNonNativeLocalExtensionsBuild(done: any) {
+            console.log('⚠️ Non-native local extensions skipped for UOS build');
+            done();
           }
 
-          export const builtInExtensions = [];
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions = [];
-          export const shouldDownloadWebBuiltInExtensions = false;
-          export const getExtensionDownloadStream = function() { return []; };
-          export const getExtensionStream = function() { return []; };
+          export function bundleLocalExtensionsBuild(done: any) {
+            console.log('⚠️ Local extensions skipped for UOS build');
+            done();
+          }
+
+          export function bundleCopilotExtensionBuild(done: any) {
+            console.log('⚠️ Copilot extension skipped for UOS build');
+            done();
+          }
+
+          export function bundleCopilotChatExtensionBuild(done: any) {
+            console.log('⚠️ Copilot Chat extension skipped for UOS build');
+            done();
+          }
+
+          // 注册 gulp 任务（空实现）
+          gulp.task('compile-extensions-build', compileExtensionsBuild);
+          gulp.task('bundle-marketplace-extensions-build', bundleMarketplaceExtensionsBuild);
+          gulp.task('bundle-non-native-local-extensions-build', bundleNonNativeLocalExtensionsBuild);
+          gulp.task('bundle-local-extensions-build', bundleLocalExtensionsBuild);
+          gulp.task('bundle-copilot-extension-build', bundleCopilotExtensionBuild);
+          gulp.task('bundle-copilot-chat-extension-build', bundleCopilotChatExtensionBuild);
           EOF
 
-          echo "✅ build/lib/extensions.ts replaced"
+          echo "✅ build/gulpfile.extensions.ts replaced"
 
       # ============================================================
-      # 9. 修改 gulpfile.extensions.ts
-      # ============================================================
-      - name: 🔧 Patch gulpfile.extensions.ts
-        run: |
-          echo "Patching build/gulpfile.extensions.ts..."
-
-          if [ -f "build/gulpfile.extensions.ts" ]; then
-            cp build/gulpfile.extensions.ts build/gulpfile.extensions.ts.bak
-
-            # 注释掉所有 fetchUrls 调用
-            sed -i 's/await fetchUrls(/\/\/ await fetchUrls(/g' build/gulpfile.extensions.ts
-            sed -i 's/fetchUrls(/\/\/ fetchUrls(/g' build/gulpfile.extensions.ts
-
-            echo "✅ gulpfile.extensions.ts patched"
-          fi
-
-      # ============================================================
-      # 10. 修改 gulpfile.vscode.ts
+      # 9. 修改 gulpfile.vscode.ts 移除扩展依赖
       # ============================================================
       - name: 🔧 Patch gulpfile.vscode.ts
         run: |
@@ -198,14 +189,18 @@ jobs:
           if [ -f "build/gulpfile.vscode.ts" ]; then
             cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
 
-            # 移除对 bundle-marketplace-extensions-build 的依赖
+            # 删除所有对扩展任务的依赖
             sed -i '/"bundle-marketplace-extensions-build",/d' build/gulpfile.vscode.ts
+            sed -i '/"bundle-non-native-local-extensions-build",/d' build/gulpfile.vscode.ts
+            sed -i '/"bundle-local-extensions-build",/d' build/gulpfile.vscode.ts
+            sed -i '/"bundle-copilot-extension-build",/d' build/gulpfile.vscode.ts
+            sed -i '/"bundle-copilot-chat-extension-build",/d' build/gulpfile.vscode.ts
 
             echo "✅ gulpfile.vscode.ts patched"
           fi
 
       # ============================================================
-      # 11. 设置环境变量
+      # 10. 设置环境变量
       # ============================================================
       - name: ⚙️ Set environment variables
         run: |
@@ -215,7 +210,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 12. 构建 VSCode Linux x64
+      # 11. 构建 VSCode Linux x64
       # ============================================================
       - name: 🔨 Build VSCode Linux x64
         run: |
@@ -236,7 +231,7 @@ jobs:
           echo "✅ Build completed at: $(date)"
 
       # ============================================================
-      # 13. 验证构建产物
+      # 12. 验证构建产物
       # ============================================================
       - name: 🔍 Verify build output
         run: |
@@ -256,7 +251,7 @@ jobs:
           fi
 
       # ============================================================
-      # 14. 创建 UOS 启动脚本
+      # 13. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create UOS startup script
         run: |
@@ -304,7 +299,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 15. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -326,7 +321,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 16. 上传
+      # 15. 上传
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -336,7 +331,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 17. 构建摘要
+      # 16. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
