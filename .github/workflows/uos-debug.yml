@@ -221,17 +221,22 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 11. 修改 gulpfile.vscode.ts 使用 tsx 运行 esbuild
+      # 11. 添加 tsx 到 PATH 并创建软链接
       # ============================================================
-      - name: 🔧 Patch gulpfile.vscode.ts
+      - name: 🔧 Setup tsx
         run: |
-          echo "Patching build/gulpfile.vscode.ts..."
+          which tsx
+          tsx --version
 
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            # 修改 esbuild 命令使用 tsx
-            sed -i 's/node build\/next\/index.ts/tsx build\/next\/index.ts/g' build/gulpfile.vscode.ts
-            echo "✅ gulpfile.vscode.ts patched"
-          fi
+          # 创建软链接让 node 命令指向 tsx
+          mkdir -p ~/bin
+          echo '#!/bin/bash
+          exec /opt/hostedtoolcache/node/20.20.2/x64/bin/tsx "$@"' > ~/bin/node
+          chmod +x ~/bin/node
+          export PATH="$HOME/bin:$PATH"
+
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "✅ tsx setup complete"
 
       # ============================================================
       # 12. 设置环境变量
@@ -242,6 +247,7 @@ jobs:
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "NODE_OPTIONS=--max-old-space-size=8192" >> $GITHUB_ENV
 
       # ============================================================
       # 13. 构建 VSCode Linux x64
@@ -258,9 +264,13 @@ jobs:
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
+          # 确保使用 tsx 来执行 node 命令
+          export PATH="$HOME/bin:$PATH"
+
           echo "Start time: $(date)"
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          # 使用 tsx 执行 gulp
+          tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "✅ Build completed at: $(date)"
 
