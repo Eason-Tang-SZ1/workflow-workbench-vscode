@@ -109,25 +109,35 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 完全重写 extensions.ts
+      # 8. 完全重写 extensions.ts（添加所有函数）
       # ============================================================
       - name: 🔧 Replace extensions.ts
         run: |
           echo "Completely replacing build/lib/extensions.ts..."
 
           echo 'import { Stream } from "stream";
+          import * as gulp from "gulp";
 
           // 空扩展列表
           const emptyExtensions: any[] = [];
 
-          // 所有扩展函数返回空流
+          // 空流
           function emptyStream(): Stream {
             const s = new Stream.Readable();
             s._read = function() { this.push(null); };
             return s;
           }
 
-          // 导出所有需要的函数
+          // 空任务
+          function emptyTask(done: any): void {
+            console.log("⚠️ Extension task disabled");
+            done();
+          }
+
+          // ============================================
+          // 所有导出函数
+          // ============================================
+
           export function getExtensionStream(): Stream {
             console.log("⚠️ getExtensionStream: returning empty stream");
             return emptyStream();
@@ -181,6 +191,22 @@ jobs:
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
             console.log("⚠️ fetchUrls: disabled");
             return Promise.resolve();
+          }
+
+          // 新增：buildExtensionMedia
+          export function buildExtensionMedia(): void {
+            console.log("⚠️ buildExtensionMedia: disabled");
+          }
+
+          // 新增：compileExtensionMedia
+          export function compileExtensionMedia(): void {
+            console.log("⚠️ compileExtensionMedia: disabled");
+          }
+
+          // 新增：buildExtensionMediaTask
+          export function buildExtensionMediaTask(done: any): void {
+            console.log("⚠️ buildExtensionMediaTask: disabled");
+            done();
           }
 
           export const builtInExtensions = emptyExtensions;
