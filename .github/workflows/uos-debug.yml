@@ -113,16 +113,12 @@ jobs:
           echo "✅ tsx installed"
 
       # ============================================================
-      # 8. 修改 extensions.ts 禁用下载
+      # 8. 完整重写 extensions.ts
       # ============================================================
-      - name: 🔧 Patch extensions.ts
+      - name: 🔧 Replace extensions.ts
         run: |
-          echo "Patching build/lib/extensions.ts..."
+          echo "Replacing build/lib/extensions.ts..."
 
-          # 备份原文件
-          cp build/lib/extensions.ts build/lib/extensions.ts.bak
-
-          # 使用 cat 覆盖文件内容
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from 'stream';
 
@@ -144,14 +140,36 @@ jobs:
             return s;
           }
 
-          // 保留其他导出
+          export function packageNonNativeLocalExtensionsStream(): Stream {
+            console.log('⚠️ Non-native local extensions disabled');
+            const s = new Stream.Readable();
+            s._read = function() { this.push(null); };
+            return s;
+          }
+
+          export function packageLocalExtensionsStream(): Stream {
+            console.log('⚠️ Local extensions disabled');
+            const s = new Stream.Readable();
+            s._read = function() { this.push(null); };
+            return s;
+          }
+
+          export function packageExtensionsStream(): Stream {
+            console.log('⚠️ All extensions disabled');
+            const s = new Stream.Readable();
+            s._read = function() { this.push(null); };
+            return s;
+          }
+
           export const builtInExtensions = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions = [];
           export const shouldDownloadWebBuiltInExtensions = false;
+          export const getExtensionDownloadStream = function() { return []; };
+          export const getExtensionStream = function() { return []; };
           EOF
 
-          echo "✅ extensions.ts patched"
+          echo "✅ build/lib/extensions.ts replaced"
 
       # ============================================================
       # 9. 修改 gulpfile.extensions.ts
@@ -163,7 +181,7 @@ jobs:
           if [ -f "build/gulpfile.extensions.ts" ]; then
             cp build/gulpfile.extensions.ts build/gulpfile.extensions.ts.bak
 
-            # 使用 sed 修改文件，移除对 fetchUrls 的调用
+            # 注释掉所有 fetchUrls 调用
             sed -i 's/await fetchUrls(/\/\/ await fetchUrls(/g' build/gulpfile.extensions.ts
             sed -i 's/fetchUrls(/\/\/ fetchUrls(/g' build/gulpfile.extensions.ts
 
