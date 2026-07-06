@@ -72,10 +72,11 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 添加 isWebExtension 导出
+      # 7. 修复所有问题
       # ============================================================
-      - name: 🔧 Prepare build environment
+      - name: 🔧 Fix everything
         run: |
+          # 修复 extensions.ts
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -118,42 +119,21 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          echo "✅ Build environment prepared"
+          # 查找并显示 gulpfile.vscode.ts 中包含 build/next/index.ts 的行
+          echo "Found lines with build/next/index.ts:"
+          grep -n "build/next/index.ts" build/gulpfile.vscode.ts || echo "Not found"
+
+          # 直接使用更精确的替换
+          # 替换 spawn("node", ["build/next/index.ts"] 为 spawn("tsx", ["build/next/index.ts"]
+          sed -i 's/spawn("node", \["build\/next\/index\.ts"\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
+
+          # 也替换 spawn(process.execPath, [..., "build/next/index.ts", ...]
+          sed -i 's/spawn(process\.execPath, \[[^]]*"build\/next\/index\.ts"[^]]*\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
+
+          echo "✅ Everything fixed"
 
       # ============================================================
-      # 8. 【核心】修改 gulpfile.vscode.ts 中的 spawn 调用
-      # ============================================================
-      - name: 🔧 Fix esbuild spawn
-        run: |
-          echo "Fixing spawn call in gulpfile.vscode.ts..."
-
-          # 使用 Python 精确替换 spawn 调用
-          python3 << 'PYTHON_SCRIPT'
-          import re
-
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
-
-          # 替换 spawn(process.execPath, [...]) 为 spawn('tsx', [...])
-          # 匹配模式: spawn(process.execPath, [..., 'build/next/index.ts', ...], { ... })
-          pattern = r'spawn\(process\.execPath,\s*\[([^\]]*"build/next/index\.ts"[^\]]*)\]'
-          replacement = r'spawn("tsx", [\1]'
-          new_content = re.sub(pattern, replacement, content)
-
-          # 也替换 spawn("node", ["build/next/index.ts"])
-          new_content = new_content.replace(
-              'spawn("node", ["build/next/index.ts"]',
-              'spawn("tsx", ["build/next/index.ts"]'
-          )
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(new_content)
-
-          print("✅ spawn call fixed")
-          PYTHON_SCRIPT
-
-      # ============================================================
-      # 9. 设置环境变量
+      # 8. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -163,7 +143,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 10. 构建
+      # 9. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -180,7 +160,7 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 11. 验证
+      # 10. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -197,7 +177,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 11. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -229,7 +209,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 12. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -241,7 +221,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 13. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
