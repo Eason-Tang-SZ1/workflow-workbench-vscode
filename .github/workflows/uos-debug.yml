@@ -119,45 +119,51 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 禁用 prepare-prebuilt-extensions（空实现）
+      # 8. 【核心】将 build/next 下的所有 .ts 转换为 .mjs
       # ============================================================
-      - name: 🔧 Disable prepare-prebuilt-extensions
+      - name: 🔧 Convert build/next/*.ts to .mjs
         run: |
-          echo "Disabling prepare-prebuilt-extensions..."
+          echo "Converting build/next/*.ts to .mjs..."
 
-          # 使用 Python 脚本进行精确替换
-          python3 << 'PYTHON_END'
-          import re
+          # 遍历所有 .ts 文件
+          find build/next -name "*.ts" -type f | while read -r file; do
+            dir=$(dirname "$file")
+            base=$(basename "$file" .ts)
+            echo "Processing: $file -> $dir/$base.mjs"
 
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
+            # 重命名
+            mv "$file" "$dir/$base.mjs"
 
-          # 替换 preparePrebuiltExtensionsTask 函数为空实现
-          pattern = r'(async function preparePrebuiltExtensionsTask\([^)]*\)\s*\{)[^}]*(\})'
-          replacement = r'\1\n  console.log("⚠️ preparePrebuiltExtensionsTask disabled");\n  return Promise.resolve();\n\2'
-          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+            # 替换导入语句中的 .ts 为 .mjs
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" "$dir/$base.mjs"
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' "$dir/$base.mjs"
 
-          # 替换 preparePrebuiltExtensions 函数为空实现
-          pattern = r'(function preparePrebuiltExtensions\([^)]*\)\s*\{)[^}]*(\})'
-          replacement = r'\1\n  console.log("⚠️ preparePrebuiltExtensions disabled");\n  return [];\n\2'
-          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+            # 移除 type 关键字
+            sed -i 's/import type /import /g' "$dir/$base.mjs"
+            sed -i 's/, type /, /g' "$dir/$base.mjs"
+            sed -i 's/export type /export /g' "$dir/$base.mjs"
 
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(content)
+            # 移除 as 类型断言（简单处理）
+            sed -i 's/ as [a-zA-Z0-9_]*//g' "$dir/$base.mjs"
+          done
 
-          print("✅ preparePrebuiltExtensions disabled")
-          PYTHON_END
+          # 更新 gulpfile 中的引用
+          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
+          sed -i 's|build/next/index\.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
+
+          echo "✅ build/next/*.ts converted to .mjs"
 
       # ============================================================
-      # 9. 查找并替换 gulpfile.vscode.ts 中的 spawn
+      # 9. 【核心】将 gulpfile.vscode.ts 中的 spawn 改为 tsx
       # ============================================================
       - name: 🔧 Fix gulpfile.vscode.ts spawn
         run: |
           echo "Fixing gulpfile.vscode.ts spawn..."
 
-          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+          # 直接替换所有包含 build/next 的行中的 node 为 tsx
+          sed -i '/build\/next/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i '/build\/next/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
 
           echo "✅ gulpfile.vscode.ts fixed"
 
