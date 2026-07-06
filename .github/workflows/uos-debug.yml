@@ -87,32 +87,26 @@ jobs:
           }' > build/lib/fetch.ts
 
           # ============================================================
-          # 【核心修复】直接查看并替换 gulpfile 中的 spawn 调用
+          # 【关键】查看并替换 gulpfile.vscode.ts 中的 esbuild 任务
           # ============================================================
-          echo "=== DEBUG: Finding spawn calls in gulpfile.vscode.ts ==="
+          echo "=== Finding esbuild-bundle task in gulpfile.vscode.ts ==="
 
-          # 显示包含 spawn 的行
-          grep -n "spawn" build/gulpfile.vscode.ts | head -20
+          # 查找 esbuild-bundle 任务
+          grep -n "esbuild-bundle" build/gulpfile.vscode.ts | head -10
 
-          # 显示包含 build/next/index 的行
+          # 查找包含 build/next/index 的行
           echo "=== Lines with build/next/index ==="
           grep -n "build/next/index" build/gulpfile.vscode.ts
 
-          # 使用 sed 直接替换 - 将所有 "spawn(process.execPath" 替换为 "spawn('tsx'"
-          # 注意：gulpfile 中可能使用不同的引号格式
-          echo "=== Replacing spawn calls ==="
+          # 直接替换：将所有 "node" 替换为 "tsx"，但只针对包含 "build/next" 的行
+          echo "=== Replacing node with tsx in build/next lines ==="
+          sed -i '/build\/next/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+          sed -i '/build\/next/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
 
-          # 替换所有包含 build/next/index 的行中的 process.execPath
-          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i '/build\/next\/index/ s/process\.execPath/'\''tsx'\''/g' build/gulpfile.vscode.ts
-
-          # 替换 "node" 为 "tsx"（仅限包含 build/next/index 的行）
-          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
-
-          # 验证替换结果
+          # 验证替换
           echo "=== After replacement ==="
-          grep -n "build/next/index" build/gulpfile.vscode.ts
+          grep -n "build/next" build/gulpfile.vscode.ts
 
           # 安装依赖
           echo "Installing dependencies..."
