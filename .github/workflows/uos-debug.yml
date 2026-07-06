@@ -119,16 +119,23 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 直接用 sed 替换 gulpfile.vscode.ts 中的 node
+      # 8. 查找并替换 gulpfile.vscode.ts 中的 spawn
       # ============================================================
-      - name: 🔧 Fix gulpfile.vscode.ts
+      - name: 🔧 Fix gulpfile.vscode.ts spawn
         run: |
-          echo "Fixing gulpfile.vscode.ts..."
+          echo "Fixing gulpfile.vscode.ts spawn..."
 
-          # 直接替换所有 "node" 为 "tsx"，但仅限于包含 "build/next" 的行
-          sed -i '/build\/next/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i "/build\/next/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
-          sed -i '/build\/next/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
+          # 查找包含 build/next/index 的行
+          echo "Finding lines with build/next/index:"
+          grep -n "build/next/index" build/gulpfile.vscode.ts || echo "No match found"
+
+          # 直接使用 sed 替换，针对包含 build/next/index 的行
+          # 将 process.execPath 替换为 "tsx"
+          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
+
+          # 将 "node" 替换为 "tsx"（仅针对包含 build/next/index 的行）
+          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
 
           echo "✅ gulpfile.vscode.ts fixed"
 
