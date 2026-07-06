@@ -72,16 +72,19 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】修改 gulpfile.vscode.ts 中的 esbuild 命令
+      # 7. 【核心】修改 build/next/index.ts 添加 shebang
       # ============================================================
-      - name: 🔧 Patch gulpfile.vscode.ts
+      - name: 🔧 Patch build/next/index.ts
         run: |
-          echo "Patching build/gulpfile.vscode.ts..."
+          echo "Patching build/next/index.ts..."
 
-          # 将 node build/next/index.ts 替换为 tsx build/next/index.ts
-          sed -i 's|node build/next/index.ts|tsx build/next/index.ts|g' build/gulpfile.vscode.ts
+          # 在文件开头添加 shebang
+          echo '#!/usr/bin/env tsx' > build/next/index.ts.tmp
+          cat build/next/index.ts >> build/next/index.ts.tmp
+          mv build/next/index.ts.tmp build/next/index.ts
+          chmod +x build/next/index.ts
 
-          echo "✅ gulpfile.vscode.ts patched"
+          echo "✅ build/next/index.ts patched with shebang"
 
       # ============================================================
       # 8. 禁用所有内置扩展
@@ -138,13 +141,18 @@ jobs:
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
-          echo "NODE_OPTIONS=--max-old-space-size=8192" >> $GITHUB_ENV
 
       # ============================================================
       # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
+          export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+
           echo "Start: $(date)"
           tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
           echo "Done: $(date)"
