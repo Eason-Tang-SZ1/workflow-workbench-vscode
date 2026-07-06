@@ -72,26 +72,45 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 修复 build/next/index.ts 使其可被 Node.js 执行
+      # 7. 【核心】将所有 build/next 中的 .ts 转换为 .mjs
       # ============================================================
-      - name: 🔧 Fix build/next/index.ts for Node.js
+      - name: 🔧 Convert all build/next .ts files to .mjs
         run: |
-          echo "Fixing build/next/index.ts for Node.js execution..."
+          echo "Converting all build/next .ts files to .mjs..."
 
-          # 1. 将文件扩展名改为 .mjs
-          mv build/next/index.ts build/next/index.mjs
+          # 查找所有 .ts 文件并逐个处理
+          find build/next -name "*.ts" -type f | while read -r file; do
+            echo "Processing: $file"
 
-          # 2. 修改导入语句，为本地 .ts 文件添加 .mjs 扩展名
-          sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" build/next/index.mjs
-          sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' build/next/index.mjs
+            # 获取文件名和目录
+            dir=$(dirname "$file")
+            base=$(basename "$file" .ts)
 
-          # 3. 更新 gulpfile.vscode.ts 中的引用
+            # 重命名为 .mjs
+            mv "$file" "$dir/$base.mjs"
+
+            # 修改 .mjs 文件中的导入语句
+            # 将 from './xxx.ts' 替换为 from './xxx.mjs'
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" "$dir/$base.mjs"
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' "$dir/$base.mjs"
+
+            # 移除 TypeScript 特有的 type 导入 (import type)
+            # 将 "import type { ... }" 替换为 "import { ... }"
+            sed -i 's/import type /import /g' "$dir/$base.mjs"
+            # 移除 type 关键字在导入语句中
+            sed -i 's/, type /, /g' "$dir/$base.mjs"
+
+            # 将 export type 替换为 export
+            sed -i 's/export type /export /g' "$dir/$base.mjs"
+          done
+
+          # 修改 gulpfile.vscode.ts 中的引用
           sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
 
-          echo "✅ build/next/index.ts has been converted to index.mjs"
+          echo "✅ All build/next files converted to .mjs"
 
       # ============================================================
-      # 8. 修复 extensions.ts（添加 isWebExtension 等导出）
+      # 8. 修复 extensions.ts
       # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
