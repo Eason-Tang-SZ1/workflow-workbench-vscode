@@ -72,11 +72,10 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 添加 isWebExtension 导出并确保 tsx 可用
+      # 7. 添加 isWebExtension 导出
       # ============================================================
       - name: 🔧 Prepare build environment
         run: |
-          # 添加 isWebExtension 导出
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -132,21 +131,20 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 9. 【核心】使用 NODE_OPTIONS 加载 tsx
+      # 9. 【核心】使用 tsx 执行 gulp
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
-          export NODE_OPTIONS="--import=tsx --max-old-space-size=8192"
+          export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start: $(date)"
-          echo "Using NODE_OPTIONS: $NODE_OPTIONS"
 
-          # 使用 node 执行 gulp，通过 NODE_OPTIONS 加载 tsx
-          node node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          # 使用 tsx 执行 gulp
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
 
