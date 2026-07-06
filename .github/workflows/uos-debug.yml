@@ -65,7 +65,7 @@ jobs:
       # ============================================================
       - name: 📦 Install build tools
         run: |
-          npm install -g tsx
+          npm install -g tsx typescript
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
@@ -117,42 +117,53 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】将 build/next 下的所有 .ts 转换为纯 JavaScript
+      # 8. 使用 tsc 编译 build/next 目录
       # ============================================================
-      - name: 🔧 Convert build/next to JavaScript
+      - name: 🔧 Compile build/next with tsc
         run: |
-          echo "Converting build/next/*.ts to JavaScript..."
+          echo "Compiling build/next/*.ts with tsc..."
 
-          # 遍历所有 .ts 文件
-          find build/next -name "*.ts" -type f | while read -r file; do
-            dir=$(dirname "$file")
-            base=$(basename "$file" .ts)
-            echo "Processing: $file"
+          cd build/next
 
-            # 1. 移除 type 关键字
-            sed -i 's/import type /import /g' "$file"
-            sed -i 's/export type /export /g' "$file"
-            sed -i 's/, type /, /g' "$file"
-            sed -i 's/, type, /, /g' "$file"
+          # 创建 tsconfig.json
+          cat > tsconfig.json << 'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ESNext",
+              "moduleResolution": "node",
+              "esModuleInterop": true,
+              "allowSyntheticDefaultImports": true,
+              "strict": false,
+              "skipLibCheck": true,
+              "outDir": ".",
+              "rootDir": ".",
+              "allowJs": true,
+              "declaration": false
+            },
+            "include": ["**/*.ts"],
+            "exclude": ["**/*.d.ts", "node_modules"]
+          }
+          EOF
 
-            # 2. 移除 as 类型断言
-            sed -i 's/ as [A-Za-z0-9_]*//g' "$file"
+          # 使用 tsc 编译
+          npx tsc --noEmit false || true
 
-            # 3. 将 .ts 导入改为 .js
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$file"
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$file"
-
-            # 4. 将 .ts 导入改为 .js (带路径)
-            sed -i "s/from '\..*\.ts'/from '.\/\1.js'/g" "$file"
-
-            # 5. 重命名为 .js
-            mv "$file" "$dir/$base.js"
+          # 删除 .ts 文件，保留 .js
+          find . -name "*.ts" -type f ! -name "*.d.ts" | while read -r file; do
+            js_file="${file%.ts}.js"
+            if [ -f "$js_file" ]; then
+              echo "✅ Compiled: $(basename "$file")"
+              rm "$file"
+            fi
           done
+
+          cd ../..
 
           # 更新 gulpfile 中的引用
           sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
 
-          echo "✅ build/next converted to JavaScript"
+          echo "✅ build/next compiled to JavaScript"
 
       # ============================================================
       # 9. 设置环境变量
