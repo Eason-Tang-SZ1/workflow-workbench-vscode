@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS
+name: Build Custom VSCode for UOS (Minimal)
 
 on:
   workflow_dispatch:
@@ -15,16 +15,16 @@ jobs:
 
     steps:
       # ============================================================
-      # 1. 检出您的仓库源码
+      # 1. 检出源码
       # ============================================================
-      - name: 📥 Checkout your repository
+      - name: 📥 Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
       # ============================================================
-      # 2. 安装 Node.js 环境
+      # 2. 安装 Node.js
       # ============================================================
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
@@ -32,216 +32,98 @@ jobs:
           node-version: '20.x'
 
       # ============================================================
-      # 3. 安装系统级编译依赖
+      # 3. 安装系统依赖
       # ============================================================
       - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            libgtk-3-dev \
-            libxkbfile-dev \
-            libkrb5-dev \
-            libgbm-dev \
-            rpm \
-            libx11-dev \
-            libxss-dev \
-            libxtst-dev \
-            libnss3-dev \
-            libasound2-dev \
-            libglib2.0-dev \
-            libcairo2-dev \
-            libpango1.0-dev \
-            libatk1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            python3 \
-            git \
-            wget \
-            curl
+            build-essential pkg-config libgtk-3-dev libxkbfile-dev \
+            libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
+            libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
+            libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
+            python3 git wget curl
 
       # ============================================================
-      # 4. 修复 preinstall.ts 和 postinstall.ts
+      # 4. 修复 preinstall.ts / postinstall.ts
       # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
-          echo "Fixing TypeScript scripts..."
-          echo 'console.log("✅ Preinstall script (JS version) executed successfully.");' > build/npm/preinstall.js
+          echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-
-          echo 'console.log("✅ Postinstall script (JS version) executed successfully.");' > build/npm/postinstall.js
+          echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
-          echo "✅ TypeScript scripts fixed"
 
       # ============================================================
-      # 5. 安装项目依赖
+      # 5. 安装依赖
       # ============================================================
       - name: 📦 Install dependencies
-        run: |
-          echo "Installing npm dependencies..."
-          npm install --legacy-peer-deps
+        run: npm install --legacy-peer-deps
 
       # ============================================================
-      # 6. 安装缺失的构建依赖
+      # 6. 安装缺失构建工具
       # ============================================================
-      - name: 📦 Install missing build dependencies
-        run: |
-          echo "Installing missing build dependencies..."
-          npm install --legacy-peer-deps \
-            ternary-stream \
-            vscode-gulp-watch \
-            esbuild \
-            jsonc-parser \
-            gulp-merge-json \
-            gulp-tsb \
-            gulp-sourcemaps \
-            gulp-filter \
-            gulp-rename \
-            gulp-sort 2>/dev/null || true
-          echo "✅ Missing dependencies installed"
-
-      # ============================================================
-      # 7. 安装 tsx
-      # ============================================================
-      - name: 📦 Install tsx
+      - name: 📦 Install build tools
         run: |
           npm install -g tsx
-          echo "✅ tsx installed"
+          npm install --legacy-peer-deps \
+            ternary-stream vscode-gulp-watch esbuild jsonc-parser \
+            gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
+            gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 8. 完全重写 extensions.ts
+      # 7. 【核心】禁用所有内置扩展，只保留预构建扩展
       # ============================================================
-      - name: 🔧 Replace extensions.ts
+      - name: 🔧 Disable built-in extensions
         run: |
-          echo 'import { Stream } from "stream";
-
-          const emptyExtensions: any[] = [];
-
+          # 重写 extensions.ts - 所有扩展函数返回空
+          cat > build/lib/extensions.ts << 'EOF'
+          import { Stream } from "stream";
+          const empty: any[] = [];
           function emptyStream(): Stream {
             const s = new Stream.Readable();
-            s._read = function() { this.push(null); };
+            s._read = () => s.push(null);
             return s;
           }
-
-          export function getExtensionStream(): Stream {
-            console.log("⚠️ getExtensionStream: disabled");
-            return emptyStream();
-          }
-
-          export function getExtensionDownloadStream(): Stream {
-            console.log("⚠️ getExtensionDownloadStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageMarketplaceExtensionsStream(): Stream {
-            console.log("⚠️ packageMarketplaceExtensionsStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageNonNativeLocalExtensionsStream(): Stream {
-            console.log("⚠️ packageNonNativeLocalExtensionsStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageLocalExtensionsStream(): Stream {
-            console.log("⚠️ packageLocalExtensionsStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageExtensionsStream(): Stream {
-            console.log("⚠️ packageExtensionsStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageCopilotExtensionStream(): Stream {
-            console.log("⚠️ packageCopilotExtensionStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageCopilotChatExtensionStream(): Stream {
-            console.log("⚠️ packageCopilotChatExtensionStream: disabled");
-            return emptyStream();
-          }
-
-          export function packageCopilotAgentsExtensionStream(): Stream {
-            console.log("⚠️ packageCopilotAgentsExtensionStream: disabled");
-            return emptyStream();
-          }
-
-          export function fromMarketplace(): any[] {
-            console.log("⚠️ fromMarketplace: returning empty array");
-            return emptyExtensions;
-          }
-
-          export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
-            return Promise.resolve();
-          }
-
-          export function buildExtensionMedia(): void {
-            console.log("⚠️ buildExtensionMedia: disabled");
-          }
-
-          export function compileExtensionMedia(): void {
-            console.log("⚠️ compileExtensionMedia: disabled");
-          }
-
-          export function buildExtensionMediaTask(done: any): void {
-            console.log("⚠️ buildExtensionMediaTask: disabled");
-            done();
-          }
-
-          export const builtInExtensions = emptyExtensions;
+          export function getExtensionStream(): Stream { return emptyStream(); }
+          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageExtensionsStream(): Stream { return emptyStream(); }
+          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+          export function fromMarketplace(): any[] { return empty; }
+          export async function fetchUrls(urls: string[], options: any): Promise<void> { return Promise.resolve(); }
+          export function buildExtensionMedia(): void {}
+          export function compileExtensionMedia(): void {}
+          export function buildExtensionMediaTask(done: any): void { done(); }
+          export const builtInExtensions = empty;
           export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions = emptyExtensions;
-          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/extensions.ts
+          export const webBuiltInExtensions = empty;
+          export const shouldDownloadWebBuiltInExtensions = false;
+          EOF
 
-          echo "✅ extensions.ts replaced"
-
-      # ============================================================
-      # 9. 简化 builtInExtensions.ts
-      # ============================================================
-      - name: 🔧 Simplify builtInExtensions.ts
-        run: |
+          # 清空 builtInExtensions.ts
           echo 'export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
 
-      # ============================================================
-      # 10. 简化 fetch.ts
-      # ============================================================
-      - name: 🔧 Simplify fetch.ts
-        run: |
+          # 清空 fetch.ts
           echo 'import { Stream } from "stream";
-
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
+            console.log("⚠️ fetch disabled");
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-      # ============================================================
-      # 11. 添加 tsx 到 PATH 并创建软链接
-      # ============================================================
-      - name: 🔧 Setup tsx
-        run: |
-          which tsx
-          tsx --version
-
-          # 创建软链接让 node 命令指向 tsx
-          mkdir -p ~/bin
-          echo '#!/bin/bash
-          exec /opt/hostedtoolcache/node/20.20.2/x64/bin/tsx "$@"' > ~/bin/node
-          chmod +x ~/bin/node
-          export PATH="$HOME/bin:$PATH"
-
-          echo "PATH=$PATH" >> $GITHUB_ENV
-          echo "✅ tsx setup complete"
+          echo "✅ 所有内置扩展已禁用"
 
       # ============================================================
-      # 12. 设置环境变量
+      # 8. 设置环境变量（跳过所有扩展下载）
       # ============================================================
-      - name: ⚙️ Set environment variables
+      - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
@@ -250,62 +132,36 @@ jobs:
           echo "NODE_OPTIONS=--max-old-space-size=8192" >> $GITHUB_ENV
 
       # ============================================================
-      # 13. 构建 VSCode Linux x64
+      # 9. 构建（使用 tsx 执行 gulp）
       # ============================================================
-      - name: 🔨 Build VSCode Linux x64
+      - name: 🔨 Build VSCode
         run: |
-          echo "=========================================="
-          echo "Building VSCode Linux x64..."
-          echo "⏰ This may take 20-30 minutes..."
-          echo "=========================================="
-          export NODE_OPTIONS="--max-old-space-size=8192"
-          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
-          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
-          export VSCODE_SKIP_PRELAUNCH=1
-          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-
-          # 确保使用 tsx 来执行 node 命令
-          export PATH="$HOME/bin:$PATH"
-
-          echo "Start time: $(date)"
-
-          # 使用 tsx 执行 gulp
+          echo "Start: $(date)"
           tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
-
-          echo "✅ Build completed at: $(date)"
+          echo "Done: $(date)"
 
       # ============================================================
-      # 14. 验证构建产物
+      # 10. 验证
       # ============================================================
-      - name: 🔍 Verify build output
+      - name: 🔍 Verify
         run: |
-          echo "Verifying build output..."
           if [ -d "./VSCode-linux-x64" ]; then
-            echo "✅ Build found in ./VSCode-linux-x64"
-            ls -la ./VSCode-linux-x64/ | head -20
+            echo "✅ Build found"
             echo "BUILD_DIR=./VSCode-linux-x64" >> $GITHUB_ENV
-          elif [ -d "./vscode/VSCode-linux-x64" ]; then
-            echo "✅ Build found in ./vscode/VSCode-linux-x64"
-            ls -la ./vscode/VSCode-linux-x64/ | head -20
-            echo "BUILD_DIR=./vscode/VSCode-linux-x64" >> $GITHUB_ENV
           else
             echo "❌ Build not found!"
-            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
 
       # ============================================================
-      # 15. 创建 UOS 启动脚本
+      # 11. 创建 UOS 启动脚本
       # ============================================================
-      - name: 🚀 Create UOS startup script
+      - name: 🚀 Create startup script
         run: |
-          echo "Creating UOS startup script..."
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
-
-          echo '#!/bin/bash
+          cat > start-vscode.sh << 'EOF'
+          #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -313,76 +169,37 @@ jobs:
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
           export DISPLAY=:0
-
           if [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
           elif [ -f "$SCRIPT_DIR/code" ]; then
               EXEC="$SCRIPT_DIR/code"
           else
-              echo "❌ VSCode executable not found!"
+              echo "❌ Executable not found!"
               exit 1
           fi
-
-          echo "=== Custom VSCode UOS Launcher ==="
+          echo "=== Custom VSCode UOS ==="
           echo "Version: $($EXEC --version | head -1)"
-
-          if grep -q "UOS" /etc/os-release 2>/dev/null; then
-              echo "✅ Detected UOS system"
-          fi
-
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              "$@"' > start-vscode.sh
-
+          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
+          EOF
           chmod +x start-vscode.sh
-          echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 16. 打包
+      # 12. 打包
       # ============================================================
-      - name: 📦 Package artifacts
+      - name: 📦 Package
         run: |
-          echo "Packaging artifacts..."
           mkdir -p artifacts
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          if [ ! -d "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
-            exit 1
-          fi
-
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
           tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
-            --preserve-permissions \
-            "$BUILD_DIR"
-
-          echo "✅ Package created:"
+            --preserve-permissions "$BUILD_DIR"
           ls -lh artifacts/
 
       # ============================================================
-      # 17. 上传
+      # 13. 上传
       # ============================================================
-      - name: 📤 Upload artifacts
+      - name: 📤 Upload
         uses: actions/upload-artifact@v7
         with:
           name: custom-vscode-uos
           path: artifacts/custom-vscode-uos-*.tar.gz
           retention-days: 30
-
-      # ============================================================
-      # 18. 构建摘要
-      # ============================================================
-      - name: 📊 Build summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "📊 BUILD SUMMARY"
-          echo "=========================================="
-          echo "🟢 Status: ${{ job.status }}"
-          echo "📦 Branch: ${{ github.event.inputs.branch }}"
-          echo "📁 Artifacts:"
-          ls -lh artifacts/ 2>/dev/null || echo "  (No artifacts)"
-          echo "=========================================="
