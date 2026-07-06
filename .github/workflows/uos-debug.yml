@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Minimal)
+name: Build Custom VSCode for UOS (Docker)
 
 on:
   workflow_dispatch:
@@ -24,178 +24,135 @@ jobs:
           fetch-depth: 1
 
       # ============================================================
-      # 2. 安装 Node.js
+      # 2. 创建 Dockerfile
       # ============================================================
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20.x'
-
-      # ============================================================
-      # 3. 安装系统依赖
-      # ============================================================
-      - name: 🔧 Install system dependencies
+      - name: 🐳 Create Dockerfile
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libgtk-3-dev libxkbfile-dev \
-            libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
-            libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
-            libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl
+          cat > Dockerfile << 'EOF'
+          FROM node:20-bullseye
 
-      # ============================================================
-      # 4. 修复 preinstall.ts / postinstall.ts
-      # ============================================================
-      - name: 🔧 Fix TypeScript scripts
-        run: |
-          echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
-          sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-          echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
-          sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
+          # 安装系统依赖
+          RUN apt-get update && apt-get install -y \
+              build-essential \
+              pkg-config \
+              libgtk-3-dev \
+              libxkbfile-dev \
+              libkrb5-dev \
+              libgbm-dev \
+              rpm \
+              libx11-dev \
+              libxss-dev \
+              libxtst-dev \
+              libnss3-dev \
+              libasound2-dev \
+              libglib2.0-dev \
+              libcairo2-dev \
+              libpango1.0-dev \
+              libatk1.0-dev \
+              libgdk-pixbuf2.0-dev \
+              python3 \
+              git \
+              wget \
+              curl \
+              && rm -rf /var/lib/apt/lists/*
 
-      # ============================================================
-      # 5. 安装依赖
-      # ============================================================
-      - name: 📦 Install dependencies
-        run: npm install --legacy-peer-deps
+          # 安装 tsx
+          RUN npm install -g tsx
 
-      # ============================================================
-      # 6. 安装缺失构建工具
-      # ============================================================
-      - name: 📦 Install build tools
-        run: |
-          npm install -g tsx
-          npm install --legacy-peer-deps \
-            ternary-stream vscode-gulp-watch esbuild jsonc-parser \
-            gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
-            gulp-rename gulp-sort 2>/dev/null || true
+          # 设置工作目录
+          WORKDIR /build
 
-      # ============================================================
-      # 7. 修复 extensions.ts
-      # ============================================================
-      - name: 🔧 Fix extensions.ts
-        run: |
-          cat > build/lib/extensions.ts << 'EOF'
-          import { Stream } from "stream";
-          const empty: any[] = [];
+          # 复制源码
+          COPY . /build/
 
-          function emptyStream(): Stream {
-            const s = new Stream.Readable();
-            s._read = () => s.push(null);
-            return s;
-          }
+          # 设置环境变量
+          ENV VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          ENV VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          ENV VSCODE_SKIP_PRELAUNCH=1
+          ENV VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+          ENV NODE_OPTIONS="--max-old-space-size=8192"
+          ENV CXXFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
+          ENV CFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
 
-          export function isWebExtension(): boolean { return false; }
-          export function getExtensionStream(): Stream { return emptyStream(); }
-          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
-          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
-          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
-          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
-          export function packageExtensionsStream(): Stream { return emptyStream(); }
-          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
-          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
-          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
-          export function fromMarketplace(): any[] { return empty; }
-          export async function fetchUrls(urls: string[], options: any): Promise<void> { return Promise.resolve(); }
-          export function buildExtensionMedia(): void {}
-          export function compileExtensionMedia(): void {}
-          export function buildExtensionMediaTask(done: any): void { done(); }
-          export const builtInExtensions = empty;
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions = empty;
-          export const shouldDownloadWebBuiltInExtensions = false;
+          # 构建命令
+          CMD bash -c "
+            # 修复 preinstall.ts / postinstall.ts
+            echo 'console.log(\"✅ Preinstall OK\");' > build/npm/preinstall.js
+            sed -i 's/\"preinstall\": \"node build\\/npm\\/preinstall.ts\"/\"preinstall\": \"node build\\/npm\\/preinstall.js\"/' package.json
+            echo 'console.log(\"✅ Postinstall OK\");' > build/npm/postinstall.js
+            sed -i 's/\"postinstall\": \"node build\\/npm\\/postinstall.ts\"/\"postinstall\": \"node build\\/npm\\/postinstall.js\"/' package.json
+
+            # 修复 extensions.ts
+            cat > build/lib/extensions.ts << 'EOT'
+            import { Stream } from \"stream\";
+            const empty: any[] = [];
+            function emptyStream(): Stream {
+              const s = new Stream.Readable();
+              s._read = () => s.push(null);
+              return s;
+            }
+            export function isWebExtension(): boolean { return false; }
+            export function getExtensionStream(): Stream { return emptyStream(); }
+            export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+            export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+            export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+            export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+            export function packageExtensionsStream(): Stream { return emptyStream(); }
+            export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+            export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+            export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+            export function fromMarketplace(): any[] { return empty; }
+            export async function fetchUrls(urls: string[], options: any): Promise<void> { return Promise.resolve(); }
+            export function buildExtensionMedia(): void {}
+            export function compileExtensionMedia(): void {}
+            export function buildExtensionMediaTask(done: any): void { done(); }
+            export const builtInExtensions = empty;
+            export const shouldDownloadBuiltInExtensions = false;
+            export const webBuiltInExtensions = empty;
+            export const shouldDownloadWebBuiltInExtensions = false;
+            EOT
+
+            echo 'export const builtInExtensions: any[] = [];
+            export const shouldDownloadBuiltInExtensions = false;
+            export const webBuiltInExtensions: any[] = [];
+            export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
+
+            echo 'import { Stream } from \"stream\";
+            export async function fetchUrls(urls: string[], options: any): Promise<void> {
+              console.log(\"⚠️ fetch disabled\");
+              return Promise.resolve();
+            }' > build/lib/fetch.ts
+
+            # 安装依赖
+            npm install --legacy-peer-deps
+
+            # 安装构建工具
+            npm install --legacy-peer-deps \
+              ternary-stream vscode-gulp-watch esbuild jsonc-parser \
+              gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
+              gulp-rename gulp-sort 2>/dev/null || true
+
+            # 构建
+            tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          "
+
           EOF
 
-          echo 'export const builtInExtensions: any[] = [];
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions: any[] = [];
-          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
-
-          echo 'import { Stream } from "stream";
-          export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetch disabled");
-            return Promise.resolve();
-          }' > build/lib/fetch.ts
-
       # ============================================================
-      # 8. 【核心】将 build/next 下的所有 .ts 转换为 .mjs
+      # 3. 构建 Docker 镜像并运行
       # ============================================================
-      - name: 🔧 Convert build/next/*.ts to .mjs
+      - name: 🐳 Build and run Docker
         run: |
-          echo "Converting build/next/*.ts to .mjs..."
+          echo "Building Docker image..."
+          docker build -t vscode-builder .
 
-          # 遍历所有 .ts 文件
-          find build/next -name "*.ts" -type f | while read -r file; do
-            dir=$(dirname "$file")
-            base=$(basename "$file" .ts)
-            echo "Processing: $file -> $dir/$base.mjs"
+          echo "Running Docker container..."
+          docker run --rm -v $(pwd):/build vscode-builder
 
-            # 重命名
-            mv "$file" "$dir/$base.mjs"
-
-            # 替换导入语句中的 .ts 为 .mjs
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" "$dir/$base.mjs"
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' "$dir/$base.mjs"
-
-            # 移除 type 关键字
-            sed -i 's/import type /import /g' "$dir/$base.mjs"
-            sed -i 's/, type /, /g' "$dir/$base.mjs"
-            sed -i 's/export type /export /g' "$dir/$base.mjs"
-
-            # 移除 as 类型断言（简单处理）
-            sed -i 's/ as [a-zA-Z0-9_]*//g' "$dir/$base.mjs"
-          done
-
-          # 更新 gulpfile 中的引用
-          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
-          sed -i 's|build/next/index\.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
-
-          echo "✅ build/next/*.ts converted to .mjs"
+          echo "Docker build completed"
 
       # ============================================================
-      # 9. 【核心】将 gulpfile.vscode.ts 中的 spawn 改为 tsx
-      # ============================================================
-      - name: 🔧 Fix gulpfile.vscode.ts spawn
-        run: |
-          echo "Fixing gulpfile.vscode.ts spawn..."
-
-          # 直接替换所有包含 build/next 的行中的 node 为 tsx
-          sed -i '/build\/next/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i '/build\/next/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i "/build\/next/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
-
-          echo "✅ gulpfile.vscode.ts fixed"
-
-      # ============================================================
-      # 10. 设置环境变量
-      # ============================================================
-      - name: ⚙️ Set env
-        run: |
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
-
-      # ============================================================
-      # 11. 构建
-      # ============================================================
-      - name: 🔨 Build VSCode
-        run: |
-          export NODE_OPTIONS="--max-old-space-size=8192"
-          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
-          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
-          export VSCODE_SKIP_PRELAUNCH=1
-          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-
-          echo "Start: $(date)"
-
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
-
-          echo "Done: $(date)"
-
-      # ============================================================
-      # 12. 验证
+      # 4. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -212,7 +169,7 @@ jobs:
           fi
 
       # ============================================================
-      # 13. 创建 UOS 启动脚本
+      # 5. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -244,7 +201,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 14. 打包
+      # 6. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -256,7 +213,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 15. 上传
+      # 7. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
