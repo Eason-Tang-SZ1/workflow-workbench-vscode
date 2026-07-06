@@ -72,23 +72,23 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】直接修改 build/next/index.ts 为 .mjs 或使用 sed 替换
+      # 7. 【核心】使用 tsx 执行 build/next/index.ts
       # ============================================================
-      - name: 🔧 Fix build/next/index.ts
+      - name: 🔧 Fix esbuild command
         run: |
-          echo "Fixing build/next/index.ts..."
+          echo "Fixing esbuild command in gulpfile.vscode.ts..."
 
-          # 查看原始内容
-          echo "Original content:"
-          head -5 build/next/index.ts
+          # 改回 .ts 扩展名
+          if [ -f "build/next/index.mjs" ]; then
+            mv build/next/index.mjs build/next/index.ts
+          fi
 
-          # 方法1: 重命名为 .mjs
-          mv build/next/index.ts build/next/index.mjs
+          # 直接替换 gulpfile.vscode.ts 中的命令为 tsx
+          sed -i 's|"node", "build/next/index.ts"|"tsx", "build/next/index.ts"|g' build/gulpfile.vscode.ts
+          sed -i 's|"node", "build/next/index.mjs"|"tsx", "build/next/index.ts"|g' build/gulpfile.vscode.ts
+          sed -i 's|process.execPath, \[.*build/next/index\.ts.*\]|"tsx", ["build/next/index.ts"]|g' build/gulpfile.vscode.ts
 
-          # 修改 gulpfile.vscode.ts 中的引用
-          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
-
-          echo "✅ build/next/index.ts renamed to .mjs"
+          echo "✅ gulpfile.vscode.ts patched"
 
       # ============================================================
       # 8. 禁用所有内置扩展
