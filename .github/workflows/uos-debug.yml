@@ -86,57 +86,27 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 查看 gulpfile.vscode.ts 中 esbuild 相关的行
-          echo "=== DEBUG: esbuild related lines ==="
-          grep -n "esbuild" build/gulpfile.vscode.ts | head -10 || echo "No esbuild matches"
-          echo "=== DEBUG: spawn lines ==="
-          grep -n "spawn" build/gulpfile.vscode.ts | head -5 || echo "No spawn matches"
-          echo "=== DEBUG: next/index lines ==="
-          grep -n "next/index" build/gulpfile.vscode.ts || echo "No next/index matches"
+          # 【核心修复】将 build/next/index.ts 重命名为 .mjs 并修改所有引用
+          echo "Fixing build/next/index.ts..."
 
-          # 使用 Python 直接查看并替换
-          echo "Fixing gulpfile.vscode.ts with Python..."
-          python3 << 'PYTHON_END'
-          import re
+          # 重命名文件
+          if [ -f "build/next/index.ts" ]; then
+            mv build/next/index.ts build/next/index.mjs
+            echo "✅ Renamed to index.mjs"
+          fi
 
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
+          # 修改 gulpfile.vscode.ts 中的引用
+          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
 
-          # 查找所有 spawn 调用
-          pattern = r'spawn\(([^,]+),\s*\[([^\]]*build/next/index[^\]]*)\]'
-          matches = re.findall(pattern, content)
-          print(f"Found {len(matches)} spawn calls with build/next/index")
-
-          for match in matches:
-              print(f"  spawn({match[0]}, [{match[1]}])")
-
-          # 替换所有 spawn 调用中的第一个参数为 "tsx"
-          # 匹配 spawn(process.execPath, [..., "build/next/index.ts", ...], ...)
-          new_content = re.sub(
-              r'spawn\(process\.execPath,\s*\[([^\]]*build/next/index[^\]]*)\]',
-              r'spawn("tsx", [\1]',
-              content
-          )
-          new_content = re.sub(
-              r'spawn\("node",\s*\[([^\]]*build/next/index[^\]]*)\]',
-              r'spawn("tsx", [\1]',
-              new_content
-          )
-          new_content = re.sub(
-              r"spawn\('node',\s*\[([^\]]*build/next/index[^\]]*)\]",
-              r'spawn("tsx", [\1]',
-              new_content
-          )
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(new_content)
-
-          print("✅ spawn calls replaced")
-          PYTHON_END
-
-          # 验证替换结果
-          echo "=== DEBUG: After replacement ==="
-          grep -n "next/index" build/gulpfile.vscode.ts || echo "No next/index matches"
+          # 修改 index.mjs 中的导入语句
+          if [ -f "build/next/index.mjs" ]; then
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" build/next/index.mjs
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' build/next/index.mjs
+            # 移除 type 关键字
+            sed -i 's/import type /import /g' build/next/index.mjs
+            sed -i 's/export type /export /g' build/next/index.mjs
+            echo "✅ Fixed index.mjs imports"
+          fi
 
           # 安装依赖（跳过 native-keymap 编译）
           echo "Installing dependencies..."
