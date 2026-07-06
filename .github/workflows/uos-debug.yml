@@ -72,23 +72,33 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】使用 tsx 执行 build/next/index.ts
+      # 7. 【核心】用 tsx 替换 node 命令
       # ============================================================
-      - name: 🔧 Fix esbuild command
+      - name: 🔧 Replace node with tsx
         run: |
-          echo "Fixing esbuild command in gulpfile.vscode.ts..."
+          echo "Replacing node command with tsx..."
 
-          # 改回 .ts 扩展名
-          if [ -f "build/next/index.mjs" ]; then
-            mv build/next/index.mjs build/next/index.ts
+          # 获取 node 路径
+          NODE_PATH=$(which node)
+          echo "Node path: $NODE_PATH"
+
+          # 创建包装脚本，将 node 命令重定向到 tsx
+          sudo bash -c "cat > /usr/local/bin/node-wrapper << 'EOF'
+          #!/bin/bash
+          # 检查是否要执行 .ts 文件
+          if [[ \"\$*\" == *\".ts\"* ]]; then
+            exec tsx \"\$@\"
+          else
+            exec $NODE_PATH \"\$@\"
           fi
+          EOF"
 
-          # 直接替换 gulpfile.vscode.ts 中的命令为 tsx
-          sed -i 's|"node", "build/next/index.ts"|"tsx", "build/next/index.ts"|g' build/gulpfile.vscode.ts
-          sed -i 's|"node", "build/next/index.mjs"|"tsx", "build/next/index.ts"|g' build/gulpfile.vscode.ts
-          sed -i 's|process.execPath, \[.*build/next/index\.ts.*\]|"tsx", ["build/next/index.ts"]|g' build/gulpfile.vscode.ts
+          sudo chmod +x /usr/local/bin/node-wrapper
 
-          echo "✅ gulpfile.vscode.ts patched"
+          # 将包装脚本添加到 PATH 最前面
+          echo "export PATH=/usr/local/bin:\$PATH" >> $GITHUB_ENV
+
+          echo "✅ node wrapper created"
 
       # ============================================================
       # 8. 禁用所有内置扩展
@@ -151,6 +161,7 @@ jobs:
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
+          export PATH="/usr/local/bin:$PATH"
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -158,7 +169,10 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start: $(date)"
+          echo "Using node: $(which node)"
+
           tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+
           echo "Done: $(date)"
 
       # ============================================================
