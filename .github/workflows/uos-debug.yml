@@ -83,9 +83,16 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 安装依赖
+          # 安装依赖（跳过 native-keymap 编译）
           echo "Installing dependencies..."
-          npm install --legacy-peer-deps
+          npm install --legacy-peer-deps --ignore-scripts
+
+          # 手动编译 native-keymap（使用正确的 C++ 标准）
+          echo "Building native-keymap..."
+          cd node_modules/native-keymap
+          export CXXFLAGS="-std=c++17"
+          node-gyp rebuild || true
+          cd ../..
 
           # 安装构建工具
           echo "Installing build tools..."
@@ -105,14 +112,14 @@ jobs:
           chmod +x build.sh
 
       # ============================================================
-      # 3. 创建 Dockerfile（包含所有编译依赖）
+      # 3. 创建 Dockerfile
       # ============================================================
       - name: 🐳 Create Dockerfile
         run: |
           cat > Dockerfile << 'EOF'
           FROM node:20-bullseye
 
-          # 安装系统依赖（包含编译 native-keymap 所需的库）
+          # 安装系统依赖
           RUN apt-get update && apt-get install -y \
               build-essential \
               pkg-config \
@@ -151,13 +158,12 @@ jobs:
               libxcomposite-dev \
               libxcursor-dev \
               libxi-dev \
-              libxtst-dev \
               libxrandr-dev \
               libxfixes-dev \
               && rm -rf /var/lib/apt/lists/*
 
-          # 安装 tsx
-          RUN npm install -g tsx
+          # 安装 node-gyp 和 tsx
+          RUN npm install -g node-gyp tsx
 
           # 设置工作目录
           WORKDIR /build
@@ -171,7 +177,7 @@ jobs:
           ENV VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           ENV VSCODE_SKIP_PRELAUNCH=1
           ENV VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-          ENV CXXFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
+          ENV CXXFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -std=c++17"
           ENV CFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
 
           # 运行构建脚本
