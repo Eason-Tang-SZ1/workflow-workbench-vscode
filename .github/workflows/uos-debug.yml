@@ -117,7 +117,7 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 使用 tsc 编译 build/next 目录
+      # 8. 编译 build/next 所有 TypeScript 文件
       # ============================================================
       - name: 🔧 Compile build/next with tsc
         run: |
@@ -139,22 +139,28 @@ jobs:
               "outDir": ".",
               "rootDir": ".",
               "allowJs": true,
-              "declaration": false
+              "declaration": false,
+              "resolveJsonModule": true
             },
-            "include": ["**/*.ts"],
+            "include": ["**/*.ts", "**/*.tsx"],
             "exclude": ["**/*.d.ts", "node_modules"]
           }
           EOF
 
-          # 使用 tsc 编译
-          npx tsc --noEmit false || true
+          echo "Found .ts files:"
+          find . -name "*.ts" -type f ! -name "*.d.ts"
 
-          # 删除 .ts 文件，保留 .js
+          # 编译
+          npx tsc || true
+
+          # 删除 .ts 文件（保留 .d.ts）
           find . -name "*.ts" -type f ! -name "*.d.ts" | while read -r file; do
             js_file="${file%.ts}.js"
             if [ -f "$js_file" ]; then
-              echo "✅ Compiled: $(basename "$file")"
+              echo "✅ $(basename "$file") -> $(basename "$js_file")"
               rm "$file"
+            else
+              echo "⚠️ $(basename "$file") not compiled"
             fi
           done
 
