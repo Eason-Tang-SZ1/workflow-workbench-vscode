@@ -121,7 +121,39 @@ jobs:
           echo "✅ Build environment prepared"
 
       # ============================================================
-      # 8. 设置环境变量
+      # 8. 【核心】修改 gulpfile.vscode.ts 中的 spawn 调用
+      # ============================================================
+      - name: 🔧 Fix esbuild spawn
+        run: |
+          echo "Fixing spawn call in gulpfile.vscode.ts..."
+
+          # 使用 Python 精确替换 spawn 调用
+          python3 << 'PYTHON_SCRIPT'
+          import re
+
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+
+          # 替换 spawn(process.execPath, [...]) 为 spawn('tsx', [...])
+          # 匹配模式: spawn(process.execPath, [..., 'build/next/index.ts', ...], { ... })
+          pattern = r'spawn\(process\.execPath,\s*\[([^\]]*"build/next/index\.ts"[^\]]*)\]'
+          replacement = r'spawn("tsx", [\1]'
+          new_content = re.sub(pattern, replacement, content)
+
+          # 也替换 spawn("node", ["build/next/index.ts"])
+          new_content = new_content.replace(
+              'spawn("node", ["build/next/index.ts"]',
+              'spawn("tsx", ["build/next/index.ts"]'
+          )
+
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(new_content)
+
+          print("✅ spawn call fixed")
+          PYTHON_SCRIPT
+
+      # ============================================================
+      # 9. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -131,7 +163,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 9. 【核心】使用 tsx 执行 gulp
+      # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -143,13 +175,12 @@ jobs:
 
           echo "Start: $(date)"
 
-          # 使用 tsx 执行 gulp
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
 
       # ============================================================
-      # 10. 验证
+      # 11. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -166,7 +197,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -198,7 +229,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 12. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -210,7 +241,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
