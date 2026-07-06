@@ -119,34 +119,31 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【新增】禁用 prepare-prebuilt-extensions
+      # 8. 彻底禁用 prepare-prebuilt-extensions
       # ============================================================
       - name: 🔧 Disable prepare-prebuilt-extensions
         run: |
-          echo "Disabling prepare-prebuilt-extensions..."
+          echo "彻底禁用 prepare-prebuilt-extensions..."
 
-          # 方法1: 在 gulpfile 中删除任务
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            sed -i '/prepare-prebuilt-extensions/d' build/gulpfile.vscode.ts
-            echo "✅ Removed from gulpfile.vscode.ts"
-          fi
+          # 备份原文件
+          cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
 
-          if [ -f "build/gulpfile.extensions.ts" ]; then
-            sed -i '/prepare-prebuilt-extensions/d' build/gulpfile.extensions.ts
-            echo "✅ Removed from gulpfile.extensions.ts"
-          fi
+          # 使用 sed 删除包含 preparePrebuiltExtensions 的行
+          sed -i '/preparePrebuiltExtensions/d' build/gulpfile.vscode.ts
+          sed -i '/prepare-prebuilt-extensions/d' build/gulpfile.vscode.ts
 
-          # 方法2: 清空预构建扩展配置
+          # 删除对 preparePrebuiltExtensions 的引用（更精确）
+          sed -i '/preparePrebuiltExtensionsTask/d' build/gulpfile.vscode.ts
+
+          # 清空预构建扩展配置
           if [ -f "build/builtInExtensions.json" ]; then
             echo '[]' > build/builtInExtensions.json
-            echo "✅ Cleared builtInExtensions.json"
           fi
 
-          # 方法3: 创建空配置
           mkdir -p .vscode
           echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
 
-          echo "✅ prepare-prebuilt-extensions disabled"
+          echo "✅ prepare-prebuilt-extensions 已禁用"
 
       # ============================================================
       # 9. 查找并替换 gulpfile.vscode.ts 中的 spawn
@@ -155,11 +152,6 @@ jobs:
         run: |
           echo "Fixing gulpfile.vscode.ts spawn..."
 
-          # 查找包含 build/next/index 的行
-          echo "Finding lines with build/next/index:"
-          grep -n "build/next/index" build/gulpfile.vscode.ts || echo "No match found"
-
-          # 直接使用 sed 替换
           sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
           sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
           sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
