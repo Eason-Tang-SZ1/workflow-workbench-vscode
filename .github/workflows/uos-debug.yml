@@ -36,6 +36,9 @@ jobs:
           echo "Building VSCode in Docker..."
           echo "=========================================="
 
+          # 修复 git 安全目录
+          git config --global --add safe.directory /build
+
           # 修复 preinstall.ts / postinstall.ts
           echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
@@ -83,13 +86,19 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
+          # 修复 gulpfile.vscode.ts 中的 spawn 调用
+          echo "Fixing gulpfile.vscode.ts spawn..."
+          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+
           # 安装依赖（跳过 native-keymap 编译）
           echo "Installing dependencies..."
           npm install --legacy-peer-deps --ignore-scripts
 
-          # 手动编译 native-keymap（使用正确的 C++ 标准）
+          # 手动编译 native-keymap
           echo "Building native-keymap..."
-          cd node_modules/native-keymap
+          cd node_modules/native-keymap || true
           export CXXFLAGS="-std=c++17"
           node-gyp rebuild || true
           cd ../..
