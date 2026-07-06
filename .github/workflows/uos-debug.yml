@@ -86,27 +86,36 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 【核心修复】将 build/next/index.ts 重命名为 .mjs 并修改所有引用
-          echo "Fixing build/next/index.ts..."
+          # 将 build/next 下所有 .ts 转换为 .mjs 并移除 type 关键字
+          echo "Converting build/next/*.ts to .mjs..."
 
-          # 重命名文件
-          if [ -f "build/next/index.ts" ]; then
-            mv build/next/index.ts build/next/index.mjs
-            echo "✅ Renamed to index.mjs"
-          fi
+          find build/next -name "*.ts" -type f | while read -r file; do
+            dir=$(dirname "$file")
+            base=$(basename "$file" .ts)
+            echo "Processing: $file -> $dir/$base.mjs"
 
-          # 修改 gulpfile.vscode.ts 中的引用
+            # 重命名
+            mv "$file" "$dir/$base.mjs"
+
+            # 替换导入语句中的 .ts 为 .mjs
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" "$dir/$base.mjs"
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' "$dir/$base.mjs"
+
+            # 移除 type 关键字（这是关键！）
+            sed -i 's/import type /import /g' "$dir/$base.mjs"
+            sed -i 's/, type /, /g' "$dir/$base.mjs"
+            sed -i 's/export type /export /g' "$dir/$base.mjs"
+            sed -i 's/, type, /, /g' "$dir/$base.mjs"
+            sed -i 's/type \([A-Za-z0-9_]*\), / /g' "$dir/$base.mjs"
+
+            # 移除 as 类型断言
+            sed -i 's/ as [A-Za-z0-9_]*//g' "$dir/$base.mjs"
+          done
+
+          # 更新 gulpfile 中的引用
           sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
 
-          # 修改 index.mjs 中的导入语句
-          if [ -f "build/next/index.mjs" ]; then
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" build/next/index.mjs
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' build/next/index.mjs
-            # 移除 type 关键字
-            sed -i 's/import type /import /g' build/next/index.mjs
-            sed -i 's/export type /export /g' build/next/index.mjs
-            echo "✅ Fixed index.mjs imports"
-          fi
+          echo "✅ build/next converted to .mjs"
 
           # 安装依赖（跳过 native-keymap 编译）
           echo "Installing dependencies..."
