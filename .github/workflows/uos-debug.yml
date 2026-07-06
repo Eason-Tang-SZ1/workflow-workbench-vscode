@@ -119,36 +119,16 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】直接替换 gulpfile.vscode.ts 中的 spawn
+      # 8. 直接用 sed 替换 gulpfile.vscode.ts 中的 node
       # ============================================================
-      - name: 🔧 Fix gulpfile.vscode.ts spawn
+      - name: 🔧 Fix gulpfile.vscode.ts
         run: |
-          echo "Fixing spawn in gulpfile.vscode.ts..."
+          echo "Fixing gulpfile.vscode.ts..."
 
-          # 使用 Python 读取文件并替换
-          python3 -c "
-          import re
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
-
-          # 替换包含 'build/next/index' 的 spawn 调用
-          # 查找模式: spawn(process.execPath, [...'build/next/index'...], {...})
-          # 或 spawn('node', ['build/next/index'...], {...})
-          # 替换为: spawn('tsx', ['build/next/index'...], {...})
-
-          # 方案1: 替换 process.execPath 版本
-          pattern1 = r'spawn\(process\.execPath,\s*\[([^\]]*build/next/index[^\]]*)\]'
-          content = re.sub(pattern1, r'spawn(\"tsx\", [\1]', content)
-
-          # 方案2: 替换 'node' 版本
-          content = content.replace('spawn(\"node\", [\"build/next/index', 'spawn(\"tsx\", [\"build/next/index')
-          content = content.replace('spawn(\"node\", [\'build/next/index', 'spawn(\"tsx\", [\'build/next/index')
-          content = content.replace("spawn('node', ['build/next/index", "spawn('tsx', ['build/next/index")
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(content)
-          print('✅ spawn replaced with tsx')
-          "
+          # 直接替换所有 "node" 为 "tsx"，但仅限于包含 "build/next" 的行
+          sed -i '/build\/next/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+          sed -i '/build\/next/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
 
           echo "✅ gulpfile.vscode.ts fixed"
 
@@ -175,7 +155,6 @@ jobs:
 
           echo "Start: $(date)"
 
-          # 使用 tsx 执行 gulp
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
