@@ -117,9 +117,9 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 编译 build/next 所有 TypeScript 文件
+      # 8. 编译 build/next 并修复导入路径
       # ============================================================
-      - name: 🔧 Compile build/next with tsc
+      - name: 🔧 Compile and fix build/next
         run: |
           echo "Compiling build/next/*.ts with tsc..."
 
@@ -132,6 +132,7 @@ jobs:
               "target": "ES2020",
               "module": "ESNext",
               "moduleResolution": "node",
+              "ignoreDeprecations": "6.0",
               "esModuleInterop": true,
               "allowSyntheticDefaultImports": true,
               "strict": false,
@@ -147,29 +148,29 @@ jobs:
           }
           EOF
 
-          echo "Found .ts files:"
-          find . -name "*.ts" -type f ! -name "*.d.ts"
-
           # 编译
           npx tsc || true
 
-          # 删除 .ts 文件（保留 .d.ts）
-          find . -name "*.ts" -type f ! -name "*.d.ts" | while read -r file; do
-            js_file="${file%.ts}.js"
-            if [ -f "$js_file" ]; then
-              echo "✅ $(basename "$file") -> $(basename "$js_file")"
-              rm "$file"
-            else
-              echo "⚠️ $(basename "$file") not compiled"
-            fi
+          # 【关键】修复所有 .js 文件中的 .ts 导入为 .js
+          echo "Fixing import paths in .js files..."
+          find . -name "*.js" -type f | while read -r js_file; do
+            # 将 from './xxx.ts' 替换为 from './xxx.js'
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$js_file"
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$js_file"
+            # 也处理从其他目录导入的情况
+            sed -i "s/from '\(.*\)\.ts'/from '\1.js'/g" "$js_file"
+            sed -i 's/from "\(.*\)\.ts"/from "\1.js"/g' "$js_file"
           done
+
+          # 删除 .ts 文件（保留 .d.ts）
+          find . -name "*.ts" -type f ! -name "*.d.ts" -delete
 
           cd ../..
 
           # 更新 gulpfile 中的引用
           sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
 
-          echo "✅ build/next compiled to JavaScript"
+          echo "✅ build/next compiled and fixed"
 
       # ============================================================
       # 9. 设置环境变量
