@@ -72,47 +72,27 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】用 tsx 替换 node 命令
+      # 7. 【核心】在 extensions.ts 中添加 isWebExtension 导出
       # ============================================================
-      - name: 🔧 Replace node with tsx
+      - name: 🔧 Add isWebExtension export
         run: |
-          echo "Replacing node command with tsx..."
+          echo "Adding isWebExtension export to extensions.ts..."
 
-          # 获取 node 路径
-          NODE_PATH=$(which node)
-          echo "Node path: $NODE_PATH"
-
-          # 创建包装脚本，将 node 命令重定向到 tsx
-          sudo bash -c "cat > /usr/local/bin/node-wrapper << 'EOF'
-          #!/bin/bash
-          # 检查是否要执行 .ts 文件
-          if [[ \"\$*\" == *\".ts\"* ]]; then
-            exec tsx \"\$@\"
-          else
-            exec $NODE_PATH \"\$@\"
-          fi
-          EOF"
-
-          sudo chmod +x /usr/local/bin/node-wrapper
-
-          # 将包装脚本添加到 PATH 最前面
-          echo "export PATH=/usr/local/bin:\$PATH" >> $GITHUB_ENV
-
-          echo "✅ node wrapper created"
-
-      # ============================================================
-      # 8. 禁用所有内置扩展
-      # ============================================================
-      - name: 🔧 Disable built-in extensions
-        run: |
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
+
           function emptyStream(): Stream {
             const s = new Stream.Readable();
             s._read = () => s.push(null);
             return s;
           }
+
+          // 导出 isWebExtension
+          export function isWebExtension(): boolean {
+            return false;
+          }
+
           export function getExtensionStream(): Stream { return emptyStream(); }
           export function getExtensionDownloadStream(): Stream { return emptyStream(); }
           export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
@@ -144,10 +124,10 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          echo "✅ 所有内置扩展已禁用"
+          echo "✅ isWebExtension exported"
 
       # ============================================================
-      # 9. 设置环境变量
+      # 8. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -157,11 +137,10 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 10. 构建
+      # 9. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
-          export PATH="/usr/local/bin:$PATH"
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -169,14 +148,11 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start: $(date)"
-          echo "Using node: $(which node)"
-
           tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
-
           echo "Done: $(date)"
 
       # ============================================================
-      # 11. 验证
+      # 10. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -193,7 +169,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 11. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -225,7 +201,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 12. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -237,7 +213,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 13. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
