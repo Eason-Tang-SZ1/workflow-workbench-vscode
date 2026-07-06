@@ -72,39 +72,23 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】替换整个 gulpfile.vscode.ts 中的 esbuild 执行命令
+      # 7. 【核心】直接修改 build/next/index.ts 为 .mjs 或使用 sed 替换
       # ============================================================
-      - name: 🔧 Patch gulpfile.vscode.ts
+      - name: 🔧 Fix build/next/index.ts
         run: |
-          echo "Patching build/gulpfile.vscode.ts..."
+          echo "Fixing build/next/index.ts..."
 
-          # 备份原文件
-          cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
+          # 查看原始内容
+          echo "Original content:"
+          head -5 build/next/index.ts
 
-          # 使用 Python 脚本进行精确替换
-          python3 << 'PYTHON_SCRIPT'
-          import re
+          # 方法1: 重命名为 .mjs
+          mv build/next/index.ts build/next/index.mjs
 
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
+          # 修改 gulpfile.vscode.ts 中的引用
+          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
 
-          # 替换 spawn 调用中的 node 为 tsx
-          # 匹配模式: spawn(process.execPath, [...'build/next/index.ts'...], {...})
-          pattern = r'spawn\(process\.execPath,\s*\[[^\]]*"build/next/index\.ts"[^\]]*\]'
-
-          # 替换为 tsx 调用
-          replacement = 'spawn("tsx", ["build/next/index.ts"], { stdio: "inherit" }'
-
-          new_content = re.sub(pattern, replacement, content)
-
-          # 也替换 spawn("node", ["build/next/index.ts"])
-          new_content = new_content.replace('spawn("node", ["build/next/index.ts"]', 'spawn("tsx", ["build/next/index.ts"]')
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(new_content)
-
-          print("✅ gulpfile.vscode.ts patched")
-          PYTHON_SCRIPT
+          echo "✅ build/next/index.ts renamed to .mjs"
 
       # ============================================================
       # 8. 禁用所有内置扩展
