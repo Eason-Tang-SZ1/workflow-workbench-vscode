@@ -72,11 +72,22 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】禁用所有内置扩展，只保留预构建扩展
+      # 7. 【核心】修改 gulpfile.vscode.ts 中的 esbuild 命令
+      # ============================================================
+      - name: 🔧 Patch gulpfile.vscode.ts
+        run: |
+          echo "Patching build/gulpfile.vscode.ts..."
+
+          # 将 node build/next/index.ts 替换为 tsx build/next/index.ts
+          sed -i 's|node build/next/index.ts|tsx build/next/index.ts|g' build/gulpfile.vscode.ts
+
+          echo "✅ gulpfile.vscode.ts patched"
+
+      # ============================================================
+      # 8. 禁用所有内置扩展
       # ============================================================
       - name: 🔧 Disable built-in extensions
         run: |
-          # 重写 extensions.ts - 所有扩展函数返回空
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -105,13 +116,11 @@ jobs:
           export const shouldDownloadWebBuiltInExtensions = false;
           EOF
 
-          # 清空 builtInExtensions.ts
           echo 'export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
 
-          # 清空 fetch.ts
           echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
             console.log("⚠️ fetch disabled");
@@ -121,7 +130,7 @@ jobs:
           echo "✅ 所有内置扩展已禁用"
 
       # ============================================================
-      # 8. 设置环境变量（跳过所有扩展下载）
+      # 9. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -132,7 +141,7 @@ jobs:
           echo "NODE_OPTIONS=--max-old-space-size=8192" >> $GITHUB_ENV
 
       # ============================================================
-      # 9. 构建（使用 tsx 执行 gulp）
+      # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -141,23 +150,28 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 10. 验证
+      # 11. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
           if [ -d "./VSCode-linux-x64" ]; then
             echo "✅ Build found"
             echo "BUILD_DIR=./VSCode-linux-x64" >> $GITHUB_ENV
+          elif [ -d "./vscode/VSCode-linux-x64" ]; then
+            echo "✅ Build found in ./vscode/"
+            echo "BUILD_DIR=./vscode/VSCode-linux-x64" >> $GITHUB_ENV
           else
             echo "❌ Build not found!"
+            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
             exit 1
           fi
 
       # ============================================================
-      # 11. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
           cat > start-vscode.sh << 'EOF'
           #!/bin/bash
@@ -182,20 +196,22 @@ jobs:
           exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           EOF
           chmod +x start-vscode.sh
+          echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 12. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package
         run: |
           mkdir -p artifacts
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
           tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
             --preserve-permissions "$BUILD_DIR"
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
