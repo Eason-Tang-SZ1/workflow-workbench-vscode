@@ -72,45 +72,7 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】将所有 build/next 中的 .ts 转换为 .mjs
-      # ============================================================
-      - name: 🔧 Convert all build/next .ts files to .mjs
-        run: |
-          echo "Converting all build/next .ts files to .mjs..."
-
-          # 查找所有 .ts 文件并逐个处理
-          find build/next -name "*.ts" -type f | while read -r file; do
-            echo "Processing: $file"
-
-            # 获取文件名和目录
-            dir=$(dirname "$file")
-            base=$(basename "$file" .ts)
-
-            # 重命名为 .mjs
-            mv "$file" "$dir/$base.mjs"
-
-            # 修改 .mjs 文件中的导入语句
-            # 将 from './xxx.ts' 替换为 from './xxx.mjs'
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.mjs'/g" "$dir/$base.mjs"
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.mjs"/g' "$dir/$base.mjs"
-
-            # 移除 TypeScript 特有的 type 导入 (import type)
-            # 将 "import type { ... }" 替换为 "import { ... }"
-            sed -i 's/import type /import /g' "$dir/$base.mjs"
-            # 移除 type 关键字在导入语句中
-            sed -i 's/, type /, /g' "$dir/$base.mjs"
-
-            # 将 export type 替换为 export
-            sed -i 's/export type /export /g' "$dir/$base.mjs"
-          done
-
-          # 修改 gulpfile.vscode.ts 中的引用
-          sed -i 's|build/next/index.ts|build/next/index.mjs|g' build/gulpfile.vscode.ts
-
-          echo "✅ All build/next files converted to .mjs"
-
-      # ============================================================
-      # 8. 修复 extensions.ts
+      # 7. 修复 extensions.ts
       # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
@@ -157,6 +119,40 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
+      # 8. 【核心】直接替换 gulpfile.vscode.ts 中的 spawn
+      # ============================================================
+      - name: 🔧 Fix gulpfile.vscode.ts spawn
+        run: |
+          echo "Fixing spawn in gulpfile.vscode.ts..."
+
+          # 使用 Python 读取文件并替换
+          python3 -c "
+          import re
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+
+          # 替换包含 'build/next/index' 的 spawn 调用
+          # 查找模式: spawn(process.execPath, [...'build/next/index'...], {...})
+          # 或 spawn('node', ['build/next/index'...], {...})
+          # 替换为: spawn('tsx', ['build/next/index'...], {...})
+
+          # 方案1: 替换 process.execPath 版本
+          pattern1 = r'spawn\(process\.execPath,\s*\[([^\]]*build/next/index[^\]]*)\]'
+          content = re.sub(pattern1, r'spawn(\"tsx\", [\1]', content)
+
+          # 方案2: 替换 'node' 版本
+          content = content.replace('spawn(\"node\", [\"build/next/index', 'spawn(\"tsx\", [\"build/next/index')
+          content = content.replace('spawn(\"node\", [\'build/next/index', 'spawn(\"tsx\", [\'build/next/index')
+          content = content.replace("spawn('node', ['build/next/index", "spawn('tsx', ['build/next/index")
+
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
+          print('✅ spawn replaced with tsx')
+          "
+
+          echo "✅ gulpfile.vscode.ts fixed"
+
+      # ============================================================
       # 9. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
@@ -179,6 +175,7 @@ jobs:
 
           echo "Start: $(date)"
 
+          # 使用 tsx 执行 gulp
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
