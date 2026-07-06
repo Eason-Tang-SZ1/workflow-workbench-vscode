@@ -86,11 +86,21 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 修复 gulpfile.vscode.ts 中的 spawn 调用
+          # 调试：查看 gulpfile.vscode.ts 中包含 build/next/index 的行
+          echo "=== DEBUG: Lines with build/next/index ==="
+          grep -n "build/next/index" build/gulpfile.vscode.ts || echo "No matches found"
+          echo "=== DEBUG: Lines with spawn ==="
+          grep -n "spawn" build/gulpfile.vscode.ts | head -5 || echo "No spawn matches"
+
+          # 直接替换 spawn 调用中的 process.execPath 为 tsx
           echo "Fixing gulpfile.vscode.ts spawn..."
-          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
-          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+          # 使用更精确的替换
+          sed -i 's/spawn(process\.execPath, \[.*build\/next\/index\.ts.*\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
+          sed -i 's/spawn("node", \[.*build\/next\/index\.ts.*\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
+
+          # 再次调试确认
+          echo "=== DEBUG: After replacement ==="
+          grep -n "build/next/index" build/gulpfile.vscode.ts || echo "No matches found"
 
           # 安装依赖（跳过 native-keymap 编译）
           echo "Installing dependencies..."
