@@ -86,8 +86,24 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 安装依赖（使用 --ignore-scripts 跳过编译）
-          echo "Installing dependencies (this may take 5-10 minutes)..."
+          # 【核心修复】将 build/next/index.ts 直接重命名为 .js
+          echo "Fixing build/next/index.ts..."
+          if [ -f "build/next/index.ts" ]; then
+            # 先转换内容：移除 type 关键字，将 .ts 导入改为 .js
+            sed -i 's/import type /import /g' build/next/index.ts
+            sed -i 's/export type /export /g' build/next/index.ts
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" build/next/index.ts
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' build/next/index.ts
+            # 重命名为 .js
+            mv build/next/index.ts build/next/index.js
+            echo "✅ index.ts converted to index.js"
+          fi
+
+          # 更新 gulpfile 中的引用
+          sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
+
+          # 安装依赖
+          echo "Installing dependencies..."
           npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 
           # 手动编译 native-keymap
@@ -103,31 +119,6 @@ jobs:
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
-
-          # 修改 gulpfile.vscode.ts 中的 spawn 调用
-          echo "Fixing gulpfile.vscode.ts..."
-          # 使用 Python 替换 spawn 调用
-          python3 << 'PY_END'
-          import re
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
-
-          # 替换 spawn(process.execPath, ...) 为 spawn('tsx', ...)
-          content = re.sub(
-              r'spawn\(process\.execPath,\s*\[([^\]]*build/next/index[^\]]*)\]',
-              r'spawn("tsx", [\1]',
-              content
-          )
-          content = re.sub(
-              r'spawn\("node",\s*\[([^\]]*build/next/index[^\]]*)\]',
-              r'spawn("tsx", [\1]',
-              content
-          )
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(content)
-          print("✅ gulpfile.vscode.ts fixed")
-          PY_END
 
           # 构建
           echo "Building VSCode..."
