@@ -119,31 +119,34 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 彻底禁用 prepare-prebuilt-extensions
+      # 8. 禁用 prepare-prebuilt-extensions（空实现）
       # ============================================================
       - name: 🔧 Disable prepare-prebuilt-extensions
         run: |
-          echo "彻底禁用 prepare-prebuilt-extensions..."
+          echo "Disabling prepare-prebuilt-extensions..."
 
-          # 备份原文件
-          cp build/gulpfile.vscode.ts build/gulpfile.vscode.ts.bak
+          # 使用 Python 脚本进行精确替换
+          python3 << 'PYTHON_END'
+          import re
 
-          # 使用 sed 删除包含 preparePrebuiltExtensions 的行
-          sed -i '/preparePrebuiltExtensions/d' build/gulpfile.vscode.ts
-          sed -i '/prepare-prebuilt-extensions/d' build/gulpfile.vscode.ts
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
 
-          # 删除对 preparePrebuiltExtensions 的引用（更精确）
-          sed -i '/preparePrebuiltExtensionsTask/d' build/gulpfile.vscode.ts
+          # 替换 preparePrebuiltExtensionsTask 函数为空实现
+          pattern = r'(async function preparePrebuiltExtensionsTask\([^)]*\)\s*\{)[^}]*(\})'
+          replacement = r'\1\n  console.log("⚠️ preparePrebuiltExtensionsTask disabled");\n  return Promise.resolve();\n\2'
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
 
-          # 清空预构建扩展配置
-          if [ -f "build/builtInExtensions.json" ]; then
-            echo '[]' > build/builtInExtensions.json
-          fi
+          # 替换 preparePrebuiltExtensions 函数为空实现
+          pattern = r'(function preparePrebuiltExtensions\([^)]*\)\s*\{)[^}]*(\})'
+          replacement = r'\1\n  console.log("⚠️ preparePrebuiltExtensions disabled");\n  return [];\n\2'
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
 
-          mkdir -p .vscode
-          echo '{"extensions": [], "disabled": true}' > .vscode/builtInExtensions.json
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
 
-          echo "✅ prepare-prebuilt-extensions 已禁用"
+          print("✅ preparePrebuiltExtensions disabled")
+          PYTHON_END
 
       # ============================================================
       # 9. 查找并替换 gulpfile.vscode.ts 中的 spawn
