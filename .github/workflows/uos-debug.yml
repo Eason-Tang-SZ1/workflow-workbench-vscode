@@ -86,21 +86,33 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 【核心修复】将 build/next/index.ts 直接重命名为 .js
-          echo "Fixing build/next/index.ts..."
-          if [ -f "build/next/index.ts" ]; then
-            # 先转换内容：移除 type 关键字，将 .ts 导入改为 .js
-            sed -i 's/import type /import /g' build/next/index.ts
-            sed -i 's/export type /export /g' build/next/index.ts
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" build/next/index.ts
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' build/next/index.ts
-            # 重命名为 .js
-            mv build/next/index.ts build/next/index.js
-            echo "✅ index.ts converted to index.js"
-          fi
+          # ============================================================
+          # 【核心修复】直接查看并替换 gulpfile 中的 spawn 调用
+          # ============================================================
+          echo "=== DEBUG: Finding spawn calls in gulpfile.vscode.ts ==="
 
-          # 更新 gulpfile 中的引用
-          sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
+          # 显示包含 spawn 的行
+          grep -n "spawn" build/gulpfile.vscode.ts | head -20
+
+          # 显示包含 build/next/index 的行
+          echo "=== Lines with build/next/index ==="
+          grep -n "build/next/index" build/gulpfile.vscode.ts
+
+          # 使用 sed 直接替换 - 将所有 "spawn(process.execPath" 替换为 "spawn('tsx'"
+          # 注意：gulpfile 中可能使用不同的引号格式
+          echo "=== Replacing spawn calls ==="
+
+          # 替换所有包含 build/next/index 的行中的 process.execPath
+          sed -i '/build\/next\/index/ s/process\.execPath/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i '/build\/next\/index/ s/process\.execPath/'\''tsx'\''/g' build/gulpfile.vscode.ts
+
+          # 替换 "node" 为 "tsx"（仅限包含 build/next/index 的行）
+          sed -i '/build\/next\/index/ s/"node"/"tsx"/g' build/gulpfile.vscode.ts
+          sed -i "/build\/next\/index/ s/'node'/'tsx'/g" build/gulpfile.vscode.ts
+
+          # 验证替换结果
+          echo "=== After replacement ==="
+          grep -n "build/next/index" build/gulpfile.vscode.ts
 
           # 安装依赖
           echo "Installing dependencies..."
