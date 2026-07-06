@@ -72,11 +72,40 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 修复所有问题
+      # 7. 核心修复：将 build/next/index.ts 转换为 .js
       # ============================================================
-      - name: 🔧 Fix everything
+      - name: 🔧 Convert build/next/index.ts to JavaScript
         run: |
-          # 修复 extensions.ts
+          echo "Converting build/next/index.ts to JavaScript..."
+
+          # 先编译 TypeScript 文件
+          npx tsc build/next/index.ts --outDir build/next --target es2020 --module esnext --moduleResolution node --esModuleInterop
+
+          # 如果编译成功，修改 gulpfile 中的引用
+          if [ -f "build/next/index.js" ]; then
+            echo "✅ TypeScript compiled to JavaScript"
+
+            # 修改 gulpfile.vscode.ts 中的引用
+            sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
+
+            echo "✅ gulpfile.vscode.ts updated"
+          else
+            echo "❌ TypeScript compilation failed, trying alternative..."
+            # 备选：直接重命名并修改内容
+            cp build/next/index.ts build/next/index.js
+            # 修改 .js 文件中的 import 语句，将 .ts 扩展名替换为 .js
+            sed -i 's|\.ts"|.js"|g' build/next/index.js
+            sed -i 's|\.ts'"'"'|.js'"'"'|g' build/next/index.js
+            # 修改 gulpfile 中的引用
+            sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
+            echo "✅ Alternative fix applied"
+          fi
+
+      # ============================================================
+      # 8. 修复 extensions.ts
+      # ============================================================
+      - name: 🔧 Fix extensions.ts
+        run: |
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -119,21 +148,8 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-          # 查找并显示 gulpfile.vscode.ts 中包含 build/next/index.ts 的行
-          echo "Found lines with build/next/index.ts:"
-          grep -n "build/next/index.ts" build/gulpfile.vscode.ts || echo "Not found"
-
-          # 直接使用更精确的替换
-          # 替换 spawn("node", ["build/next/index.ts"] 为 spawn("tsx", ["build/next/index.ts"]
-          sed -i 's/spawn("node", \["build\/next\/index\.ts"\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
-
-          # 也替换 spawn(process.execPath, [..., "build/next/index.ts", ...]
-          sed -i 's/spawn(process\.execPath, \[[^]]*"build\/next\/index\.ts"[^]]*\]/spawn("tsx", ["build\/next\/index.ts"]/g' build/gulpfile.vscode.ts
-
-          echo "✅ Everything fixed"
-
       # ============================================================
-      # 8. 设置环境变量
+      # 9. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -143,7 +159,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 9. 构建
+      # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -160,7 +176,7 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 10. 验证
+      # 11. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -177,7 +193,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 创建 UOS 启动脚本
+      # 12. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -209,7 +225,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 12. 打包
+      # 13. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -221,7 +237,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 13. 上传
+      # 14. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
