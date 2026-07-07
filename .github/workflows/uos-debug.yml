@@ -149,34 +149,30 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】替换整个 copilot.ts 函数
+      # 9. 【核心】用 cat 覆盖 copilot.ts 文件
       # ============================================================
-      - name: 🔧 Replace copilot.ts function
+      - name: 🔧 Replace copilot.ts
         run: |
-          echo "Replacing prepareBuiltInCopilotExtensionShims in copilot.ts..."
+          echo "Replacing build/lib/copilot.ts..."
 
-          # 使用 Python 替换整个函数
-          python3 << 'PY_END'
-          import re
+          cat > build/lib/copilot.ts << 'EOF'
+          // Copilot extension support - DISABLED for UOS build
+          // This file is replaced to skip Copilot SDK checks
 
-          with open('build/lib/copilot.ts', 'r') as f:
-              content = f.read()
+          import { existsSync } from 'fs';
+          import { join } from 'path';
 
-          # 找到 prepareBuiltInCopilotExtensionShims 函数并替换为空实现
-          pattern = r'export async function prepareBuiltInCopilotExtensionShims\([^)]*\)\s*\{[^}]*\}'
-
-          replacement = '''export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
-              console.log('⚠️ Copilot extension shims preparation skipped');
+          export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
+              console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
               return;
-          }'''
+          }
 
-          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+          export function copyCopilotNativeDeps(productRoot: string): void {
+              console.log('⚠️ Copilot native deps copy skipped for UOS build');
+          }
+          EOF
 
-          with open('build/lib/copilot.ts', 'w') as f:
-              f.write(content)
-
-          print("✅ copilot.ts function replaced")
-          PY_END
+          echo "✅ build/lib/copilot.ts replaced"
 
       # ============================================================
       # 10. 设置环境变量
