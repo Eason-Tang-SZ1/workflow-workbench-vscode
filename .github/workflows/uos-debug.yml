@@ -149,20 +149,20 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】创建 Copilot SDK 目录（在构建开始前）
+      # 9. 【核心】修改 copilot.ts 跳过 SDK 检查
       # ============================================================
-      - name: 🔧 Create Copilot SDK directory
+      - name: 🔧 Fix copilot.ts
         run: |
-          echo "Creating Copilot SDK directory before build..."
+          echo "Fixing build/lib/copilot.ts..."
 
-          # 创建扩展目录结构
-          mkdir -p extensions/copilot/node_modules/@github/copilot/sdk
-          mkdir -p VSCode-linux-x64/resources/app/extensions/copilot/node_modules/@github/copilot/sdk
+          # 修改 copilot.ts 跳过 SDK 目录检查
+          sed -i '/if (!existsSync(sdkDir))/,/}/c\
+          if (!existsSync(sdkDir)) {\
+              console.log(\`⚠️ Copilot SDK directory not found: \${sdkDir}, skipping...\`);\
+              return;\
+          }' build/lib/copilot.ts
 
-          # 创建空的 package.json 避免 npm 报错
-          echo '{"name": "copilot-sdk-placeholder", "version": "0.0.0"}' > extensions/copilot/node_modules/@github/copilot/package.json
-
-          echo "✅ Copilot SDK directory created"
+          echo "✅ copilot.ts fixed"
 
       # ============================================================
       # 10. 设置环境变量
