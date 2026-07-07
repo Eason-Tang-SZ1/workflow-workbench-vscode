@@ -149,7 +149,7 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】替换 copilot.ts 添加 getCopilotExcludeFilter
+      # 9. 替换 copilot.ts
       # ============================================================
       - name: 🔧 Replace copilot.ts
         run: |
@@ -157,7 +157,6 @@ jobs:
 
           cat > build/lib/copilot.ts << 'EOF'
           // Copilot extension support - DISABLED for UOS build
-          // This file is replaced to skip Copilot SDK checks
 
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
               console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
@@ -204,19 +203,32 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 12. 验证
+      # 12. 【修复】验证 - 搜索所有可能的位置
       # ============================================================
       - name: 🔍 Verify
         run: |
-          if [ -d "./VSCode-linux-x64" ]; then
-            echo "✅ Build found"
-            echo "BUILD_DIR=./VSCode-linux-x64" >> $GITHUB_ENV
-          elif [ -d "./vscode/VSCode-linux-x64" ]; then
-            echo "✅ Build found in ./vscode/"
-            echo "BUILD_DIR=./vscode/VSCode-linux-x64" >> $GITHUB_ENV
-          else
-            echo "❌ Build not found!"
-            find . -name "VSCode-linux-x64" -type d 2>/dev/null || echo "Not found"
+          echo "Searching for build output..."
+
+          # 搜索所有可能的位置
+          find . -name "VSCode-linux-x64" -type d 2>/dev/null
+
+          # 检查常见位置
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "./out/VSCode-linux-x64"; do
+            if [ -d "$dir" ]; then
+              echo "✅ Build found at: $dir"
+              echo "BUILD_DIR=$dir" >> $GITHUB_ENV
+              ls -la "$dir" | head -20
+              break
+            fi
+          done
+
+          # 如果没有找到，尝试查找 code-oss 可执行文件
+          if [ -z "$BUILD_DIR" ]; then
+            echo "Searching for code-oss executable..."
+            find . -name "code-oss" -type f 2>/dev/null | head -5
+            find . -name "code" -type f 2>/dev/null | head -5
+            echo "Current directory contents:"
+            ls -la
             exit 1
           fi
 
@@ -224,6 +236,7 @@ jobs:
       # 13. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
+        if: env.BUILD_DIR != ''
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
@@ -256,6 +269,7 @@ jobs:
       # 14. 打包
       # ============================================================
       - name: 📦 Package
+        if: env.BUILD_DIR != ''
         run: |
           mkdir -p artifacts
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -268,6 +282,7 @@ jobs:
       # 15. 上传
       # ============================================================
       - name: 📤 Upload
+        if: env.BUILD_DIR != ''
         uses: actions/upload-artifact@v7
         with:
           name: custom-vscode-uos
