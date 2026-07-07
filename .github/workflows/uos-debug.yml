@@ -45,7 +45,20 @@ jobs:
             python3 git wget curl
 
       # ============================================================
-      # 4. 修复 preinstall.ts / postinstall.ts
+      # 4. 从 GitHub 重新下载原始的 gulpfile.vscode.ts
+      # ============================================================
+      - name: 🔄 Restore original gulpfile.vscode.ts
+        run: |
+          echo "Restoring original gulpfile.vscode.ts from GitHub..."
+
+          # 从原始仓库下载
+          wget -O build/gulpfile.vscode.ts \
+            https://raw.githubusercontent.com/microsoft/vscode/${{ github.event.inputs.branch }}/build/gulpfile.vscode.ts
+
+          echo "✅ Original gulpfile.vscode.ts restored"
+
+      # ============================================================
+      # 5. 修复 preinstall.ts / postinstall.ts
       # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -55,13 +68,13 @@ jobs:
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
       # ============================================================
-      # 5. 安装依赖
+      # 6. 安装依赖
       # ============================================================
       - name: 📦 Install dependencies
         run: npm install --legacy-peer-deps
 
       # ============================================================
-      # 6. 安装 tsx 和构建工具
+      # 7. 安装 tsx 和构建工具
       # ============================================================
       - name: 📦 Install build tools
         run: |
@@ -72,7 +85,7 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 修复 extensions.ts
+      # 8. 修复 extensions.ts
       # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
@@ -126,7 +139,7 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 修复 gulpfile.vscode.ts 中的 spawn 调用
+      # 9. 修复 gulpfile.vscode.ts 中的 spawn 调用
       # ============================================================
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -147,22 +160,6 @@ jobs:
 
           print("✅ spawn calls fixed")
           PY_END
-
-      # ============================================================
-      # 9. 【核心】跳过 Copilot 扩展
-      # ============================================================
-      - name: 🔧 Skip Copilot extension
-        run: |
-          echo "Skipping Copilot extension..."
-
-          # 创建空的 copilot 扩展目录，避免构建失败
-          mkdir -p VSCode-linux-x64/resources/app/extensions/copilot/node_modules/@github/copilot/sdk
-
-          # 在 gulpfile 中注释掉 Copilot 相关任务
-          sed -i '/prepareBuiltInCopilotExtensionShims/d' build/gulpfile.vscode.ts
-          sed -i '/copyCopilotNativeDeps/d' build/gulpfile.vscode.ts
-
-          echo "✅ Copilot extension skipped"
 
       # ============================================================
       # 10. 设置环境变量
