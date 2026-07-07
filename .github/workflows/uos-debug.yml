@@ -117,14 +117,16 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】编译整个 build 目录中的 TypeScript 文件
+      # 8. 【核心】按需编译：只编译 build/next 和 build/lib 中被引用的文件
       # ============================================================
-      - name: 🔧 Compile all build/*.ts files
+      - name: 🔧 Compile required TypeScript files
         run: |
-          echo "Compiling all TypeScript files in build/..."
+          echo "Compiling required TypeScript files..."
 
-          # 创建全局 tsconfig.json
-          cat > build/tsconfig.json << 'EOF'
+          # 只编译 build/next 目录
+          cd build/next
+
+          cat > tsconfig.json << 'EOF'
           {
             "compilerOptions": {
               "target": "ES2020",
@@ -142,36 +144,40 @@ jobs:
               "resolveJsonModule": true
             },
             "include": ["**/*.ts", "**/*.tsx"],
-            "exclude": ["**/*.d.ts", "node_modules", "**/node_modules"]
+            "exclude": ["**/*.d.ts", "node_modules"]
           }
           EOF
 
-          cd build
+          npx tsc --noEmit false || true
 
-          # 编译所有 .ts 文件（排除 .d.ts）
-          npx tsc --project tsconfig.json || true
-
-          # 修复所有 .js 文件中的导入路径
-          echo "Fixing import paths in .js files..."
-          find . -name "*.js" -type f | while read -r js_file; do
-            # 将 from './xxx.ts' 替换为 from './xxx.js'
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$js_file"
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$js_file"
-            # 处理从其他目录导入的情况
-            sed -i "s/from '\(.*\)\.ts'/from '\1.js'/g" "$js_file"
-            sed -i 's/from "\(.*\)\.ts"/from "\1.js"/g' "$js_file"
+          # 修复 .js 文件中的导入路径
+          find . -name "*.js" -type f | while read -r f; do
+            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$f"
+            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$f"
           done
 
           # 删除 .ts 文件（保留 .d.ts）
           find . -name "*.ts" -type f ! -name "*.d.ts" -delete
 
-          cd ..
+          cd ../..
+
+          # 单独编译 build/lib/git.ts（如果存在）
+          if [ -f "build/lib/git.ts" ]; then
+            echo "Compiling build/lib/git.ts..."
+            cd build/lib
+            npx tsc git.ts --target ES2020 --module ESNext --moduleResolution node --esModuleInterop --outDir . || true
+            # 修复导入路径
+            if [ -f "git.js" ]; then
+              sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" git.js
+              rm -f git.ts
+            fi
+            cd ../..
+          fi
 
           # 更新 gulpfile 中的引用
           sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
-          sed -i 's|build/next/index\.ts|build/next/index.js|g' build/gulpfile.vscode.ts
 
-          echo "✅ All TypeScript files in build/ compiled"
+          echo "✅ Required TypeScript files compiled"
 
       # ============================================================
       # 9. 设置环境变量
