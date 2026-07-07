@@ -126,47 +126,46 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 修复 gulpfile.vscode.ts 中的 spawn 调用和导入
+      # 8. 修复 gulpfile.vscode.ts 中的 spawn 调用
       # ============================================================
-      - name: 🔧 Fix gulpfile
+      - name: 🔧 Fix gulpfile spawn calls
         run: |
-          echo "Fixing gulpfile.vscode.ts..."
+          echo "Fixing gulpfile.vscode.ts spawn calls..."
 
-          # 修复 spawn 调用
           python3 << 'PY_END'
           import re
 
           with open('build/gulpfile.vscode.ts', 'r') as f:
               content = f.read()
 
-          # 替换 spawn 调用
           content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
           content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
 
-          # 修复缺失的模块路径 - 将 './lib/gulp/facade.ts' 改为正确的路径
-          content = content.replace("'./lib/gulp/facade.ts'", "'./lib/gulp/facade.js'")
-          content = content.replace('"./lib/gulp/facade.ts"', '"./lib/gulp/facade.js"')
-
           with open('build/gulpfile.vscode.ts', 'w') as f:
               f.write(content)
 
-          print("✅ gulpfile fixed")
+          print("✅ spawn calls fixed")
           PY_END
 
-          # 创建缺失的 facade.ts 文件
-          echo "Creating missing facade.ts..."
-          mkdir -p build/lib/gulp
-          cat > build/lib/gulp/facade.ts << 'EOF'
-          // 空实现，用于避免导入错误
-          export const facade = {};
-          export default facade;
-          EOF
+      # ============================================================
+      # 9. 【核心】创建 Copilot SDK 目录（在构建开始前）
+      # ============================================================
+      - name: 🔧 Create Copilot SDK directory
+        run: |
+          echo "Creating Copilot SDK directory before build..."
 
-          echo "✅ gulpfile fixed"
+          # 创建扩展目录结构
+          mkdir -p extensions/copilot/node_modules/@github/copilot/sdk
+          mkdir -p VSCode-linux-x64/resources/app/extensions/copilot/node_modules/@github/copilot/sdk
+
+          # 创建空的 package.json 避免 npm 报错
+          echo '{"name": "copilot-sdk-placeholder", "version": "0.0.0"}' > extensions/copilot/node_modules/@github/copilot/package.json
+
+          echo "✅ Copilot SDK directory created"
 
       # ============================================================
-      # 9. 设置环境变量
+      # 10. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -176,7 +175,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 10. 构建
+      # 11. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -193,7 +192,7 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 11. 验证
+      # 12. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -210,7 +209,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 13. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -242,7 +241,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -254,7 +253,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 15. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
