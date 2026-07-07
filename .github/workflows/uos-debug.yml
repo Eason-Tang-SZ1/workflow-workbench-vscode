@@ -72,22 +72,26 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 修复 extensions.ts
+      # 7. 【核心】修复 extensions.ts - 添加所有缺失的导出
       # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
+
           function emptyStream(): Stream {
             const s = new Stream.Readable();
             s._read = () => s.push(null);
             return s;
           }
+
+          // 所有扩展相关函数 - 返回空流或空数组
           export function isWebExtension(): boolean { return false; }
           export function getExtensionStream(): Stream { return emptyStream(); }
           export function getExtensionDownloadStream(): Stream { return emptyStream(); }
           export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
           export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
           export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
           export function packageExtensionsStream(): Stream { return emptyStream(); }
@@ -95,35 +99,42 @@ jobs:
           export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
           export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
           export function fromMarketplace(): any[] { return empty; }
-          export async function fetchUrls(urls: string[], options: any): Promise<void> { return Promise.resolve(); }
+
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("⚠️ fetchUrls: disabled");
+            return Promise.resolve();
+          }
+
           export function buildExtensionMedia(): void {}
           export function compileExtensionMedia(): void {}
           export function buildExtensionMediaTask(done: any): void { done(); }
+
           export const builtInExtensions = empty;
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions = empty;
           export const shouldDownloadWebBuiltInExtensions = false;
           EOF
 
+          # 修复 builtInExtensions.ts
           echo 'export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
 
+          # 修复 fetch.ts
           echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetch disabled");
+            console.log("⚠️ fetchUrls: disabled");
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】直接修改 gulpfile 中的 spawn 调用
+      # 8. 修复 gulpfile.vscode.ts 中的 spawn 调用
       # ============================================================
       - name: 🔧 Fix gulpfile spawn calls
         run: |
           echo "Fixing gulpfile.vscode.ts spawn calls..."
 
-          # 使用 Python 脚本替换 spawn 调用中的 node 为 tsx
           python3 << 'PY_END'
           import re
 
@@ -131,7 +142,6 @@ jobs:
               content = f.read()
 
           # 替换所有 spawn 调用中的 'node' 为 'tsx'
-          # 匹配 spawn('node', ...) 或 spawn("node", ...)
           content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
           content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
@@ -141,8 +151,6 @@ jobs:
 
           print("✅ spawn calls fixed")
           PY_END
-
-          echo "✅ gulpfile.vscode.ts fixed"
 
       # ============================================================
       # 9. 设置环境变量
@@ -167,7 +175,6 @@ jobs:
 
           echo "Start: $(date)"
 
-          # 使用 tsx 执行 gulp
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
