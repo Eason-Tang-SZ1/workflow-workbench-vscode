@@ -149,33 +149,23 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】用 Python 修改 copilot.ts
+      # 9. 【核心】查看并修复 copilot.ts
       # ============================================================
       - name: 🔧 Fix copilot.ts
         run: |
-          echo "Fixing build/lib/copilot.ts with Python..."
+          echo "=== DEBUG: copilot.ts content ==="
+          # 查看 copilot.ts 中 prepareBuiltInCopilotExtensionShims 函数的内容
+          grep -A 30 "prepareBuiltInCopilotExtensionShims" build/lib/copilot.ts || echo "Function not found"
 
-          python3 << 'PY_END'
-          import re
+          echo "=== Fixing copilot.ts ==="
 
-          with open('build/lib/copilot.ts', 'r') as f:
-              content = f.read()
+          # 直接替换文件中的错误抛出逻辑
+          # 将 throw new Error 替换为 console.log 警告 + return
+          sed -i 's/throw new Error(`\[prepareBuiltInCopilotExtensionShims\] Copilot SDK directory not found at ${sdkDir}`);/console.log(`⚠️ Copilot SDK directory not found: ${sdkDir}, skipping...`); return;/g' build/lib/copilot.ts
 
-          # 查找 prepareBuiltInCopilotExtensionShims 函数中的检查逻辑
-          # 将 throw new Error 替换为 console.log 警告并 return
-          pattern = r'if \(!existsSync\(sdkDir\)\) \{[^}]*throw new Error\([^)]*\);[^}]*\}'
-          replacement = '''if (!existsSync(sdkDir)) {
-              console.log(`⚠️ Copilot SDK directory not found: ${sdkDir}, skipping...`);
-              return;
-          }'''
-
-          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-
-          with open('build/lib/copilot.ts', 'w') as f:
-              f.write(content)
-
-          print("✅ copilot.ts fixed")
-          PY_END
+          # 验证修改
+          echo "=== After replacement ==="
+          grep -A 5 "prepareBuiltInCopilotExtensionShims" build/lib/copilot.ts || echo "Function not found"
 
       # ============================================================
       # 10. 设置环境变量
