@@ -149,7 +149,7 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】用 cat 覆盖 copilot.ts 文件
+      # 9. 【核心】替换 copilot.ts 添加 getCopilotExcludeFilter
       # ============================================================
       - name: 🔧 Replace copilot.ts
         run: |
@@ -159,9 +159,6 @@ jobs:
           // Copilot extension support - DISABLED for UOS build
           // This file is replaced to skip Copilot SDK checks
 
-          import { existsSync } from 'fs';
-          import { join } from 'path';
-
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
               console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
               return;
@@ -169,6 +166,11 @@ jobs:
 
           export function copyCopilotNativeDeps(productRoot: string): void {
               console.log('⚠️ Copilot native deps copy skipped for UOS build');
+          }
+
+          export function getCopilotExcludeFilter(): any {
+              console.log('⚠️ getCopilotExcludeFilter returning empty filter');
+              return function() { return false; };
           }
           EOF
 
