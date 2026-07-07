@@ -203,33 +203,49 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 12. 【修复】验证 - 搜索所有可能的位置
+      # 12. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
           echo "Searching for build output..."
 
-          # 搜索所有可能的位置
-          find . -name "VSCode-linux-x64" -type d 2>/dev/null
-
-          # 检查常见位置
+          BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "./out/VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
-              echo "✅ Build found at: $dir"
-              echo "BUILD_DIR=$dir" >> $GITHUB_ENV
-              ls -la "$dir" | head -20
+              BUILD_DIR="$dir"
+              echo "✅ Build found at: $BUILD_DIR"
               break
             fi
           done
 
-          # 如果没有找到，尝试查找 code-oss 可执行文件
           if [ -z "$BUILD_DIR" ]; then
-            echo "Searching for code-oss executable..."
-            find . -name "code-oss" -type f 2>/dev/null | head -5
-            find . -name "code" -type f 2>/dev/null | head -5
+            echo "❌ Build not found!"
             echo "Current directory contents:"
             ls -la
             exit 1
+          fi
+
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+
+          echo "Directory contents:"
+          ls -la "$BUILD_DIR" | head -30
+
+          # 查找可执行文件
+          EXEC_NAME=""
+          for name in tscode code-oss code; do
+            if [ -f "$BUILD_DIR/$name" ]; then
+              EXEC_NAME="$name"
+              echo "✅ Executable found: $EXEC_NAME"
+              break
+            fi
+          done
+
+          if [ -n "$EXEC_NAME" ]; then
+            echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
+          else
+            echo "⚠️ No executable found, but build directory exists"
+            echo "Searching for any executable:"
+            find "$BUILD_DIR" -maxdepth 1 -type f -executable 2>/dev/null | head -5
           fi
 
       # ============================================================
@@ -239,7 +255,9 @@ jobs:
         if: env.BUILD_DIR != ''
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          EXEC_NAME="${EXEC_NAME:-tscode}"
           cd "$BUILD_DIR"
+
           cat > start-vscode.sh << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -250,18 +268,28 @@ jobs:
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
           export DISPLAY=:0
-          if [ -f "$SCRIPT_DIR/code-oss" ]; then
+
+          if [ -f "$SCRIPT_DIR/tscode" ]; then
+              EXEC="$SCRIPT_DIR/tscode"
+          elif [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
           elif [ -f "$SCRIPT_DIR/code" ]; then
               EXEC="$SCRIPT_DIR/code"
           else
-              echo "❌ Executable not found!"
+              echo "❌ VSCode executable not found!"
               exit 1
           fi
+
           echo "=== Custom VSCode UOS ==="
           echo "Version: $($EXEC --version | head -1)"
+
+          if grep -q "UOS" /etc/os-release 2>/dev/null; then
+              echo "✅ Detected UOS system"
+          fi
+
           exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           EOF
+
           chmod +x start-vscode.sh
           echo "✅ start-vscode.sh created"
 
@@ -273,9 +301,15 @@ jobs:
         run: |
           mkdir -p artifacts
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
           chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
+
           tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
-            --preserve-permissions "$BUILD_DIR"
+            --preserve-permissions \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
+
+          echo "✅ Package created:"
           ls -lh artifacts/
 
       # ============================================================
@@ -288,3 +322,27 @@ jobs:
           name: custom-vscode-uos
           path: artifacts/custom-vscode-uos-*.tar.gz
           retention-days: 30
+
+      # ============================================================
+      # 16. 构建摘要
+      # ============================================================
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Branch: ${{ github.event.inputs.branch }}"
+          if [ -n "$BUILD_DIR" ]; then
+            echo "📁 Build directory: $BUILD_DIR"
+          fi
+          if [ -n "$EXEC_NAME" ]; then
+            echo "📌 Executable: $EXEC_NAME"
+          fi
+          echo "=========================================="
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "🎉 Build completed successfully!"
+            ls -lh artifacts/ 2>/dev/null || echo "No artifacts yet"
+          fi
+          echo "=========================================="
