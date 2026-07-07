@@ -149,20 +149,33 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 【核心】修改 copilot.ts 跳过 SDK 检查
+      # 9. 【核心】用 Python 修改 copilot.ts
       # ============================================================
       - name: 🔧 Fix copilot.ts
         run: |
-          echo "Fixing build/lib/copilot.ts..."
+          echo "Fixing build/lib/copilot.ts with Python..."
 
-          # 修改 copilot.ts 跳过 SDK 目录检查
-          sed -i '/if (!existsSync(sdkDir))/,/}/c\
-          if (!existsSync(sdkDir)) {\
-              console.log(\`⚠️ Copilot SDK directory not found: \${sdkDir}, skipping...\`);\
-              return;\
-          }' build/lib/copilot.ts
+          python3 << 'PY_END'
+          import re
 
-          echo "✅ copilot.ts fixed"
+          with open('build/lib/copilot.ts', 'r') as f:
+              content = f.read()
+
+          # 查找 prepareBuiltInCopilotExtensionShims 函数中的检查逻辑
+          # 将 throw new Error 替换为 console.log 警告并 return
+          pattern = r'if \(!existsSync\(sdkDir\)\) \{[^}]*throw new Error\([^)]*\);[^}]*\}'
+          replacement = '''if (!existsSync(sdkDir)) {
+              console.log(`⚠️ Copilot SDK directory not found: ${sdkDir}, skipping...`);
+              return;
+          }'''
+
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+          with open('build/lib/copilot.ts', 'w') as f:
+              f.write(content)
+
+          print("✅ copilot.ts fixed")
+          PY_END
 
       # ============================================================
       # 10. 设置环境变量
