@@ -117,23 +117,32 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】将 node 命令替换为 tsx
+      # 8. 【核心】直接修改 gulpfile 中的 spawn 调用
       # ============================================================
-      - name: 🔧 Replace node with tsx
+      - name: 🔧 Fix gulpfile spawn calls
         run: |
-          echo "Replacing node with tsx for build..."
+          echo "Fixing gulpfile.vscode.ts spawn calls..."
 
-          # 创建 node 包装脚本
-          sudo bash -c 'cat > /usr/local/bin/node << "NODE_WRAPPER"
-          #!/bin/bash
-          exec tsx "$@"
-          NODE_WRAPPER'
-          sudo chmod +x /usr/local/bin/node
+          # 使用 Python 脚本替换 spawn 调用中的 node 为 tsx
+          python3 << 'PY_END'
+          import re
 
-          # 验证
-          export PATH="/usr/local/bin:$PATH"
-          echo "node version: $(which node)"
-          echo "node --version: $(node --version)"
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+
+          # 替换所有 spawn 调用中的 'node' 为 'tsx'
+          # 匹配 spawn('node', ...) 或 spawn("node", ...)
+          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
+          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
+          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
+
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
+
+          print("✅ spawn calls fixed")
+          PY_END
+
+          echo "✅ gulpfile.vscode.ts fixed"
 
       # ============================================================
       # 9. 设置环境变量
@@ -144,14 +153,12 @@ jobs:
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
-          echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
       # ============================================================
       # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
-          export PATH="/usr/local/bin:$PATH"
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -159,10 +166,9 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start: $(date)"
-          echo "Using node: $(which node)"
 
-          # 直接使用 node（实际是 tsx）
-          npx gulp vscode-linux-x64-min --no-color
+          # 使用 tsx 执行 gulp
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
 
