@@ -117,16 +117,14 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 编译 build/next 并修复导入路径
+      # 8. 【核心】编译整个 build 目录中的 TypeScript 文件
       # ============================================================
-      - name: 🔧 Compile and fix build/next
+      - name: 🔧 Compile all build/*.ts files
         run: |
-          echo "Compiling build/next/*.ts with tsc..."
+          echo "Compiling all TypeScript files in build/..."
 
-          cd build/next
-
-          # 创建 tsconfig.json
-          cat > tsconfig.json << 'EOF'
+          # 创建全局 tsconfig.json
+          cat > build/tsconfig.json << 'EOF'
           {
             "compilerOptions": {
               "target": "ES2020",
@@ -144,20 +142,22 @@ jobs:
               "resolveJsonModule": true
             },
             "include": ["**/*.ts", "**/*.tsx"],
-            "exclude": ["**/*.d.ts", "node_modules"]
+            "exclude": ["**/*.d.ts", "node_modules", "**/node_modules"]
           }
           EOF
 
-          # 编译
-          npx tsc || true
+          cd build
 
-          # 【关键】修复所有 .js 文件中的 .ts 导入为 .js
+          # 编译所有 .ts 文件（排除 .d.ts）
+          npx tsc --project tsconfig.json || true
+
+          # 修复所有 .js 文件中的导入路径
           echo "Fixing import paths in .js files..."
           find . -name "*.js" -type f | while read -r js_file; do
             # 将 from './xxx.ts' 替换为 from './xxx.js'
             sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$js_file"
             sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$js_file"
-            # 也处理从其他目录导入的情况
+            # 处理从其他目录导入的情况
             sed -i "s/from '\(.*\)\.ts'/from '\1.js'/g" "$js_file"
             sed -i 's/from "\(.*\)\.ts"/from "\1.js"/g' "$js_file"
           done
@@ -165,12 +165,13 @@ jobs:
           # 删除 .ts 文件（保留 .d.ts）
           find . -name "*.ts" -type f ! -name "*.d.ts" -delete
 
-          cd ../..
+          cd ..
 
           # 更新 gulpfile 中的引用
           sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
+          sed -i 's|build/next/index\.ts|build/next/index.js|g' build/gulpfile.vscode.ts
 
-          echo "✅ build/next compiled and fixed"
+          echo "✅ All TypeScript files in build/ compiled"
 
       # ============================================================
       # 9. 设置环境变量
