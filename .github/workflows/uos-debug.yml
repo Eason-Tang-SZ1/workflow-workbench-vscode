@@ -72,7 +72,7 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 7. 【核心】修复 extensions.ts - 添加所有缺失的导出
+      # 7. 修复 extensions.ts
       # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
@@ -86,7 +86,6 @@ jobs:
             return s;
           }
 
-          // 所有扩展相关函数 - 返回空流或空数组
           export function isWebExtension(): boolean { return false; }
           export function getExtensionStream(): Stream { return emptyStream(); }
           export function getExtensionDownloadStream(): Stream { return emptyStream(); }
@@ -115,13 +114,11 @@ jobs:
           export const shouldDownloadWebBuiltInExtensions = false;
           EOF
 
-          # 修复 builtInExtensions.ts
           echo 'export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
 
-          # 修复 fetch.ts
           echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
             console.log("⚠️ fetchUrls: disabled");
@@ -141,7 +138,6 @@ jobs:
           with open('build/gulpfile.vscode.ts', 'r') as f:
               content = f.read()
 
-          # 替换所有 spawn 调用中的 'node' 为 'tsx'
           content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
           content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
@@ -153,7 +149,23 @@ jobs:
           PY_END
 
       # ============================================================
-      # 9. 设置环境变量
+      # 9. 【核心】跳过 Copilot 扩展
+      # ============================================================
+      - name: 🔧 Skip Copilot extension
+        run: |
+          echo "Skipping Copilot extension..."
+
+          # 创建空的 copilot 扩展目录，避免构建失败
+          mkdir -p VSCode-linux-x64/resources/app/extensions/copilot/node_modules/@github/copilot/sdk
+
+          # 在 gulpfile 中注释掉 Copilot 相关任务
+          sed -i '/prepareBuiltInCopilotExtensionShims/d' build/gulpfile.vscode.ts
+          sed -i '/copyCopilotNativeDeps/d' build/gulpfile.vscode.ts
+
+          echo "✅ Copilot extension skipped"
+
+      # ============================================================
+      # 10. 设置环境变量
       # ============================================================
       - name: ⚙️ Set env
         run: |
@@ -163,7 +175,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 10. 构建
+      # 11. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -180,7 +192,7 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 11. 验证
+      # 12. 验证
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -197,7 +209,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 创建 UOS 启动脚本
+      # 13. 创建 UOS 启动脚本
       # ============================================================
       - name: 🚀 Create startup script
         run: |
@@ -229,7 +241,7 @@ jobs:
           echo "✅ start-vscode.sh created"
 
       # ============================================================
-      # 13. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -241,7 +253,7 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # 14. 上传
+      # 15. 上传
       # ============================================================
       - name: 📤 Upload
         uses: actions/upload-artifact@v7
