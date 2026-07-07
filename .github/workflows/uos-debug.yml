@@ -65,7 +65,7 @@ jobs:
       # ============================================================
       - name: 📦 Install build tools
         run: |
-          npm install -g tsx typescript
+          npm install -g tsx
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
@@ -117,67 +117,23 @@ jobs:
           }' > build/lib/fetch.ts
 
       # ============================================================
-      # 8. 【核心】按需编译：只编译 build/next 和 build/lib 中被引用的文件
+      # 8. 【核心】将 node 命令替换为 tsx
       # ============================================================
-      - name: 🔧 Compile required TypeScript files
+      - name: 🔧 Replace node with tsx
         run: |
-          echo "Compiling required TypeScript files..."
+          echo "Replacing node with tsx for build..."
 
-          # 只编译 build/next 目录
-          cd build/next
+          # 创建 node 包装脚本
+          sudo bash -c 'cat > /usr/local/bin/node << "NODE_WRAPPER"
+          #!/bin/bash
+          exec tsx "$@"
+          NODE_WRAPPER'
+          sudo chmod +x /usr/local/bin/node
 
-          cat > tsconfig.json << 'EOF'
-          {
-            "compilerOptions": {
-              "target": "ES2020",
-              "module": "ESNext",
-              "moduleResolution": "node",
-              "ignoreDeprecations": "6.0",
-              "esModuleInterop": true,
-              "allowSyntheticDefaultImports": true,
-              "strict": false,
-              "skipLibCheck": true,
-              "outDir": ".",
-              "rootDir": ".",
-              "allowJs": true,
-              "declaration": false,
-              "resolveJsonModule": true
-            },
-            "include": ["**/*.ts", "**/*.tsx"],
-            "exclude": ["**/*.d.ts", "node_modules"]
-          }
-          EOF
-
-          npx tsc --noEmit false || true
-
-          # 修复 .js 文件中的导入路径
-          find . -name "*.js" -type f | while read -r f; do
-            sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" "$f"
-            sed -i 's/from "\.\/\(.*\)\.ts"/from ".\/\1.js"/g' "$f"
-          done
-
-          # 删除 .ts 文件（保留 .d.ts）
-          find . -name "*.ts" -type f ! -name "*.d.ts" -delete
-
-          cd ../..
-
-          # 单独编译 build/lib/git.ts（如果存在）
-          if [ -f "build/lib/git.ts" ]; then
-            echo "Compiling build/lib/git.ts..."
-            cd build/lib
-            npx tsc git.ts --target ES2020 --module ESNext --moduleResolution node --esModuleInterop --outDir . || true
-            # 修复导入路径
-            if [ -f "git.js" ]; then
-              sed -i "s/from '\.\/\(.*\)\.ts'/from '.\/\1.js'/g" git.js
-              rm -f git.ts
-            fi
-            cd ../..
-          fi
-
-          # 更新 gulpfile 中的引用
-          sed -i 's|build/next/index.ts|build/next/index.js|g' build/gulpfile.vscode.ts
-
-          echo "✅ Required TypeScript files compiled"
+          # 验证
+          export PATH="/usr/local/bin:$PATH"
+          echo "node version: $(which node)"
+          echo "node --version: $(node --version)"
 
       # ============================================================
       # 9. 设置环境变量
@@ -188,12 +144,14 @@ jobs:
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
       # ============================================================
       # 10. 构建
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
+          export PATH="/usr/local/bin:$PATH"
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -201,8 +159,10 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
           echo "Start: $(date)"
+          echo "Using node: $(which node)"
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          # 直接使用 node（实际是 tsx）
+          npx gulp vscode-linux-x64-min --no-color
 
           echo "Done: $(date)"
 
