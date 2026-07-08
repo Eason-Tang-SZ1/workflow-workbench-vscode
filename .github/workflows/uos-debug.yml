@@ -202,7 +202,6 @@ jobs:
           fi
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          # 确定可执行文件名称
           EXEC_NAME=""
           for name in tscode code-oss code; do
             if [ -f "$BUILD_DIR/$name" ] || [ -f "$BUILD_DIR/bin/$name" ]; then
@@ -235,13 +234,11 @@ jobs:
           mkdir -p $DEB_ROOT/usr/share/applications
           mkdir -p $DEB_ROOT/usr/share/icons/hicolor/512x512/apps
 
-          # ============================================================
           # 复制 VSCode 文件
-          # ============================================================
           cp -r "$BUILD_DIR"/* $DEB_ROOT/opt/vscode-uos/
 
           # ============================================================
-          # 创建启动脚本（放置在 /opt/vscode-uos/ 中）
+          # 创建启动脚本
           # ============================================================
           cat > $DEB_ROOT/opt/vscode-uos/start-vscode.sh << 'EOF'
           #!/bin/bash
@@ -256,7 +253,6 @@ jobs:
           export QT_QPA_PLATFORM=xcb
           export DISPLAY=:0
 
-          # 查找可执行文件
           if [ -f "$SCRIPT_DIR/bin/$EXEC_NAME" ]; then
               EXEC="$SCRIPT_DIR/bin/$EXEC_NAME"
           elif [ -f "$SCRIPT_DIR/$EXEC_NAME" ]; then
@@ -269,7 +265,6 @@ jobs:
           echo "=== Custom VSCode UOS ==="
           $EXEC --version 2>/dev/null | head -1
 
-          # 检查沙箱权限
           SANDBOX="$SCRIPT_DIR/chrome-sandbox"
           if [ -f "$SANDBOX" ] && [ "$(stat -c %u "$SANDBOX" 2>/dev/null)" = "0" ] && [ "$(stat -c %a "$SANDBOX" 2>/dev/null)" = "4755" ]; then
               exec "$EXEC" "$@"
@@ -277,7 +272,7 @@ jobs:
               exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           fi
           EOF
-          chmod +x $DEB_ROOT/opt/vscode-uos/start-vscode.sh
+          chmod 755 $DEB_ROOT/opt/vscode-uos/start-vscode.sh
 
           # ============================================================
           # 创建 .desktop 文件
@@ -298,9 +293,11 @@ jobs:
           EOF
 
           # ============================================================
-          # 创建命令行软链接
+          # 创建命令行软链接（先 cd 到目录再创建）
           # ============================================================
-          ln -s /opt/vscode-uos/start-vscode.sh $DEB_ROOT/usr/bin/vscode-uos
+          cd $DEB_ROOT/usr/bin
+          ln -s ../../opt/vscode-uos/start-vscode.sh vscode-uos
+          cd ../../..
 
           # ============================================================
           # 复制图标
@@ -327,7 +324,7 @@ jobs:
           EOF
 
           # ============================================================
-          # 创建 DEBIAN/postinst 脚本（关键：以 root 权限运行）
+          # 创建 DEBIAN/postinst 脚本（以 root 权限运行）
           # ============================================================
           cat > $DEB_ROOT/DEBIAN/postinst << 'EOF'
           #!/bin/bash
@@ -337,7 +334,6 @@ jobs:
           echo "🔧 Configuring VSCode for UOS..."
           echo "=========================================="
 
-          # 1. 修复 chrome-sandbox 权限
           if [ -f "/opt/vscode-uos/chrome-sandbox" ]; then
               echo "🔧 Setting chrome-sandbox permissions..."
               chown root:root /opt/vscode-uos/chrome-sandbox
@@ -345,15 +341,9 @@ jobs:
               echo "✅ chrome-sandbox configured (root:root 4755)"
           fi
 
-          # 2. 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/ 2>/dev/null || true
               echo "✅ Desktop database updated"
-          fi
-
-          # 3. 创建用户桌面快捷方式（可选）
-          if [ -d "/usr/share/applications" ]; then
-              cp /usr/share/applications/vscode-uos.desktop /usr/share/applications/vscode-uos.desktop 2>/dev/null || true
           fi
 
           echo "=========================================="
@@ -369,7 +359,7 @@ jobs:
           chmod 755 $DEB_ROOT/DEBIAN/postinst
 
           # ============================================================
-          # 创建 DEBIAN/prerm 脚本（卸载前执行）
+          # 创建 DEBIAN/prerm 脚本
           # ============================================================
           cat > $DEB_ROOT/DEBIAN/prerm << 'EOF'
           #!/bin/bash
@@ -380,7 +370,7 @@ jobs:
           chmod 755 $DEB_ROOT/DEBIAN/prerm
 
           # ============================================================
-          # 创建 DEBIAN/postrm 脚本（卸载后执行）
+          # 创建 DEBIAN/postrm 脚本
           # ============================================================
           cat > $DEB_ROOT/DEBIAN/postrm << 'EOF'
           #!/bin/bash
@@ -400,23 +390,22 @@ jobs:
         run: |
           echo "Building .deb package..."
 
-          # 确保所有文件权限正确
-          find vscode-uos -type f -exec chmod 644 {} \;
+          # 设置普通文件权限（不处理软链接）
+          find vscode-uos -type f -not -name "*.so" -exec chmod 644 {} \;
           chmod 755 vscode-uos/DEBIAN/postinst
           chmod 755 vscode-uos/DEBIAN/prerm
           chmod 755 vscode-uos/DEBIAN/postrm
           chmod 755 vscode-uos/opt/vscode-uos/start-vscode.sh
-          chmod 755 vscode-uos/usr/bin/vscode-uos
           chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
+          chmod 755 vscode-uos/opt/vscode-uos/tscode 2>/dev/null || true
+          # 不对软链接执行 chmod（跳过 usr/bin 目录）
 
           # 构建 .deb
           dpkg-deb --build vscode-uos
 
-          # 验证 .deb 文件
           if [ -f "vscode-uos.deb" ]; then
             echo "✅ .deb package created:"
             ls -lh vscode-uos.deb
-            # 显示包信息
             dpkg-deb --info vscode-uos.deb
           else
             echo "❌ Failed to build .deb package!"
@@ -426,7 +415,7 @@ jobs:
       # ============================================================
       # 15. 上传 .deb 包
       # ============================================================
-      - name: 📤 Upload artifacts
+      - name: 📤 Upload .deb
         uses: actions/upload-artifact@v7
         with:
           name: vscode-uos-deb
@@ -434,14 +423,13 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 16. 也打包 .tar.gz（备选）
+      # 16. 打包 .tar.gz（备选）
       # ============================================================
-      - name: 📦 Package tar.gz (alternative)
+      - name: 📦 Package tar.gz
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 在 tar.gz 中也包含 install.sh
           cd "$(dirname "$BUILD_DIR")"
           cat > "$(basename "$BUILD_DIR")/install.sh" << 'EOF'
           #!/bin/bash
@@ -466,6 +454,9 @@ jobs:
           echo "✅ tar.gz package created:"
           ls -lh vscode-uos-*.tar.gz
 
+      # ============================================================
+      # 17. 上传 .tar.gz
+      # ============================================================
       - name: 📤 Upload tar.gz
         uses: actions/upload-artifact@v7
         with:
@@ -474,7 +465,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 17. 构建摘要
+      # 18. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
@@ -488,7 +479,7 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             echo ""
-            echo "📥 Download:"
+            echo "📥 Download artifacts:"
             echo "  - vscode-uos.deb (recommended)"
             echo "  - vscode-uos-*.tar.gz (portable)"
             echo ""
