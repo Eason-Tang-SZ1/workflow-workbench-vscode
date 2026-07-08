@@ -382,7 +382,7 @@ jobs:
           echo "✅ .deb package structure created"
 
       # ============================================================
-      # 14. 【关键】构建 .deb 包 - 使用 gzip 压缩
+      # 14. 构建 .deb 包（使用 -Zgzip 强制 gzip 压缩）
       # ============================================================
       - name: 🔨 Build .deb package
         run: |
@@ -397,14 +397,15 @@ jobs:
           chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
           chmod 755 vscode-uos/opt/vscode-uos/tscode 2>/dev/null || true
 
-          # 【关键】强制使用 gzip 压缩（兼容 UOS 旧版 dpkg）
-          dpkg-deb --build --compression=gzip vscode-uos
+          # 【关键】使用 -Zgzip 强制 gzip 压缩（兼容旧版 dpkg-deb）
+          dpkg-deb -Zgzip --build vscode-uos
 
           if [ -f "vscode-uos.deb" ]; then
             echo "✅ .deb package created:"
             ls -lh vscode-uos.deb
-            # 验证压缩格式
-            dpkg-deb --info vscode-uos.deb
+            echo ""
+            echo "Package contents (compression format):"
+            ar t vscode-uos.deb
           else
             echo "❌ Failed to build .deb package!"
             exit 1
