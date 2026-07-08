@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS
+name: Build Custom VSCode for UOS (.deb Package)
 
 on:
   workflow_dispatch:
@@ -7,6 +7,10 @@ on:
         description: 'Branch to build'
         required: true
         default: 'main'
+      version:
+        description: 'Package version'
+        required: false
+        default: '1.116.0'
 
 jobs:
   build:
@@ -79,13 +83,11 @@ jobs:
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
-
           function emptyStream(): Stream {
             const s = new Stream.Readable();
             s._read = () => s.push(null);
             return s;
           }
-
           export function isWebExtension(): boolean { return false; }
           export function getExtensionStream(): Stream { return emptyStream(); }
           export function getExtensionDownloadStream(): Stream { return emptyStream(); }
@@ -98,16 +100,13 @@ jobs:
           export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
           export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
           export function fromMarketplace(): any[] { return empty; }
-
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
             console.log("⚠️ fetchUrls: disabled");
             return Promise.resolve();
           }
-
           export function buildExtensionMedia(): void {}
           export function compileExtensionMedia(): void {}
           export function buildExtensionMediaTask(done: any): void { done(); }
-
           export const builtInExtensions = empty;
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions = empty;
@@ -130,21 +129,15 @@ jobs:
       # ============================================================
       - name: 🔧 Fix gulpfile spawn calls
         run: |
-          echo "Fixing gulpfile.vscode.ts spawn calls..."
-
           python3 << 'PY_END'
           import re
-
           with open('build/gulpfile.vscode.ts', 'r') as f:
               content = f.read()
-
           content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
           content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
-
           with open('build/gulpfile.vscode.ts', 'w') as f:
               f.write(content)
-
           print("✅ spawn calls fixed")
           PY_END
 
@@ -153,27 +146,18 @@ jobs:
       # ============================================================
       - name: 🔧 Replace copilot.ts
         run: |
-          echo "Replacing build/lib/copilot.ts..."
-
           cat > build/lib/copilot.ts << 'EOF'
-          // Copilot extension support - DISABLED for UOS build
-
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
               console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
               return;
           }
-
           export function copyCopilotNativeDeps(productRoot: string): void {
               console.log('⚠️ Copilot native deps copy skipped for UOS build');
           }
-
           export function getCopilotExcludeFilter(): any {
-              console.log('⚠️ getCopilotExcludeFilter returning empty filter');
               return function() { return false; };
           }
           EOF
-
-          echo "✅ build/lib/copilot.ts replaced"
 
       # ============================================================
       # 10. 设置环境变量
@@ -186,7 +170,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ============================================================
-      # 11. 构建
+      # 11. 构建 VSCode
       # ============================================================
       - name: 🔨 Build VSCode
         run: |
@@ -195,83 +179,74 @@ jobs:
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-
           echo "Start: $(date)"
-
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
-
           echo "Done: $(date)"
 
       # ============================================================
-      # 12. 验证并查找构建产物
+      # 12. 验证构建产物
       # ============================================================
       - name: 🔍 Verify
         run: |
-          echo "Searching for build output..."
-
           BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "./out/VSCode-linux-x64"; do
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
               echo "✅ Build found at: $BUILD_DIR"
               break
             fi
           done
-
           if [ -z "$BUILD_DIR" ]; then
             echo "❌ Build not found!"
-            echo "Current directory contents:"
-            ls -la
             exit 1
           fi
-
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          echo "Directory contents:"
-          ls -la "$BUILD_DIR" | head -30
-
-          # 查找可执行文件
+          # 确定可执行文件名称
           EXEC_NAME=""
           for name in tscode code-oss code; do
             if [ -f "$BUILD_DIR/$name" ] || [ -f "$BUILD_DIR/bin/$name" ]; then
               EXEC_NAME="$name"
-              echo "✅ Executable found: $EXEC_NAME"
+              echo "✅ Executable: $EXEC_NAME"
               break
             fi
           done
-
-          if [ -n "$EXEC_NAME" ]; then
-            echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
-          else
-            echo "⚠️ No executable found, but build directory exists"
-          fi
+          echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
       # ============================================================
-      # 13. 【关键】创建 UOS 启动脚本并确保被包含
+      # 13. 创建 .deb 包结构
       # ============================================================
-      - name: 🚀 Create UOS startup script
+      - name: 📦 Create .deb package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           EXEC_NAME="${EXEC_NAME:-tscode}"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          echo "Creating startup script in: $BUILD_DIR"
-          echo "Executable name: $EXEC_NAME"
+          echo "Creating .deb package structure..."
+          echo "Build dir: $BUILD_DIR"
+          echo "Executable: $EXEC_NAME"
+          echo "Version: $VERSION"
 
-          cd "$BUILD_DIR"
+          # 创建 .deb 目录结构
+          DEB_ROOT="vscode-uos"
+          mkdir -p $DEB_ROOT/DEBIAN
+          mkdir -p $DEB_ROOT/opt/vscode-uos
+          mkdir -p $DEB_ROOT/usr/bin
+          mkdir -p $DEB_ROOT/usr/share/applications
+          mkdir -p $DEB_ROOT/usr/share/icons/hicolor/512x512/apps
 
-          # 确定可执行文件的路径
-          if [ -f "./bin/$EXEC_NAME" ]; then
-            EXEC_PATH="./bin/$EXEC_NAME"
-          elif [ -f "./$EXEC_NAME" ]; then
-            EXEC_PATH="./$EXEC_NAME"
-          else
-            echo "❌ Executable not found!"
-            exit 1
-          fi
+          # ============================================================
+          # 复制 VSCode 文件
+          # ============================================================
+          cp -r "$BUILD_DIR"/* $DEB_ROOT/opt/vscode-uos/
 
-          cat > start-vscode.sh << 'EOF'
+          # ============================================================
+          # 创建启动脚本（放置在 /opt/vscode-uos/ 中）
+          # ============================================================
+          cat > $DEB_ROOT/opt/vscode-uos/start-vscode.sh << 'EOF'
           #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          SCRIPT_DIR="/opt/vscode-uos"
+          EXEC_NAME="tscode"
 
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -282,84 +257,224 @@ jobs:
           export DISPLAY=:0
 
           # 查找可执行文件
-          if [ -f "$SCRIPT_DIR/bin/tscode" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode"
-          elif [ -f "$SCRIPT_DIR/tscode" ]; then
-              EXEC="$SCRIPT_DIR/tscode"
-          elif [ -f "$SCRIPT_DIR/bin/code-oss" ]; then
-              EXEC="$SCRIPT_DIR/bin/code-oss"
-          elif [ -f "$SCRIPT_DIR/code-oss" ]; then
-              EXEC="$SCRIPT_DIR/code-oss"
-          elif [ -f "$SCRIPT_DIR/bin/code" ]; then
-              EXEC="$SCRIPT_DIR/bin/code"
-          elif [ -f "$SCRIPT_DIR/code" ]; then
-              EXEC="$SCRIPT_DIR/code"
+          if [ -f "$SCRIPT_DIR/bin/$EXEC_NAME" ]; then
+              EXEC="$SCRIPT_DIR/bin/$EXEC_NAME"
+          elif [ -f "$SCRIPT_DIR/$EXEC_NAME" ]; then
+              EXEC="$SCRIPT_DIR/$EXEC_NAME"
           else
               echo "❌ VSCode executable not found!"
               exit 1
           fi
 
           echo "=== Custom VSCode UOS ==="
-          echo "Version: $($EXEC --version | head -1 2>/dev/null || echo 'unknown')"
+          $EXEC --version 2>/dev/null | head -1
 
-          if grep -q "UOS" /etc/os-release 2>/dev/null; then
-              echo "✅ Detected UOS system"
+          # 检查沙箱权限
+          SANDBOX="$SCRIPT_DIR/chrome-sandbox"
+          if [ -f "$SANDBOX" ] && [ "$(stat -c %u "$SANDBOX" 2>/dev/null)" = "0" ] && [ "$(stat -c %a "$SANDBOX" 2>/dev/null)" = "4755" ]; then
+              exec "$EXEC" "$@"
+          else
+              exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           fi
+          EOF
+          chmod +x $DEB_ROOT/opt/vscode-uos/start-vscode.sh
 
-          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
+          # ============================================================
+          # 创建 .desktop 文件
+          # ============================================================
+          cat > $DEB_ROOT/usr/share/applications/vscode-uos.desktop << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=VSCode for UOS
+          Comment=Visual Studio Code for UOS
+          Exec=/opt/vscode-uos/start-vscode.sh %F
+          Icon=vscode-uos
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=Code
           EOF
 
-          # 设置执行权限
-          chmod +x start-vscode.sh
+          # ============================================================
+          # 创建命令行软链接
+          # ============================================================
+          ln -s /opt/vscode-uos/start-vscode.sh $DEB_ROOT/usr/bin/vscode-uos
 
-          # 验证脚本已创建
-          echo "✅ start-vscode.sh created:"
-          ls -la start-vscode.sh
+          # ============================================================
+          # 复制图标
+          # ============================================================
+          if [ -f "$DEB_ROOT/opt/vscode-uos/resources/app/resources/linux/code.png" ]; then
+            cp "$DEB_ROOT/opt/vscode-uos/resources/app/resources/linux/code.png" \
+               $DEB_ROOT/usr/share/icons/hicolor/512x512/apps/vscode-uos.png
+          fi
+
+          # ============================================================
+          # 创建 DEBIAN/control 文件
+          # ============================================================
+          cat > $DEB_ROOT/DEBIAN/control << EOF
+          Package: vscode-uos
+          Version: $VERSION
+          Section: devel
+          Priority: optional
+          Architecture: amd64
+          Maintainer: VSCode UOS Build <vscode@uos.local>
+          Description: Visual Studio Code for UOS
+           A custom build of Visual Studio Code optimized for UOS.
+           Includes all necessary compatibility patches for UOS.
+          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2
+          EOF
+
+          # ============================================================
+          # 创建 DEBIAN/postinst 脚本（关键：以 root 权限运行）
+          # ============================================================
+          cat > $DEB_ROOT/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          set -e
+
+          echo "=========================================="
+          echo "🔧 Configuring VSCode for UOS..."
+          echo "=========================================="
+
+          # 1. 修复 chrome-sandbox 权限
+          if [ -f "/opt/vscode-uos/chrome-sandbox" ]; then
+              echo "🔧 Setting chrome-sandbox permissions..."
+              chown root:root /opt/vscode-uos/chrome-sandbox
+              chmod 4755 /opt/vscode-uos/chrome-sandbox
+              echo "✅ chrome-sandbox configured (root:root 4755)"
+          fi
+
+          # 2. 更新桌面数据库
+          if command -v update-desktop-database >/dev/null 2>&1; then
+              update-desktop-database /usr/share/applications/ 2>/dev/null || true
+              echo "✅ Desktop database updated"
+          fi
+
+          # 3. 创建用户桌面快捷方式（可选）
+          if [ -d "/usr/share/applications" ]; then
+              cp /usr/share/applications/vscode-uos.desktop /usr/share/applications/vscode-uos.desktop 2>/dev/null || true
+          fi
+
+          echo "=========================================="
+          echo "✅ VSCode for UOS installed successfully!"
+          echo ""
+          echo "📌 Launch:"
+          echo "  - Terminal: vscode-uos"
+          echo "  - Desktop: Search for 'VSCode for UOS'"
+          echo "=========================================="
+
+          exit 0
+          EOF
+          chmod 755 $DEB_ROOT/DEBIAN/postinst
+
+          # ============================================================
+          # 创建 DEBIAN/prerm 脚本（卸载前执行）
+          # ============================================================
+          cat > $DEB_ROOT/DEBIAN/prerm << 'EOF'
+          #!/bin/bash
+          set -e
+          echo "Removing VSCode for UOS..."
+          exit 0
+          EOF
+          chmod 755 $DEB_ROOT/DEBIAN/prerm
+
+          # ============================================================
+          # 创建 DEBIAN/postrm 脚本（卸载后执行）
+          # ============================================================
+          cat > $DEB_ROOT/DEBIAN/postrm << 'EOF'
+          #!/bin/bash
+          set -e
+          echo "VSCode for UOS has been removed."
+          echo "User data (settings, extensions) may remain in ~/.config/vscode-uos"
+          exit 0
+          EOF
+          chmod 755 $DEB_ROOT/DEBIAN/postrm
+
+          echo "✅ .deb package structure created"
 
       # ============================================================
-      # 14. 【关键】打包 - 确保脚本被包含
+      # 14. 构建 .deb 包
       # ============================================================
-      - name: 📦 Package artifacts
+      - name: 🔨 Build .deb package
         run: |
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          echo "Building .deb package..."
 
-          echo "Build directory: $BUILD_DIR"
-          echo "Contents before packaging:"
-          ls -la "$BUILD_DIR"
+          # 确保所有文件权限正确
+          find vscode-uos -type f -exec chmod 644 {} \;
+          chmod 755 vscode-uos/DEBIAN/postinst
+          chmod 755 vscode-uos/DEBIAN/prerm
+          chmod 755 vscode-uos/DEBIAN/postrm
+          chmod 755 vscode-uos/opt/vscode-uos/start-vscode.sh
+          chmod 755 vscode-uos/usr/bin/vscode-uos
+          chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
 
-          # 确保启动脚本存在且可执行
-          if [ ! -f "$BUILD_DIR/start-vscode.sh" ]; then
-            echo "❌ start-vscode.sh not found in build directory!"
+          # 构建 .deb
+          dpkg-deb --build vscode-uos
+
+          # 验证 .deb 文件
+          if [ -f "vscode-uos.deb" ]; then
+            echo "✅ .deb package created:"
+            ls -lh vscode-uos.deb
+            # 显示包信息
+            dpkg-deb --info vscode-uos.deb
+          else
+            echo "❌ Failed to build .deb package!"
             exit 1
           fi
 
-          chmod +x "$BUILD_DIR/start-vscode.sh"
-
-          # 创建 artifacts 目录
-          mkdir -p artifacts
-
-          # 打包（使用相对路径）
-          cd "$(dirname "$BUILD_DIR")"
-          tar -czf "$OLDPWD/artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz" \
-            --preserve-permissions \
-            "$(basename "$BUILD_DIR")"
-          cd "$OLDPWD"
-
-          echo "✅ Package created:"
-          ls -lh artifacts/
-
       # ============================================================
-      # 15. 上传
+      # 15. 上传 .deb 包
       # ============================================================
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: custom-vscode-uos
-          path: artifacts/custom-vscode-uos-*.tar.gz
+          name: vscode-uos-deb
+          path: vscode-uos.deb
           retention-days: 30
 
       # ============================================================
-      # 16. 构建摘要
+      # 16. 也打包 .tar.gz（备选）
+      # ============================================================
+      - name: 📦 Package tar.gz (alternative)
+        run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          # 在 tar.gz 中也包含 install.sh
+          cd "$(dirname "$BUILD_DIR")"
+          cat > "$(basename "$BUILD_DIR")/install.sh" << 'EOF'
+          #!/bin/bash
+          echo "=========================================="
+          echo "📦 Installing VSCode for UOS..."
+          echo "=========================================="
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+          echo "🔧 Fixing chrome-sandbox permissions..."
+          sudo chown root:root chrome-sandbox 2>/dev/null
+          sudo chmod 4755 chrome-sandbox 2>/dev/null
+          echo "✅ Done!"
+          echo "📌 Run: ./start-vscode.sh"
+          EOF
+          chmod +x "$(basename "$BUILD_DIR")/install.sh"
+
+          tar -czf "$OLDPWD/vscode-uos-${VERSION}.tar.gz" \
+            --preserve-permissions \
+            "$(basename "$BUILD_DIR")"
+          cd "$OLDPWD"
+
+          echo "✅ tar.gz package created:"
+          ls -lh vscode-uos-*.tar.gz
+
+      - name: 📤 Upload tar.gz
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-uos-tar
+          path: vscode-uos-*.tar.gz
+          retention-days: 30
+
+      # ============================================================
+      # 17. 构建摘要
       # ============================================================
       - name: 📊 Build summary
         if: always()
@@ -368,18 +483,21 @@ jobs:
           echo "📊 BUILD SUMMARY"
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
-          echo "📦 Branch: ${{ github.event.inputs.branch }}"
+          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             echo ""
-            echo "📥 Download from Actions page"
+            echo "📥 Download:"
+            echo "  - vscode-uos.deb (recommended)"
+            echo "  - vscode-uos-*.tar.gz (portable)"
             echo ""
-            echo "📌 On UOS:"
-            echo "  1. tar -xzf custom-vscode-uos-*.tar.gz"
-            echo "  2. cd VSCode-linux-x64"
-            echo "  3. ./start-vscode.sh"
-          else
-            echo "❌ Build failed. Check logs above."
+            echo "📌 Install on UOS:"
+            echo "  sudo dpkg -i vscode-uos.deb"
+            echo ""
+            echo "📌 Or portable:"
+            echo "  tar -xzf vscode-uos-*.tar.gz"
+            echo "  cd VSCode-linux-x64"
+            echo "  ./start-vscode.sh"
           fi
           echo "=========================================="
