@@ -226,7 +226,6 @@ jobs:
           echo "Executable: $EXEC_NAME"
           echo "Version: $VERSION"
 
-          # 创建 .deb 目录结构
           DEB_ROOT="vscode-uos"
           mkdir -p $DEB_ROOT/DEBIAN
           mkdir -p $DEB_ROOT/opt/vscode-uos
@@ -234,7 +233,6 @@ jobs:
           mkdir -p $DEB_ROOT/usr/share/applications
           mkdir -p $DEB_ROOT/usr/share/icons/hicolor/512x512/apps
 
-          # 复制 VSCode 文件
           cp -r "$BUILD_DIR"/* $DEB_ROOT/opt/vscode-uos/
 
           # ============================================================
@@ -293,7 +291,7 @@ jobs:
           EOF
 
           # ============================================================
-          # 创建命令行软链接（先 cd 到目录再创建）
+          # 创建命令行软链接
           # ============================================================
           cd $DEB_ROOT/usr/bin
           ln -s ../../opt/vscode-uos/start-vscode.sh vscode-uos
@@ -324,7 +322,7 @@ jobs:
           EOF
 
           # ============================================================
-          # 创建 DEBIAN/postinst 脚本（以 root 权限运行）
+          # 创建 DEBIAN/postinst 脚本
           # ============================================================
           cat > $DEB_ROOT/DEBIAN/postinst << 'EOF'
           #!/bin/bash
@@ -384,11 +382,11 @@ jobs:
           echo "✅ .deb package structure created"
 
       # ============================================================
-      # 14. 构建 .deb 包
+      # 14. 【关键】构建 .deb 包 - 使用 gzip 压缩
       # ============================================================
       - name: 🔨 Build .deb package
         run: |
-          echo "Building .deb package..."
+          echo "Building .deb package with gzip compression..."
 
           # 设置普通文件权限（不处理软链接）
           find vscode-uos -type f -not -name "*.so" -exec chmod 644 {} \;
@@ -398,14 +396,14 @@ jobs:
           chmod 755 vscode-uos/opt/vscode-uos/start-vscode.sh
           chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
           chmod 755 vscode-uos/opt/vscode-uos/tscode 2>/dev/null || true
-          # 不对软链接执行 chmod（跳过 usr/bin 目录）
 
-          # 构建 .deb
-          dpkg-deb --build vscode-uos
+          # 【关键】强制使用 gzip 压缩（兼容 UOS 旧版 dpkg）
+          dpkg-deb --build --compression=gzip vscode-uos
 
           if [ -f "vscode-uos.deb" ]; then
             echo "✅ .deb package created:"
             ls -lh vscode-uos.deb
+            # 验证压缩格式
             dpkg-deb --info vscode-uos.deb
           else
             echo "❌ Failed to build .deb package!"
