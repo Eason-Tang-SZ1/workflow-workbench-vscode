@@ -18,26 +18,17 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # ============================================================
-      # 1. 检出源码
-      # ============================================================
       - name: 📥 Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      # ============================================================
-      # 2. 安装 Node.js
-      # ============================================================
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '20.x'
 
-      # ============================================================
-      # 3. 安装系统依赖
-      # ============================================================
       - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update
@@ -48,9 +39,6 @@ jobs:
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl
 
-      # ============================================================
-      # 4. 修复 preinstall.ts / postinstall.ts
-      # ============================================================
       - name: 🔧 Fix TypeScript scripts
         run: |
           echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
@@ -58,15 +46,9 @@ jobs:
           echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-      # ============================================================
-      # 5. 安装依赖
-      # ============================================================
       - name: 📦 Install dependencies
         run: npm install --legacy-peer-deps
 
-      # ============================================================
-      # 6. 安装 tsx 和构建工具
-      # ============================================================
       - name: 📦 Install build tools
         run: |
           npm install -g tsx
@@ -75,9 +57,6 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      # ============================================================
-      # 7. 修复 extensions.ts
-      # ============================================================
       - name: 🔧 Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
@@ -124,9 +103,6 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-      # ============================================================
-      # 8. 修复 gulpfile.vscode.ts 中的 spawn 调用
-      # ============================================================
       - name: 🔧 Fix gulpfile spawn calls
         run: |
           python3 << 'PY_END'
@@ -141,9 +117,6 @@ jobs:
           print("✅ spawn calls fixed")
           PY_END
 
-      # ============================================================
-      # 9. 替换 copilot.ts
-      # ============================================================
       - name: 🔧 Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
@@ -159,9 +132,6 @@ jobs:
           }
           EOF
 
-      # ============================================================
-      # 10. 设置环境变量
-      # ============================================================
       - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
@@ -169,9 +139,6 @@ jobs:
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
 
-      # ============================================================
-      # 11. 构建 VSCode
-      # ============================================================
       - name: 🔨 Build VSCode
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
@@ -183,9 +150,6 @@ jobs:
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
           echo "Done: $(date)"
 
-      # ============================================================
-      # 12. 验证构建产物
-      # ============================================================
       - name: 🔍 Verify
         run: |
           BUILD_DIR=""
@@ -212,9 +176,6 @@ jobs:
           done
           echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
-      # ============================================================
-      # 13. 创建 .deb 包结构
-      # ============================================================
       - name: 📦 Create .deb package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -236,7 +197,7 @@ jobs:
           cp -r "$BUILD_DIR"/* $DEB_ROOT/opt/vscode-uos/
 
           # ============================================================
-          # 创建启动脚本
+          # 【关键】创建更健壮的启动脚本
           # ============================================================
           cat > $DEB_ROOT/opt/vscode-uos/start-vscode.sh << 'EOF'
           #!/bin/bash
@@ -250,6 +211,7 @@ jobs:
           export GDK_BACKEND=x11
           export QT_QPA_PLATFORM=xcb
           export DISPLAY=:0
+          export DESKTOP_STARTUP_ID=""
 
           if [ -f "$SCRIPT_DIR/bin/$EXEC_NAME" ]; then
               EXEC="$SCRIPT_DIR/bin/$EXEC_NAME"
@@ -263,17 +225,20 @@ jobs:
           echo "=== Custom VSCode UOS ==="
           $EXEC --version 2>/dev/null | head -1
 
+          # 检查沙箱权限
           SANDBOX="$SCRIPT_DIR/chrome-sandbox"
           if [ -f "$SANDBOX" ] && [ "$(stat -c %u "$SANDBOX" 2>/dev/null)" = "0" ] && [ "$(stat -c %a "$SANDBOX" 2>/dev/null)" = "4755" ]; then
+              echo "✅ 沙箱已启用"
               exec "$EXEC" "$@"
           else
+              echo "⚠️ 使用兼容模式 (--no-sandbox)"
               exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           fi
           EOF
           chmod 755 $DEB_ROOT/opt/vscode-uos/start-vscode.sh
 
           # ============================================================
-          # 创建 .desktop 文件
+          # 【关键】创建可双击运行的 .desktop 文件
           # ============================================================
           cat > $DEB_ROOT/usr/share/applications/vscode-uos.desktop << 'EOF'
           [Desktop Entry]
@@ -288,7 +253,38 @@ jobs:
           MimeType=text/plain;inode/directory;
           StartupNotify=true
           StartupWMClass=Code
+          Actions=new-window;
+
+          [Desktop Action new-window]
+          Name=New Window
+          Exec=/opt/vscode-uos/start-vscode.sh -n
           EOF
+
+          # ============================================================
+          # 【关键】创建可双击运行的包装器（直接双击 tscode 也能工作）
+          # ============================================================
+          cat > $DEB_ROOT/opt/vscode-uos/tscode-wrapper << 'EOF'
+          #!/bin/bash
+          # 包装器：双击 tscode 时自动设置环境变量和参数
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
+          exec "$SCRIPT_DIR/bin/tscode" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
+          EOF
+          chmod 755 $DEB_ROOT/opt/vscode-uos/tscode-wrapper
+
+          # ============================================================
+          # 【关键】替换 bin/tscode 为包装器
+          # ============================================================
+          # 备份原始 tscode
+          mv $DEB_ROOT/opt/vscode-uos/bin/tscode $DEB_ROOT/opt/vscode-uos/bin/tscode.real
+          # 创建软链接指向包装器
+          ln -s ../tscode-wrapper $DEB_ROOT/opt/vscode-uos/bin/tscode
 
           # ============================================================
           # 创建命令行软链接
@@ -317,7 +313,6 @@ jobs:
           Maintainer: VSCode UOS Build <vscode@uos.local>
           Description: Visual Studio Code for UOS
            A custom build of Visual Studio Code optimized for UOS.
-           Includes all necessary compatibility patches for UOS.
           Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2
           EOF
 
@@ -332,6 +327,7 @@ jobs:
           echo "🔧 Configuring VSCode for UOS..."
           echo "=========================================="
 
+          # 1. 修复 chrome-sandbox 权限
           if [ -f "/opt/vscode-uos/chrome-sandbox" ]; then
               echo "🔧 Setting chrome-sandbox permissions..."
               chown root:root /opt/vscode-uos/chrome-sandbox
@@ -339,6 +335,12 @@ jobs:
               echo "✅ chrome-sandbox configured (root:root 4755)"
           fi
 
+          # 2. 确保包装器可执行
+          chmod 755 /opt/vscode-uos/tscode-wrapper
+          chmod 755 /opt/vscode-uos/bin/tscode.real
+          chmod 755 /opt/vscode-uos/bin/tscode
+
+          # 3. 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/ 2>/dev/null || true
               echo "✅ Desktop database updated"
@@ -350,6 +352,7 @@ jobs:
           echo "📌 Launch:"
           echo "  - Terminal: vscode-uos"
           echo "  - Desktop: Search for 'VSCode for UOS'"
+          echo "  - Double-click: /opt/vscode-uos/bin/tscode"
           echo "=========================================="
 
           exit 0
@@ -381,39 +384,29 @@ jobs:
 
           echo "✅ .deb package structure created"
 
-      # ============================================================
-      # 14. 构建 .deb 包（使用 -Zgzip 强制 gzip 压缩）
-      # ============================================================
       - name: 🔨 Build .deb package
         run: |
           echo "Building .deb package with gzip compression..."
 
-          # 设置普通文件权限（不处理软链接）
           find vscode-uos -type f -not -name "*.so" -exec chmod 644 {} \;
           chmod 755 vscode-uos/DEBIAN/postinst
           chmod 755 vscode-uos/DEBIAN/prerm
           chmod 755 vscode-uos/DEBIAN/postrm
           chmod 755 vscode-uos/opt/vscode-uos/start-vscode.sh
+          chmod 755 vscode-uos/opt/vscode-uos/tscode-wrapper
           chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
-          chmod 755 vscode-uos/opt/vscode-uos/tscode 2>/dev/null || true
 
-          # 【关键】使用 -Zgzip 强制 gzip 压缩（兼容旧版 dpkg-deb）
           dpkg-deb -Zgzip --build vscode-uos
 
           if [ -f "vscode-uos.deb" ]; then
             echo "✅ .deb package created:"
             ls -lh vscode-uos.deb
-            echo ""
-            echo "Package contents (compression format):"
             ar t vscode-uos.deb
           else
             echo "❌ Failed to build .deb package!"
             exit 1
           fi
 
-      # ============================================================
-      # 15. 上传 .deb 包
-      # ============================================================
       - name: 📤 Upload .deb
         uses: actions/upload-artifact@v7
         with:
@@ -421,9 +414,6 @@ jobs:
           path: vscode-uos.deb
           retention-days: 30
 
-      # ============================================================
-      # 16. 打包 .tar.gz（备选）
-      # ============================================================
       - name: 📦 Package tar.gz
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -453,9 +443,6 @@ jobs:
           echo "✅ tar.gz package created:"
           ls -lh vscode-uos-*.tar.gz
 
-      # ============================================================
-      # 17. 上传 .tar.gz
-      # ============================================================
       - name: 📤 Upload tar.gz
         uses: actions/upload-artifact@v7
         with:
@@ -463,9 +450,6 @@ jobs:
           path: vscode-uos-*.tar.gz
           retention-days: 30
 
-      # ============================================================
-      # 18. 构建摘要
-      # ============================================================
       - name: 📊 Build summary
         if: always()
         run: |
