@@ -203,7 +203,7 @@ jobs:
           echo "Done: $(date)"
 
       # ============================================================
-      # 12. 验证
+      # 12. 验证并查找构建产物
       # ============================================================
       - name: 🔍 Verify
         run: |
@@ -233,7 +233,7 @@ jobs:
           # 查找可执行文件
           EXEC_NAME=""
           for name in tscode code-oss code; do
-            if [ -f "$BUILD_DIR/$name" ]; then
+            if [ -f "$BUILD_DIR/$name" ] || [ -f "$BUILD_DIR/bin/$name" ]; then
               EXEC_NAME="$name"
               echo "✅ Executable found: $EXEC_NAME"
               break
@@ -244,23 +244,35 @@ jobs:
             echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
           else
             echo "⚠️ No executable found, but build directory exists"
-            echo "Searching for any executable:"
-            find "$BUILD_DIR" -maxdepth 1 -type f -executable 2>/dev/null | head -5
           fi
 
       # ============================================================
-      # 13. 创建 UOS 启动脚本
+      # 13. 【关键】创建 UOS 启动脚本并确保被包含
       # ============================================================
-      - name: 🚀 Create startup script
-        if: env.BUILD_DIR != ''
+      - name: 🚀 Create UOS startup script
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           EXEC_NAME="${EXEC_NAME:-tscode}"
+
+          echo "Creating startup script in: $BUILD_DIR"
+          echo "Executable name: $EXEC_NAME"
+
           cd "$BUILD_DIR"
+
+          # 确定可执行文件的路径
+          if [ -f "./bin/$EXEC_NAME" ]; then
+            EXEC_PATH="./bin/$EXEC_NAME"
+          elif [ -f "./$EXEC_NAME" ]; then
+            EXEC_PATH="./$EXEC_NAME"
+          else
+            echo "❌ Executable not found!"
+            exit 1
+          fi
 
           cat > start-vscode.sh << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -269,10 +281,17 @@ jobs:
           export QT_QPA_PLATFORM=xcb
           export DISPLAY=:0
 
-          if [ -f "$SCRIPT_DIR/tscode" ]; then
+          # 查找可执行文件
+          if [ -f "$SCRIPT_DIR/bin/tscode" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode"
+          elif [ -f "$SCRIPT_DIR/tscode" ]; then
               EXEC="$SCRIPT_DIR/tscode"
+          elif [ -f "$SCRIPT_DIR/bin/code-oss" ]; then
+              EXEC="$SCRIPT_DIR/bin/code-oss"
           elif [ -f "$SCRIPT_DIR/code-oss" ]; then
               EXEC="$SCRIPT_DIR/code-oss"
+          elif [ -f "$SCRIPT_DIR/bin/code" ]; then
+              EXEC="$SCRIPT_DIR/bin/code"
           elif [ -f "$SCRIPT_DIR/code" ]; then
               EXEC="$SCRIPT_DIR/code"
           else
@@ -281,7 +300,7 @@ jobs:
           fi
 
           echo "=== Custom VSCode UOS ==="
-          echo "Version: $($EXEC --version | head -1)"
+          echo "Version: $($EXEC --version | head -1 2>/dev/null || echo 'unknown')"
 
           if grep -q "UOS" /etc/os-release 2>/dev/null; then
               echo "✅ Detected UOS system"
@@ -290,24 +309,41 @@ jobs:
           exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           EOF
 
+          # 设置执行权限
           chmod +x start-vscode.sh
-          echo "✅ start-vscode.sh created"
+
+          # 验证脚本已创建
+          echo "✅ start-vscode.sh created:"
+          ls -la start-vscode.sh
 
       # ============================================================
-      # 14. 打包
+      # 14. 【关键】打包 - 确保脚本被包含
       # ============================================================
-      - name: 📦 Package
-        if: env.BUILD_DIR != ''
+      - name: 📦 Package artifacts
         run: |
-          mkdir -p artifacts
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
+          echo "Build directory: $BUILD_DIR"
+          echo "Contents before packaging:"
+          ls -la "$BUILD_DIR"
 
-          tar -czf artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz \
+          # 确保启动脚本存在且可执行
+          if [ ! -f "$BUILD_DIR/start-vscode.sh" ]; then
+            echo "❌ start-vscode.sh not found in build directory!"
+            exit 1
+          fi
+
+          chmod +x "$BUILD_DIR/start-vscode.sh"
+
+          # 创建 artifacts 目录
+          mkdir -p artifacts
+
+          # 打包（使用相对路径）
+          cd "$(dirname "$BUILD_DIR")"
+          tar -czf "$OLDPWD/artifacts/custom-vscode-uos-$(date +%Y%m%d-%H%M%S).tar.gz" \
             --preserve-permissions \
-            -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
+          cd "$OLDPWD"
 
           echo "✅ Package created:"
           ls -lh artifacts/
@@ -315,8 +351,7 @@ jobs:
       # ============================================================
       # 15. 上传
       # ============================================================
-      - name: 📤 Upload
-        if: env.BUILD_DIR != ''
+      - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: custom-vscode-uos
@@ -334,15 +369,17 @@ jobs:
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Branch: ${{ github.event.inputs.branch }}"
-          if [ -n "$BUILD_DIR" ]; then
-            echo "📁 Build directory: $BUILD_DIR"
-          fi
-          if [ -n "$EXEC_NAME" ]; then
-            echo "📌 Executable: $EXEC_NAME"
-          fi
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
-            ls -lh artifacts/ 2>/dev/null || echo "No artifacts yet"
+            echo ""
+            echo "📥 Download from Actions page"
+            echo ""
+            echo "📌 On UOS:"
+            echo "  1. tar -xzf custom-vscode-uos-*.tar.gz"
+            echo "  2. cd VSCode-linux-x64"
+            echo "  3. ./start-vscode.sh"
+          else
+            echo "❌ Build failed. Check logs above."
           fi
           echo "=========================================="
