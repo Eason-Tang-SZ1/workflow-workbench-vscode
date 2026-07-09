@@ -131,7 +131,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 禁用 Crashpad（只修改 product.json + 创建空服务）
+      # 10. 禁用 Crashpad
       # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
@@ -139,16 +139,11 @@ jobs:
           echo "🔧 禁用 Crashpad"
           echo "=========================================="
 
-          # 修改 product.json
           if [ -f "product.json" ]; then
             sed -i 's/"enableCrashReport": true/"enableCrashReport": false/g' product.json
-            if ! grep -q '"enableCrashReport"' product.json; then
-              sed -i 's/"nameShort": "Code - OSS"/"nameShort": "Code - OSS",\n  "enableCrashReport": false/g' product.json
-            fi
             echo "✅ product.json 已修改"
           fi
 
-          # 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -317,10 +312,12 @@ jobs:
           EOF
           chmod 755 $DEB_ROOT/DEBIAN/prerm
 
+          # 修复：postrm 脚本必须使用正确的 shebang
           cat > $DEB_ROOT/DEBIAN/postrm << 'EOF'
           #!/bin/bash
           set -e
           echo "VSCode for UOS has been removed."
+          echo "User data (settings, extensions) may remain in ~/.config/vscode-uos"
           exit 0
           EOF
           chmod 755 $DEB_ROOT/DEBIAN/postrm
