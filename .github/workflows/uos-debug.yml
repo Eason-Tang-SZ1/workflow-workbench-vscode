@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (.deb Package)
+name: Build Custom VSCode for UOS (Double-click)
 
 on:
   workflow_dispatch:
@@ -18,6 +18,9 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      # ============================================================
+      # 1-9: 标准构建步骤
+      # ============================================================
       - name: 📥 Checkout
         uses: actions/checkout@v6
         with:
@@ -131,25 +134,22 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 禁用 Crashpad
+      # 10. 彻底禁用 Crashpad
       # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
-          echo "🔧 禁用 Crashpad"
+          echo "🔧 彻底禁用 Crashpad"
           echo "=========================================="
 
           python3 << 'PY_JSON_END'
           import json
           import os
-
           if os.path.exists('product.json'):
               with open('product.json', 'r') as f:
                   data = json.load(f)
               data['enableCrashReport'] = False
-              if 'crashReporter' not in data:
-                  data['crashReporter'] = {}
-              data['crashReporter']['disabled'] = True
+              data['crashReporter'] = {'disabled': True}
               with open('product.json', 'w') as f:
                   json.dump(data, f, indent=2)
               print("✅ product.json 已修改")
@@ -172,12 +172,10 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
-          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
-            sed -i 's/.*crashReporter.*start.*/\/\/ DISABLED: &/' src/vs/workbench/electron-main/electron-main.ts 2>/dev/null || true
-            echo "✅ electron-main.ts 已修改"
-          fi
+          find . -name "*.ts" -exec sed -i 's/.*crashpad.*/\/\/ DISABLED: &/' {} \; 2>/dev/null || true
+          find . -name "*.ts" -exec sed -i 's/.*crashReporter.*start.*/\/\/ DISABLED: &/' {} \; 2>/dev/null || true
 
-          echo "✅ Crashpad 已禁用"
+          echo "✅ Crashpad 已彻底禁用"
 
       - name: ⚙️ Set env
         run: |
@@ -185,6 +183,8 @@ jobs:
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
       - name: 🔨 Build VSCode
         run: |
@@ -202,7 +202,7 @@ jobs:
       - name: 🔍 Verify
         run: |
           BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "./out/VSCode-linux-x64" "./dist/VSCode-linux-x64"; do
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
               echo "✅ Build found at: $BUILD_DIR"
@@ -211,39 +211,47 @@ jobs:
           done
           if [ -z "$BUILD_DIR" ]; then
             echo "❌ Build not found!"
-            find . -name "VSCode-linux-x64" -type d 2>/dev/null | head -10
             exit 1
           fi
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-          EXEC_NAME=""
+
+      # ============================================================
+      # 11. 【核心】创建可直接双击运行的 VSCode
+      # ============================================================
+      - name: 🚀 Create double-click executable
+        run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          cd "$BUILD_DIR"
+
+          # 查找真正的二进制文件
+          REAL_EXEC=""
           for name in tscode code-oss code; do
-            if [ -f "$BUILD_DIR/$name" ] || [ -f "$BUILD_DIR/bin/$name" ]; then
-              EXEC_NAME="$name"
-              echo "✅ Executable: $EXEC_NAME"
+            if [ -f "./$name" ]; then
+              REAL_EXEC="$name"
+              break
+            elif [ -f "./bin/$name" ]; then
+              REAL_EXEC="./bin/$name"
               break
             fi
           done
-          if [ -z "$EXEC_NAME" ]; then
-            EXEC_NAME=$(find "$BUILD_DIR" -maxdepth 2 -type f -executable 2>/dev/null | head -1 | xargs basename 2>/dev/null)
+
+          if [ -z "$REAL_EXEC" ]; then
+            REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
           fi
-          echo "EXEC_NAME=$EXEC_NAME" >> $GITHUB_ENV
 
-      - name: 📦 Create .deb package
-        run: |
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          EXEC_NAME="${EXEC_NAME:-tscode}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_ROOT="vscode-uos"
-          mkdir -p $DEB_ROOT/DEBIAN
-          mkdir -p $DEB_ROOT/opt/vscode-uos
-          mkdir -p $DEB_ROOT/usr/bin
-          mkdir -p $DEB_ROOT/usr/share/applications
-          mkdir -p $DEB_ROOT/usr/share/icons/hicolor/512x512/apps
-          cp -r "$BUILD_DIR"/* $DEB_ROOT/opt/vscode-uos/
+          echo "✅ 真实可执行文件: $REAL_EXEC"
 
-          cat > $DEB_ROOT/opt/vscode-uos/start-vscode.sh << 'EOF'
+          # 【核心】用包装器替换 tscode（用户双击的就是这个）
+          # 1. 备份真实二进制文件
+          mv "$REAL_EXEC" "${REAL_EXEC}.real"
+
+          # 2. 创建包装器脚本（用户双击运行这个）
+          cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
-          SCRIPT_DIR="/opt/vscode-uos"
+          # 这是 VSCode 的包装器 - 用户双击这个文件启动
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          # 环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -253,28 +261,44 @@ jobs:
           export DISPLAY=:0
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
-          if [ -f "$SCRIPT_DIR/bin/tscode" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode"
-          elif [ -f "$SCRIPT_DIR/tscode" ]; then
-              EXEC="$SCRIPT_DIR/tscode"
+          export CRASHPAD_DISABLE=1
+
+          # 查找真实二进制文件
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode.real"
+          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
+              EXEC="$SCRIPT_DIR/code-oss.real"
+          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/code-oss.real"
           else
-              echo "❌ VSCode executable not found!"
+              echo "❌ 找不到 VSCode 可执行文件！"
+              echo "请检查目录完整性"
               exit 1
           fi
-          echo "=== Custom VSCode UOS (Crashpad disabled) ==="
-          $EXEC --version 2>/dev/null | head -1
-          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
-          EOF
-          chmod 755 $DEB_ROOT/opt/vscode-uos/start-vscode.sh
 
-          cat > $DEB_ROOT/usr/share/applications/vscode-uos.desktop << 'EOF'
+          # 启动 VSCode
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$SCRIPT_DIR/user-data" \
+              "$@"
+          WRAPPER_EOF
+
+          chmod +x "$REAL_EXEC"
+
+          # 3. 创建桌面快捷方式文件（双击这个也能启动）
+          cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
           Name=VSCode for UOS
           Comment=Visual Studio Code for UOS
-          Exec=/opt/vscode-uos/start-vscode.sh %F
-          Icon=vscode-uos
+          Exec=./tscode %F
+          Icon=./resources/app/resources/linux/code.png
           Terminal=false
           Categories=Development;IDE;
           MimeType=text/plain;inode/directory;
@@ -282,126 +306,61 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          cd $DEB_ROOT/usr/bin
-          ln -s ../../opt/vscode-uos/start-vscode.sh vscode-uos
-          cd ../../..
-          if [ -f "$DEB_ROOT/opt/vscode-uos/resources/app/resources/linux/code.png" ]; then
-            cp "$DEB_ROOT/opt/vscode-uos/resources/app/resources/linux/code.png" \
-               $DEB_ROOT/usr/share/icons/hicolor/512x512/apps/vscode-uos.png
-          fi
+          # 4. 创建 README
+          cat > 使用说明.txt << 'EOF'
+          ==========================================
+          VSCode for UOS - 使用说明
+          ==========================================
 
-          cat > $DEB_ROOT/DEBIAN/control << EOF
-          Package: vscode-uos
-          Version: $VERSION
-          Section: devel
-          Priority: optional
-          Architecture: amd64
-          Maintainer: VSCode UOS Build <vscode@uos.local>
-          Description: Visual Studio Code for UOS
-           Custom build with crashpad disabled for UOS compatibility.
-          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2
+          🖱️ 双击运行：
+          直接双击 tscode 文件即可启动 VSCode！
+
+          📌 首次运行：
+          - 如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
+          - 或者右键 → 选择"以程序运行"
+
+          📌 桌面快捷方式：
+          将 vscode-uos.desktop 复制到桌面，双击即可
+
+          📌 配置文件：
+          所有配置保存在 ./user-data 目录
+
+          ==========================================
           EOF
 
-          cat > $DEB_ROOT/DEBIAN/postinst << 'EOF'
-          #!/bin/bash
-          set -e
-          echo "=========================================="
-          echo "🔧 Configuring VSCode for UOS..."
-          echo "=========================================="
-          if [ -f "/opt/vscode-uos/chrome-sandbox" ]; then
-              echo "🔧 Setting chrome-sandbox permissions..."
-              chown root:root /opt/vscode-uos/chrome-sandbox
-              chmod 4755 /opt/vscode-uos/chrome-sandbox
-              echo "✅ chrome-sandbox configured (root:root 4755)"
-          fi
-          if command -v update-desktop-database >/dev/null 2>&1; then
-              update-desktop-database /usr/share/applications/ 2>/dev/null || true
-              echo "✅ Desktop database updated"
-          fi
-          echo "=========================================="
-          echo "✅ VSCode for UOS installed successfully!"
-          echo "📌 Launch: vscode-uos"
-          echo "=========================================="
-          exit 0
-          EOF
-          chmod 755 $DEB_ROOT/DEBIAN/postinst
+          echo ""
+          echo "📁 目录内容:"
+          ls -la
 
-          cat > $DEB_ROOT/DEBIAN/prerm << 'EOF'
-          #!/bin/bash
-          set -e
-          echo "Removing VSCode for UOS..."
-          exit 0
-          EOF
-          chmod 755 $DEB_ROOT/DEBIAN/prerm
+          echo ""
+          echo "✅ 用户可直接双击运行: $REAL_EXEC"
 
-          cat > $DEB_ROOT/DEBIAN/postrm << 'EOF'
-          #!/bin/bash
-          set -e
-          echo "VSCode for UOS has been removed."
-          echo "User data (settings, extensions) may remain in ~/.config/vscode-uos"
-          exit 0
-          EOF
-          chmod 755 $DEB_ROOT/DEBIAN/postrm
-
-          echo "✅ .deb package structure created"
-
-      - name: 🔨 Build .deb package
-        run: |
-          find vscode-uos -type f -not -name "*.so" -exec chmod 644 {} \;
-          chmod 755 vscode-uos/DEBIAN/postinst
-          chmod 755 vscode-uos/DEBIAN/prerm
-          chmod 755 vscode-uos/DEBIAN/postrm
-          chmod 755 vscode-uos/opt/vscode-uos/start-vscode.sh
-          chmod 755 vscode-uos/opt/vscode-uos/bin/* 2>/dev/null || true
-          dpkg-deb -Zgzip --build vscode-uos
-          if [ -f "vscode-uos.deb" ]; then
-            echo "✅ .deb package created:"
-            ls -lh vscode-uos.deb
-            echo ""
-            echo "Package contents (should show control.tar.gz):"
-            ar t vscode-uos.deb
-          else
-            echo "❌ Failed to build .deb package!"
-            exit 1
-          fi
-
-      - name: 📤 Upload .deb
-        uses: actions/upload-artifact@v7
-        with:
-          name: vscode-uos-deb
-          path: vscode-uos.deb
-          retention-days: 30
-
-      - name: 📦 Package tar.gz
+      # ============================================================
+      # 12. 打包
+      # ============================================================
+      - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          cd "$(dirname "$BUILD_DIR")"
-          cat > "$(basename "$BUILD_DIR")/install.sh" << 'EOF'
-          #!/bin/bash
-          echo "=========================================="
-          echo "📦 Installing VSCode for UOS..."
-          echo "=========================================="
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          cd "$SCRIPT_DIR"
-          echo "🔧 Fixing chrome-sandbox permissions..."
-          sudo chown root:root chrome-sandbox 2>/dev/null
-          sudo chmod 4755 chrome-sandbox 2>/dev/null
-          echo "✅ Done!"
-          echo "📌 Run: ./start-vscode.sh"
-          EOF
-          chmod +x "$(basename "$BUILD_DIR")/install.sh"
-          tar -czf "$OLDPWD/vscode-uos-${VERSION}.tar.gz" \
+
+          # 确保所有脚本可执行
+          chmod +x $BUILD_DIR/tscode 2>/dev/null || true
+          chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
+          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+
+          # 打包
+          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
             --preserve-permissions \
+            -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
-          cd "$OLDPWD"
-          echo "✅ tar.gz package created:"
+
+          echo "✅ 打包完成:"
           ls -lh vscode-uos-*.tar.gz
 
-      - name: 📤 Upload tar.gz
+      - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vscode-uos-tar
+          name: vscode-uos-double-click
           path: vscode-uos-*.tar.gz
           retention-days: 30
 
@@ -413,20 +372,15 @@ jobs:
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "🔧 Crashpad: Disabled for UOS"
+          echo "📌 Type: Double-click ready (no root required)"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
-            echo "🎉 Build completed successfully!"
+            echo "🎉 Build completed!"
             echo ""
-            echo "📥 Download artifacts:"
-            echo "  - vscode-uos.deb (install with: sudo dpkg -i)"
-            echo "  - vscode-uos-*.tar.gz (portable)"
+            echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
             echo ""
-            echo "📌 Install:"
-            echo "  sudo dpkg -i vscode-uos.deb"
-            echo ""
-            echo "📌 Verify .deb format:"
-            echo "  file vscode-uos.deb  # Should show: Debian binary package"
-            echo "  ar t vscode-uos.deb  # Should show: control.tar.gz, data.tar.gz"
+            echo "📌 On UOS (no root needed):"
+            echo "  1. 解压到任意目录"
+            echo "  2. 双击 tscode 即可运行！"
           fi
           echo "=========================================="
