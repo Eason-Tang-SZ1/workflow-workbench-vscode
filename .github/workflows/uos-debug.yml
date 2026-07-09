@@ -19,7 +19,7 @@ jobs:
 
     steps:
       # ============================================================
-      # 1-9: 标准构建步骤
+      # 1-6: 标准构建步骤
       # ============================================================
       - name: 📥 Checkout
         uses: actions/checkout@v6
@@ -134,14 +134,15 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 彻底禁用 Crashpad
+      # 10. 【关键】精确禁用 Crashpad（不破坏代码）
       # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
-          echo "🔧 彻底禁用 Crashpad"
+          echo "🔧 精确禁用 Crashpad"
           echo "=========================================="
 
+          # 1. 修改 product.json
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -149,12 +150,15 @@ jobs:
               with open('product.json', 'r') as f:
                   data = json.load(f)
               data['enableCrashReport'] = False
-              data['crashReporter'] = {'disabled': True}
+              if 'crashReporter' not in data:
+                  data['crashReporter'] = {}
+              data['crashReporter']['disabled'] = True
               with open('product.json', 'w') as f:
                   json.dump(data, f, indent=2)
               print("✅ product.json 已修改")
           PY_JSON_END
 
+          # 2. 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -172,10 +176,19 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
-          find . -name "*.ts" -exec sed -i 's/.*crashpad.*/\/\/ DISABLED: &/' {} \; 2>/dev/null || true
-          find . -name "*.ts" -exec sed -i 's/.*crashReporter.*start.*/\/\/ DISABLED: &/' {} \; 2>/dev/null || true
+          # 3. 精确修改 electron-main.ts（只修改包含 crashReporter.start 的行）
+          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
+            sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
+            echo "✅ electron-main.ts 已修改"
+          fi
 
-          echo "✅ Crashpad 已彻底禁用"
+          # 4. 精确修改 main.ts（只修改包含 crashReporter.start 的行）
+          if [ -f "src/main.ts" ]; then
+            sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/main.ts
+            echo "✅ src/main.ts 已修改"
+          fi
+
+          echo "✅ Crashpad 已禁用"
 
       - name: ⚙️ Set env
         run: |
@@ -216,7 +229,7 @@ jobs:
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 11. 【核心】创建可直接双击运行的 VSCode
+      # 11. 创建可直接双击运行的 VSCode
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
@@ -241,17 +254,13 @@ jobs:
 
           echo "✅ 真实可执行文件: $REAL_EXEC"
 
-          # 【核心】用包装器替换 tscode（用户双击的就是这个）
-          # 1. 备份真实二进制文件
+          # 用包装器替换 tscode
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
-          # 2. 创建包装器脚本（用户双击运行这个）
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
-          # 这是 VSCode 的包装器 - 用户双击这个文件启动
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -263,22 +272,15 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # 查找真实二进制文件
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
           elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/bin/tscode.real"
-          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/code-oss.real"
-          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/code-oss.real"
           else
               echo "❌ 找不到 VSCode 可执行文件！"
-              echo "请检查目录完整性"
               exit 1
           fi
 
-          # 启动 VSCode
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -290,7 +292,7 @@ jobs:
 
           chmod +x "$REAL_EXEC"
 
-          # 3. 创建桌面快捷方式文件（双击这个也能启动）
+          # 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -306,34 +308,7 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # 4. 创建 README
-          cat > 使用说明.txt << 'EOF'
-          ==========================================
-          VSCode for UOS - 使用说明
-          ==========================================
-
-          🖱️ 双击运行：
-          直接双击 tscode 文件即可启动 VSCode！
-
-          📌 首次运行：
-          - 如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
-          - 或者右键 → 选择"以程序运行"
-
-          📌 桌面快捷方式：
-          将 vscode-uos.desktop 复制到桌面，双击即可
-
-          📌 配置文件：
-          所有配置保存在 ./user-data 目录
-
-          ==========================================
-          EOF
-
-          echo ""
-          echo "📁 目录内容:"
-          ls -la
-
-          echo ""
-          echo "✅ 用户可直接双击运行: $REAL_EXEC"
+          echo "✅ 双击运行版本创建完成"
 
       # ============================================================
       # 12. 打包
@@ -343,12 +318,9 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 确保所有脚本可执行
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
-          # 打包
           tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
@@ -372,15 +344,10 @@ jobs:
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "📌 Type: Double-click ready (no root required)"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed!"
-            echo ""
             echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
-            echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  1. 解压到任意目录"
-            echo "  2. 双击 tscode 即可运行！"
+            echo "📌 On UOS: 解压后双击 tscode 即可运行"
           fi
           echo "=========================================="
