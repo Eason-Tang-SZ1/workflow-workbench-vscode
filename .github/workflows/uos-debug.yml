@@ -131,7 +131,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 禁用 Crashpad
+      # 10. 禁用 Crashpad（只修改 product.json + 创建空服务）
       # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
@@ -142,6 +142,9 @@ jobs:
           # 修改 product.json
           if [ -f "product.json" ]; then
             sed -i 's/"enableCrashReport": true/"enableCrashReport": false/g' product.json
+            if ! grep -q '"enableCrashReport"' product.json; then
+              sed -i 's/"nameShort": "Code - OSS"/"nameShort": "Code - OSS",\n  "enableCrashReport": false/g' product.json
+            fi
             echo "✅ product.json 已修改"
           fi
 
@@ -152,7 +155,7 @@ jobs:
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
            *--------------------------------------------------------------------------------------------*/
-          // DISABLED for UOS build
+          // DISABLED: Crash service for UOS build
           import { createDecorator } from '../../../base/common/instantiation.js';
           export const ICrashService = createDecorator<ICrashService>('crashService');
           export interface ICrashService { _serviceBrand: undefined; }
@@ -162,17 +165,6 @@ jobs:
           }
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
-
-          # 禁用 main.ts 中的 crashReporter
-          if [ -f "src/main.ts" ]; then
-            sed -i 's/.*crashReporter\.start.*/\/\/ DISABLED: &/' src/main.ts
-            echo "✅ src/main.ts 已修改"
-          fi
-
-          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
-            sed -i 's/.*crashReporter\.start.*/\/\/ DISABLED: &/' src/vs/workbench/electron-main/electron-main.ts
-            echo "✅ electron-main.ts 已修改"
-          fi
 
           echo "✅ Crashpad 已禁用"
 
@@ -326,7 +318,7 @@ jobs:
           chmod 755 $DEB_ROOT/DEBIAN/prerm
 
           cat > $DEB_ROOT/DEBIAN/postrm << 'EOF'
-          #!/bash
+          #!/bin/bash
           set -e
           echo "VSCode for UOS has been removed."
           exit 0
