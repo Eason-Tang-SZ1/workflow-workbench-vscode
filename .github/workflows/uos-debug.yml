@@ -871,4 +871,7 @@ jobs:
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          if [ -f "${PACKAGE_NAME}.tar.gz"
+          echo "✅ 打包完成"
+          ls -lh "${PACKAGE_NAME}.tar.gz"
+
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITH
