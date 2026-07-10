@@ -192,12 +192,12 @@ jobs:
 
       - name: ⚙️ Set env
         run: |
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> "$GITHUB_ENV"
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> "$GITHUB_ENV"
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> "$GITHUB_ENV"
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> "$GITHUB_ENV"
+          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> "$GITHUB_ENV"
+          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> "$GITHUB_ENV"
 
       - name: 🔨 Build VSCode
         run: |
@@ -227,8 +227,8 @@ jobs:
             echo "❌ Build not found!"
             exit 1
           fi
-          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-          echo "build_dir=$BUILD_DIR" >> $GITHUB_OUTPUT
+          echo "BUILD_DIR=$BUILD_DIR" >> "$GITHUB_ENV"
+          echo "build_dir=$BUILD_DIR" >> "$GITHUB_OUTPUT"
 
       - name: 📦 Download and bundle extensions
         run: |
@@ -841,37 +841,39 @@ jobs:
 
       - name: 📦 Package
         run: |
+          echo "=========================================="
+          echo "🔍 调试信息 - 开始打包"
+          echo "=========================================="
+
+          echo "当前工作目录:"
+          pwd
+
+          echo ""
+          echo "当前目录内容:"
+          ls -la
+
+          echo ""
+          echo "BUILD_DIR 值: ${BUILD_DIR}"
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
+          echo ""
           echo "=========================================="
           echo "📦 打包产物"
           echo "=========================================="
 
-          find "$BUILD_DIR" -name "*.vsix" -delete 2>/dev/null || true
-          find "$BUILD_DIR" -name "*.log" -delete 2>/dev/null || true
-          find "$BUILD_DIR" -name "*.map" -delete 2>/dev/null || true
+          echo "查找 VSCode 构建目录..."
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "${BUILD_DIR}"; do
+            echo "检查目录: $dir"
+            if [ -d "$dir" ]; then
+              BUILD_DIR="$dir"
+              echo "✅ 找到构建目录: $BUILD_DIR"
+              break
+            fi
+          done
 
           if [ ! -d "$BUILD_DIR" ]; then
             echo "❌ 构建目录不存在: $BUILD_DIR"
-            exit 1
-          fi
-
-          PACKAGE_NAME="vscode-uos-${VERSION}"
-          if [ "${{ github.event.inputs.include_opencode }}" == "true" ]; then
-            PACKAGE_NAME="${PACKAGE_NAME}-with-opencode"
-          fi
-          PACKAGE_NAME="${PACKAGE_NAME}-双击运行"
-
-          echo "📁 打包目录: $BUILD_DIR"
-          echo "📦 包名: $PACKAGE_NAME"
-
-          tar -czf "${PACKAGE_NAME}.tar.gz" \
-            --preserve-permissions \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          echo "✅ 打包完成"
-          ls -lh "${PACKAGE_NAME}.tar.gz"
-
-          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITH
+            echo "查找所有 VSCode 相关目录:"
+            find . -name "*VSCode*" -type d 2>/dev/null ||
