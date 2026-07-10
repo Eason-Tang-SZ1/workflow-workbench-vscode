@@ -139,24 +139,18 @@ jobs:
           }
           EOF
 
-      # ============================================================
-      # 10. 修复 src/main.ts 并禁用 Crashpad
-      # ============================================================
       - name: 🔧 Fix main.ts and disable Crashpad
         run: |
           echo "=========================================="
           echo "🔧 修复 src/main.ts 并禁用 Crashpad"
           echo "=========================================="
 
-          # 从原始仓库恢复 src/main.ts
-          echo "📌 恢复 src/main.ts..."
           if [ -f "src/main.ts" ]; then
             git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
           else
             echo "⚠️ src/main.ts 不存在，跳过"
           fi
 
-          # 修改 product.json
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -172,7 +166,6 @@ jobs:
               print("✅ product.json 已修改")
           PY_JSON_END
 
-          # 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -190,7 +183,6 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
-          # 只修改 electron-main.ts 中的 crashReporter.start
           if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
             sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
             echo "✅ electron-main.ts 已修改"
@@ -236,9 +228,6 @@ jobs:
           fi
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      # ============================================================
-      # 11. 下载并打包插件
-      # ============================================================
       - name: 📦 Download and bundle extensions
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -250,10 +239,8 @@ jobs:
 
           mkdir -p "$BUILD_DIR/extensions"
 
-          # 解析插件列表
           IFS=',' read -ra EXT_LIST <<< "$EXTENSIONS"
 
-          # 创建插件下载脚本
           cat > download_extensions.py << 'PY_EXT_EOF'
           import os
           import json
@@ -266,9 +253,7 @@ jobs:
           from pathlib import Path
 
           def get_extension_info(ext_id):
-              """从VS Code Marketplace获取插件信息"""
               try:
-                  # 解析 publisher.extension
                   parts = ext_id.split('.')
                   if len(parts) < 2:
                       return None
@@ -276,7 +261,6 @@ jobs:
                   publisher = parts[0]
                   extension = '.'.join(parts[1:])
 
-                  # 使用VS Code Marketplace API
                   url = f"https://marketplace.visualstudio.com/_apis/public/gallery/publishers/{publisher}/extensions/{extension}/latest"
                   req = urllib.request.Request(url, headers={'Content-Type': 'application/json'})
 
@@ -298,31 +282,25 @@ jobs:
               return None
 
           def download_extension(ext_info, target_dir):
-              """下载并解压插件"""
               if not ext_info or not ext_info.get('download_url'):
                   return False
 
               ext_id = ext_info['id']
               ext_dir = os.path.join(target_dir, ext_id)
 
-              # 创建插件目录
               os.makedirs(ext_dir, exist_ok=True)
 
-              # 下载插件
               vsix_file = os.path.join(ext_dir, f"{ext_id}.vsix")
               try:
                   print(f"📥 下载插件: {ext_id}")
                   urllib.request.urlretrieve(ext_info['download_url'], vsix_file)
 
-                  # 解压VSIX
                   print(f"📦 解压插件: {ext_id}")
                   with zipfile.ZipFile(vsix_file, 'r') as zip_ref:
                       zip_ref.extractall(ext_dir)
 
-                  # 删除VSIX文件
                   os.remove(vsix_file)
 
-                  # 创建package.json
                   package_json = {
                       "name": ext_info['extension'],
                       "publisher": ext_info['publisher'],
@@ -358,10 +336,8 @@ jobs:
                       print(f"⚠️ 跳过无法识别的插件: {ext}")
           PY_EXT_EOF
 
-          # 下载插件
           python3 download_extensions.py "$EXTENSIONS" "$BUILD_DIR/extensions"
 
-          # 创建已安装插件列表
           echo "[" > "$BUILD_DIR/extensions/extensions.json"
           FIRST=true
           for ext in "${EXT_LIST[@]}"; do
@@ -379,9 +355,6 @@ jobs:
 
           echo "✅ 插件打包完成"
 
-      # ============================================================
-      # 12. 安装和配置 OpenCode
-      # ============================================================
       - name: 🤖 Install and configure OpenCode
         if: github.event.inputs.include_opencode == 'true'
         run: |
@@ -391,7 +364,6 @@ jobs:
           echo "🤖 安装和配置 OpenCode"
           echo "=========================================="
 
-          # 下载 OpenCode
           echo "📥 下载 OpenCode..."
           OPENCODE_VERSION="latest"
           OPENCODE_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x64"
@@ -406,7 +378,6 @@ jobs:
             chmod +x "$BUILD_DIR/opencode"
             echo "✅ OpenCode 下载完成"
 
-            # 创建 OpenCode 启动脚本
             cat > "$BUILD_DIR/opencode-server" << 'OP_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -417,10 +388,8 @@ jobs:
             echo "❌ OpenCode 下载失败，跳过"
           fi
 
-          # 创建 OpenCode 配置目录
           mkdir -p "$BUILD_DIR/user-data/opencode"
 
-          # 创建 OpenCode 配置文件
           cat > "$BUILD_DIR/user-data/opencode/config.json" << 'OP_CONFIG_EOF'
           {
             "version": "1.0.0",
@@ -441,12 +410,10 @@ jobs:
           }
           OP_CONFIG_EOF
 
-          # 创建 OpenCode 包装脚本
           cat > "$BUILD_DIR/start-with-opencode" << 'START_OP_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 启动 OpenCode 服务
           if [ -f "$SCRIPT_DIR/opencode" ]; then
             echo "🤖 启动 OpenCode 服务..."
             "$SCRIPT_DIR/opencode" --daemon --port 3000 &
@@ -454,7 +421,6 @@ jobs:
             echo "✅ OpenCode 服务已启动 (PID: $OPENCODE_PID)"
           fi
 
-          # 启动 VSCode
           echo "🚀 启动 VSCode..."
           exec "$SCRIPT_DIR/tscode" \
             --no-sandbox \
@@ -469,16 +435,12 @@ jobs:
 
           echo "✅ OpenCode 配置完成"
 
-      # ============================================================
-      # 13. 创建 VSCode 插件配置
-      # ============================================================
       - name: ⚙️ Configure VSCode settings for extensions
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
           mkdir -p "$BUILD_DIR/user-data/User"
 
-          # 创建包含插件配置的 settings.json
           cat > "$BUILD_DIR/user-data/User/settings.json" << 'SETTINGS_EOF'
           {
             "extensions.autoUpdate": false,
@@ -503,15 +465,11 @@ jobs:
 
           echo "✅ VSCode 配置完成"
 
-      # ============================================================
-      # 14. 创建可直接双击运行的 VSCode
-      # ============================================================
       - name: 🚀 Create double-click executable
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
-          # 查找真正的二进制文件
           REAL_EXEC=""
           for name in tscode code-oss code; do
             if [ -f "./$name" ]; then
@@ -539,7 +497,6 @@ jobs:
           echo "✅ 真实可执行文件: $REAL_EXEC"
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
-          # 2. 创建 tscode 包装器
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -579,7 +536,6 @@ jobs:
 
           chmod +x "$REAL_EXEC"
 
-          # 3. 创建 start-vscode.sh 备用启动脚本
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -616,8 +572,7 @@ jobs:
 
           chmod +x start-vscode.sh
 
-          # 4. 创建桌面快捷方式
-          cat > vscode-uos.desktop << 'EOF'
+          cat > vscode-uos.desktop << 'DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
@@ -630,11 +585,10 @@ jobs:
           MimeType=text/plain;inode/directory;
           StartupNotify=true
           StartupWMClass=Code
-          EOF
+          DESKTOP_EOF
 
-          # 5. 创建 OpenCode 桌面快捷方式（如果有）
           if [ -f "./opencode" ]; then
-            cat > opencode-uos.desktop << 'EOF'
+            cat > opencode-uos.desktop << 'OP_DESKTOP_EOF'
             [Desktop Entry]
             Version=1.0
             Type=Application
@@ -645,11 +599,10 @@ jobs:
             Terminal=true
             Categories=Development;AI;
             StartupNotify=true
-            EOF
+            OP_DESKTOP_EOF
           fi
 
-          # 6. 创建使用说明
-          cat > 使用说明.txt << 'EOF'
+          cat > 使用说明.txt << 'README_EOF'
           ==========================================
           VSCode for UOS - 使用说明
           ==========================================
@@ -680,35 +633,28 @@ jobs:
           2. 使用 user-data 目录保存配置
           3. 支持离线使用
           ==========================================
-          EOF
+          README_EOF
 
           echo "✅ 双击运行版本创建完成"
           echo ""
           echo "📁 目录内容:"
           ls -la
 
-      # ============================================================
-      # 15. 打包
-      # ============================================================
       - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          EXTENSIONS="${{ github.event.inputs.extensions }}"
 
-          # 清理不必要的文件
           find "$BUILD_DIR" -name "*.vsix" -delete 2>/dev/null || true
           find "$BUILD_DIR" -name "*.log" -delete 2>/dev/null || true
           find "$BUILD_DIR" -name "*.map" -delete 2>/dev/null || true
 
-          # 打包文件名
           PACKAGE_NAME="vscode-uos-${VERSION}"
           if [ "${{ github.event.inputs.include_opencode }}" == "true" ]; then
             PACKAGE_NAME="${PACKAGE_NAME}-with-opencode"
           fi
           PACKAGE_NAME="${PACKAGE_NAME}-双击运行"
 
-          # 创建压缩包
           tar -czf "${PACKAGE_NAME}.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
@@ -717,7 +663,6 @@ jobs:
           echo "✅ 打包完成:"
           ls -lh "${PACKAGE_NAME}.tar.gz"
 
-          # 保存包名用于上传
           echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
 
       - name: 📤 Upload artifacts
