@@ -11,6 +11,15 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
+      include_opencode:
+        description: 'Include OpenCode AI'
+        required: false
+        default: 'true'
+        type: boolean
+      extensions:
+        description: 'Extensions to bundle (comma separated)'
+        required: false
+        default: 'ms-python.python,ms-vscode.vscode-typescript-next,esbenp.prettier-vscode,ms-vscode.vscode-json,ms-vscode.vscode-js-profile-flame,redhat.vscode-yaml,ms-vscode.makefile-tools,ms-vscode.cpptools'
 
 jobs:
   build:
@@ -37,7 +46,7 @@ jobs:
             libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl
+            python3 git wget curl unzip
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -228,7 +237,274 @@ jobs:
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 11. 创建可直接双击运行的 VSCode
+      # 11. 下载并打包插件
+      # ============================================================
+      - name: 📦 Download and bundle extensions
+        run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          EXTENSIONS="${{ github.event.inputs.extensions }}"
+
+          echo "=========================================="
+          echo "📦 下载并打包插件"
+          echo "=========================================="
+
+          mkdir -p "$BUILD_DIR/extensions"
+
+          # 解析插件列表
+          IFS=',' read -ra EXT_LIST <<< "$EXTENSIONS"
+
+          # 创建插件下载脚本
+          cat > download_extensions.py << 'PY_EXT_EOF'
+          import os
+          import json
+          import subprocess
+          import sys
+          import urllib.request
+          import urllib.parse
+          import zipfile
+          import shutil
+          from pathlib import Path
+
+          def get_extension_info(ext_id):
+              """从VS Code Marketplace获取插件信息"""
+              try:
+                  # 解析 publisher.extension
+                  parts = ext_id.split('.')
+                  if len(parts) < 2:
+                      return None
+
+                  publisher = parts[0]
+                  extension = '.'.join(parts[1:])
+
+                  # 使用VS Code Marketplace API
+                  url = f"https://marketplace.visualstudio.com/_apis/public/gallery/publishers/{publisher}/extensions/{extension}/latest"
+                  req = urllib.request.Request(url, headers={'Content-Type': 'application/json'})
+
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      data = json.loads(response.read().decode('utf-8'))
+                      if 'versions' in data and len(data['versions']) > 0:
+                          latest = data['versions'][0]
+                          return {
+                              'id': ext_id,
+                              'publisher': publisher,
+                              'extension': extension,
+                              'version': latest.get('version', 'latest'),
+                              'download_url': latest.get('files', [{}])[0].get('downloadUrl', '')
+                          }
+              except Exception as e:
+                  print(f"⚠️ 获取插件信息失败 {ext_id}: {e}", file=sys.stderr)
+                  return None
+
+              return None
+
+          def download_extension(ext_info, target_dir):
+              """下载并解压插件"""
+              if not ext_info or not ext_info.get('download_url'):
+                  return False
+
+              ext_id = ext_info['id']
+              ext_dir = os.path.join(target_dir, ext_id)
+
+              # 创建插件目录
+              os.makedirs(ext_dir, exist_ok=True)
+
+              # 下载插件
+              vsix_file = os.path.join(ext_dir, f"{ext_id}.vsix")
+              try:
+                  print(f"📥 下载插件: {ext_id}")
+                  urllib.request.urlretrieve(ext_info['download_url'], vsix_file)
+
+                  # 解压VSIX
+                  print(f"📦 解压插件: {ext_id}")
+                  with zipfile.ZipFile(vsix_file, 'r') as zip_ref:
+                      zip_ref.extractall(ext_dir)
+
+                  # 删除VSIX文件
+                  os.remove(vsix_file)
+
+                  # 创建package.json
+                  package_json = {
+                      "name": ext_info['extension'],
+                      "publisher": ext_info['publisher'],
+                      "version": ext_info['version'],
+                      "engines": {"vscode": "^1.116.0"}
+                  }
+
+                  pkg_path = os.path.join(ext_dir, "package.json")
+                  if not os.path.exists(pkg_path):
+                      with open(pkg_path, 'w') as f:
+                          json.dump(package_json, f, indent=2)
+
+                  print(f"✅ 插件下载完成: {ext_id}")
+                  return True
+
+              except Exception as e:
+                  print(f"❌ 下载插件失败 {ext_id}: {e}", file=sys.stderr)
+                  return False
+
+          if __name__ == "__main__":
+              extensions = sys.argv[1].split(',') if len(sys.argv) > 1 else []
+              target_dir = sys.argv[2] if len(sys.argv) > 2 else "./extensions"
+
+              for ext in extensions:
+                  ext = ext.strip()
+                  if not ext:
+                      continue
+
+                  info = get_extension_info(ext)
+                  if info:
+                      download_extension(info, target_dir)
+                  else:
+                      print(f"⚠️ 跳过无法识别的插件: {ext}")
+          PY_EXT_EOF
+
+          # 下载插件
+          python3 download_extensions.py "$EXTENSIONS" "$BUILD_DIR/extensions"
+
+          # 创建已安装插件列表
+          echo "[" > "$BUILD_DIR/extensions/extensions.json"
+          FIRST=true
+          for ext in "${EXT_LIST[@]}"; do
+            ext=$(echo "$ext" | xargs)
+            if [ ! -z "$ext" ]; then
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> "$BUILD_DIR/extensions/extensions.json"
+              fi
+              echo "  {\"identifier\": {\"id\": \"$ext\"}, \"version\": \"1.0.0\", \"location\": \"./$ext\", \"relativeLocation\": \"./$ext\"}" >> "$BUILD_DIR/extensions/extensions.json"
+            fi
+          done
+          echo "]" >> "$BUILD_DIR/extensions/extensions.json"
+
+          echo "✅ 插件打包完成"
+
+      # ============================================================
+      # 12. 安装和配置 OpenCode
+      # ============================================================
+      - name: 🤖 Install and configure OpenCode
+        if: github.event.inputs.include_opencode == 'true'
+        run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          echo "=========================================="
+          echo "🤖 安装和配置 OpenCode"
+          echo "=========================================="
+
+          # 下载 OpenCode
+          echo "📥 下载 OpenCode..."
+          OPENCODE_VERSION="latest"
+          OPENCODE_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x64"
+
+          if ! wget -q "$OPENCODE_URL" -O "$BUILD_DIR/opencode"; then
+            echo "⚠️ 下载失败，尝试使用备用地址..."
+            OPENCODE_URL="https://opencode.ai/downloads/opencode-linux-x64"
+            wget -q "$OPENCODE_URL" -O "$BUILD_DIR/opencode" || echo "⚠️ 备用地址也失败"
+          fi
+
+          if [ -f "$BUILD_DIR/opencode" ]; then
+            chmod +x "$BUILD_DIR/opencode"
+            echo "✅ OpenCode 下载完成"
+
+            # 创建 OpenCode 启动脚本
+            cat > "$BUILD_DIR/opencode-server" << 'OP_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$SCRIPT_DIR/opencode" "$@"
+          OP_EOF
+            chmod +x "$BUILD_DIR/opencode-server"
+          else
+            echo "❌ OpenCode 下载失败，跳过"
+          fi
+
+          # 创建 OpenCode 配置目录
+          mkdir -p "$BUILD_DIR/user-data/opencode"
+
+          # 创建 OpenCode 配置文件
+          cat > "$BUILD_DIR/user-data/opencode/config.json" << 'OP_CONFIG_EOF'
+          {
+            "version": "1.0.0",
+            "server": {
+              "port": 3000,
+              "host": "localhost"
+            },
+            "models": {
+              "default": "gpt-4",
+              "available": ["gpt-4", "gpt-3.5-turbo", "claude-3"]
+            },
+            "features": {
+              "codeCompletion": true,
+              "codeReview": true,
+              "documentation": true,
+              "testGeneration": true
+            }
+          }
+          OP_CONFIG_EOF
+
+          # 创建 OpenCode 包装脚本
+          cat > "$BUILD_DIR/start-with-opencode" << 'START_OP_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          # 启动 OpenCode 服务
+          if [ -f "$SCRIPT_DIR/opencode" ]; then
+            echo "🤖 启动 OpenCode 服务..."
+            "$SCRIPT_DIR/opencode" --daemon --port 3000 &
+            OPENCODE_PID=$!
+            echo "✅ OpenCode 服务已启动 (PID: $OPENCODE_PID)"
+          fi
+
+          # 启动 VSCode
+          echo "🚀 启动 VSCode..."
+          exec "$SCRIPT_DIR/tscode" \
+            --no-sandbox \
+            --disable-gpu-sandbox \
+            --disable-software-rasterizer \
+            --disable-gpu \
+            --user-data-dir="$SCRIPT_DIR/user-data" \
+            "$@"
+          START_OP_EOF
+
+          chmod +x "$BUILD_DIR/start-with-opencode"
+
+          echo "✅ OpenCode 配置完成"
+
+      # ============================================================
+      # 13. 创建 VSCode 插件配置
+      # ============================================================
+      - name: ⚙️ Configure VSCode settings for extensions
+        run: |
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          mkdir -p "$BUILD_DIR/user-data/User"
+
+          # 创建包含插件配置的 settings.json
+          cat > "$BUILD_DIR/user-data/User/settings.json" << 'SETTINGS_EOF'
+          {
+            "extensions.autoUpdate": false,
+            "extensions.autoCheckUpdates": false,
+            "extensions.ignoreRecommendations": true,
+            "telemetry.enableCrashReporter": false,
+            "telemetry.enableTelemetry": false,
+            "workbench.settings.useSplitJSON": true,
+            "workbench.colorTheme": "Default Dark+",
+            "editor.fontSize": 14,
+            "editor.fontFamily": "Monaco, 'Courier New', monospace",
+            "editor.tabSize": 2,
+            "editor.renderWhitespace": "selection",
+            "files.autoSave": "afterDelay",
+            "files.autoSaveDelay": 1000,
+            "terminal.integrated.shell.linux": "/bin/bash",
+            "workbench.startupEditor": "none",
+            "update.mode": "none",
+            "update.showReleaseNotes": false
+          }
+          SETTINGS_EOF
+
+          echo "✅ VSCode 配置完成"
+
+      # ============================================================
+      # 14. 创建可直接双击运行的 VSCode
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
@@ -346,7 +622,7 @@ jobs:
           Version=1.0
           Type=Application
           Name=VSCode for UOS
-          Comment=Visual Studio Code for UOS
+          Comment=Visual Studio Code for UOS with bundled extensions
           Exec=./tscode %F
           Icon=./resources/app/resources/linux/code.png
           Terminal=false
@@ -356,7 +632,23 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # 5. 创建使用说明
+          # 5. 创建 OpenCode 桌面快捷方式（如果有）
+          if [ -f "./opencode" ]; then
+            cat > opencode-uos.desktop << 'EOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=OpenCode AI
+            Comment=OpenCode AI Assistant
+            Exec=./opencode-server
+            Icon=./resources/app/resources/linux/code.png
+            Terminal=true
+            Categories=Development;AI;
+            StartupNotify=true
+            EOF
+          fi
+
+          # 6. 创建使用说明
           cat > 使用说明.txt << 'EOF'
           ==========================================
           VSCode for UOS - 使用说明
@@ -368,14 +660,25 @@ jobs:
           📌 备用启动方式：
           在终端中执行: ./start-vscode.sh
 
+          📌 启动 OpenCode（如果有）：
+          在终端中执行: ./start-with-opencode
+
           📌 桌面快捷方式：
           将 vscode-uos.desktop 复制到桌面，双击即可
 
           📌 配置文件：
           所有配置保存在 ./user-data 目录
 
+          📌 已安装插件：
+          查看 ./extensions 目录
+
           📌 首次运行：
           如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
+
+          📌 注意事项：
+          1. 所有扩展已预装，无需联网下载
+          2. 使用 user-data 目录保存配置
+          3. 支持离线使用
           ==========================================
           EOF
 
@@ -385,24 +688,37 @@ jobs:
           ls -la
 
       # ============================================================
-      # 12. 打包
+      # 15. 打包
       # ============================================================
       - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          EXTENSIONS="${{ github.event.inputs.extensions }}"
 
-          chmod +x $BUILD_DIR/tscode 2>/dev/null || true
-          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+          # 清理不必要的文件
+          find "$BUILD_DIR" -name "*.vsix" -delete 2>/dev/null || true
+          find "$BUILD_DIR" -name "*.log" -delete 2>/dev/null || true
+          find "$BUILD_DIR" -name "*.map" -delete 2>/dev/null || true
 
-          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
+          # 打包文件名
+          PACKAGE_NAME="vscode-uos-${VERSION}"
+          if [ "${{ github.event.inputs.include_opencode }}" == "true" ]; then
+            PACKAGE_NAME="${PACKAGE_NAME}-with-opencode"
+          fi
+          PACKAGE_NAME="${PACKAGE_NAME}-双击运行"
+
+          # 创建压缩包
+          tar -czf "${PACKAGE_NAME}.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
           echo "✅ 打包完成:"
-          ls -lh vscode-uos-*.tar.gz
+          ls -lh "${PACKAGE_NAME}.tar.gz"
+
+          # 保存包名用于上传
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -419,11 +735,14 @@ jobs:
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "📦 Branch: ${{ github.event.inputs.branch }}"
+          echo "🔌 Extensions: ${{ github.event.inputs.extensions }}"
+          echo "🤖 OpenCode: ${{ github.event.inputs.include_opencode }}"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed!"
             echo ""
-            echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
+            echo "📥 Download: ${{ env.PACKAGE_NAME }}.tar.gz"
             echo ""
             echo "📌 On UOS (no root needed):"
             echo "  1. 解压到任意目录"
@@ -434,8 +753,14 @@ jobs:
             echo "  ├── tscode.real         # 真实二进制文件"
             echo "  ├── start-vscode.sh     # 备用启动脚本"
             echo "  ├── vscode-uos.desktop  # 桌面快捷方式"
-            echo "  ├── 使用说明.txt        # 使用说明"
+            echo "  ├── extensions/         # 预装插件"
             echo "  ├── user-data/          # 用户配置目录"
+            if [ "${{ github.event.inputs.include_opencode }}" == "true" ]; then
+              echo "  ├── opencode            # OpenCode AI"
+              echo "  ├── opencode-server     # OpenCode 服务"
+              echo "  ├── start-with-opencode # 带AI的启动脚本"
+              echo "  └── opencode-uos.desktop # OpenCode 快捷方式"
+            fi
             echo "  └── ..."
           fi
           echo "=========================================="
