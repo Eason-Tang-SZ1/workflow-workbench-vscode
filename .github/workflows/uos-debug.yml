@@ -871,4 +871,4 @@ jobs:
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          if [ -f "${PACKAGE_NAME}.tar.gz" ]; then
+          if [ -f "${PACKAGE_NAME}.tar.gz"
