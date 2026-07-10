@@ -141,7 +141,11 @@ jobs:
 
           # 从原始仓库恢复 src/main.ts
           echo "📌 恢复 src/main.ts..."
-          git checkout src/main.ts
+          if [ -f "src/main.ts" ]; then
+            git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
+          else
+            echo "⚠️ src/main.ts 不存在，跳过"
+          fi
 
           # 修改 product.json
           python3 << 'PY_JSON_END'
@@ -247,15 +251,19 @@ jobs:
             REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
           fi
 
-          echo "✅ 真实可执行文件: $REAL_EXEC"
-
-          # 用包装器替换 tscode
-          if [ -f "$REAL_EXEC" ]; then
-            mv "$REAL_EXEC" "${REAL_EXEC}.real"
-          else
-            echo "⚠️ 找不到可执行文件"
+          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
+            echo "❌ 找不到可执行文件！"
+            echo "当前目录内容:"
+            ls -la
+            echo "查找可执行文件:"
+            find . -maxdepth 2 -type f -executable 2>/dev/null
+            exit 1
           fi
 
+          echo "✅ 真实可执行文件: $REAL_EXEC"
+          mv "$REAL_EXEC" "${REAL_EXEC}.real"
+
+          # 2. 创建 tscode 包装器
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -295,7 +303,44 @@ jobs:
 
           chmod +x "$REAL_EXEC"
 
-          # 创建桌面快捷方式
+          # 3. 创建 start-vscode.sh 备用启动脚本
+          cat > start-vscode.sh << 'START_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode.real"
+          else
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
+          fi
+
+          echo "=== VSCode for UOS ==="
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$SCRIPT_DIR/user-data" \
+              "$@"
+          START_EOF
+
+          chmod +x start-vscode.sh
+
+          # 4. 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -311,7 +356,33 @@ jobs:
           StartupWMClass=Code
           EOF
 
+          # 5. 创建使用说明
+          cat > 使用说明.txt << 'EOF'
+          ==========================================
+          VSCode for UOS - 使用说明
+          ==========================================
+
+          🖱️ 双击运行：
+          直接双击 tscode 文件即可启动 VSCode！
+
+          📌 备用启动方式：
+          在终端中执行: ./start-vscode.sh
+
+          📌 桌面快捷方式：
+          将 vscode-uos.desktop 复制到桌面，双击即可
+
+          📌 配置文件：
+          所有配置保存在 ./user-data 目录
+
+          📌 首次运行：
+          如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
+          ==========================================
+          EOF
+
           echo "✅ 双击运行版本创建完成"
+          echo ""
+          echo "📁 目录内容:"
+          ls -la
 
       # ============================================================
       # 12. 打包
@@ -322,6 +393,7 @@ jobs:
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
+          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
           tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
@@ -356,5 +428,14 @@ jobs:
             echo "📌 On UOS (no root needed):"
             echo "  1. 解压到任意目录"
             echo "  2. 双击 tscode 即可运行！"
+            echo ""
+            echo "📁 解压后产物:"
+            echo "  ├── tscode              # 双击运行"
+            echo "  ├── tscode.real         # 真实二进制文件"
+            echo "  ├── start-vscode.sh     # 备用启动脚本"
+            echo "  ├── vscode-uos.desktop  # 桌面快捷方式"
+            echo "  ├── 使用说明.txt        # 使用说明"
+            echo "  ├── user-data/          # 用户配置目录"
+            echo "  └── ..."
           fi
           echo "=========================================="
