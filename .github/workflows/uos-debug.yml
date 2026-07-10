@@ -241,7 +241,7 @@ jobs:
 
           IFS=',' read -ra EXT_LIST <<< "$EXTENSIONS"
 
-          cat > download_extensions.py << 'PY_EXT_EOF'
+          cat > download_extensions.py << 'PYEXTEOF'
           import os
           import json
           import subprocess
@@ -334,7 +334,7 @@ jobs:
                       download_extension(info, target_dir)
                   else:
                       print(f"⚠️ 跳过无法识别的插件: {ext}")
-          PY_EXT_EOF
+          PYEXTEOF
 
           python3 download_extensions.py "$EXTENSIONS" "$BUILD_DIR/extensions"
 
@@ -378,11 +378,9 @@ jobs:
             chmod +x "$BUILD_DIR/opencode"
             echo "✅ OpenCode 下载完成"
 
-            cat > "$BUILD_DIR/opencode-server" << 'OP_EOF'
-          #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          exec "$SCRIPT_DIR/opencode" "$@"
-          OP_EOF
+            printf '%s\n' '#!/bin/bash' \
+              'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+              'exec "$SCRIPT_DIR/opencode" "$@"' > "$BUILD_DIR/opencode-server"
             chmod +x "$BUILD_DIR/opencode-server"
           else
             echo "❌ OpenCode 下载失败，跳过"
@@ -390,46 +388,42 @@ jobs:
 
           mkdir -p "$BUILD_DIR/user-data/opencode"
 
-          cat > "$BUILD_DIR/user-data/opencode/config.json" << 'OP_CONFIG_EOF'
-          {
-            "version": "1.0.0",
-            "server": {
-              "port": 3000,
-              "host": "localhost"
-            },
-            "models": {
-              "default": "gpt-4",
-              "available": ["gpt-4", "gpt-3.5-turbo", "claude-3"]
-            },
-            "features": {
-              "codeCompletion": true,
-              "codeReview": true,
-              "documentation": true,
-              "testGeneration": true
-            }
-          }
-          OP_CONFIG_EOF
+          printf '%s\n' '{' \
+            '  "version": "1.0.0",' \
+            '  "server": {' \
+            '    "port": 3000,' \
+            '    "host": "localhost"' \
+            '  },' \
+            '  "models": {' \
+            '    "default": "gpt-4",' \
+            '    "available": ["gpt-4", "gpt-3.5-turbo", "claude-3"]' \
+            '  },' \
+            '  "features": {' \
+            '    "codeCompletion": true,' \
+            '    "codeReview": true,' \
+            '    "documentation": true,' \
+            '    "testGeneration": true' \
+            '  }' \
+            '}' > "$BUILD_DIR/user-data/opencode/config.json"
 
-          cat > "$BUILD_DIR/start-with-opencode" << 'START_OP_EOF'
-          #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-          if [ -f "$SCRIPT_DIR/opencode" ]; then
-            echo "🤖 启动 OpenCode 服务..."
-            "$SCRIPT_DIR/opencode" --daemon --port 3000 &
-            OPENCODE_PID=$!
-            echo "✅ OpenCode 服务已启动 (PID: $OPENCODE_PID)"
-          fi
-
-          echo "🚀 启动 VSCode..."
-          exec "$SCRIPT_DIR/tscode" \
-            --no-sandbox \
-            --disable-gpu-sandbox \
-            --disable-software-rasterizer \
-            --disable-gpu \
-            --user-data-dir="$SCRIPT_DIR/user-data" \
-            "$@"
-          START_OP_EOF
+          printf '%s\n' '#!/bin/bash' \
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+            '' \
+            'if [ -f "$SCRIPT_DIR/opencode" ]; then' \
+            '  echo "🤖 启动 OpenCode 服务..."' \
+            '  "$SCRIPT_DIR/opencode" --daemon --port 3000 &' \
+            '  OPENCODE_PID=$!' \
+            '  echo "✅ OpenCode 服务已启动 (PID: $OPENCODE_PID)"' \
+            'fi' \
+            '' \
+            'echo "🚀 启动 VSCode..."' \
+            'exec "$SCRIPT_DIR/tscode" \' \
+            '  --no-sandbox \' \
+            '  --disable-gpu-sandbox \' \
+            '  --disable-software-rasterizer \' \
+            '  --disable-gpu \' \
+            '  --user-data-dir="$SCRIPT_DIR/user-data" \' \
+            '  "$@"' > "$BUILD_DIR/start-with-opencode"
 
           chmod +x "$BUILD_DIR/start-with-opencode"
 
@@ -441,27 +435,25 @@ jobs:
 
           mkdir -p "$BUILD_DIR/user-data/User"
 
-          cat > "$BUILD_DIR/user-data/User/settings.json" << 'SETTINGS_EOF'
-          {
-            "extensions.autoUpdate": false,
-            "extensions.autoCheckUpdates": false,
-            "extensions.ignoreRecommendations": true,
-            "telemetry.enableCrashReporter": false,
-            "telemetry.enableTelemetry": false,
-            "workbench.settings.useSplitJSON": true,
-            "workbench.colorTheme": "Default Dark+",
-            "editor.fontSize": 14,
-            "editor.fontFamily": "Monaco, 'Courier New', monospace",
-            "editor.tabSize": 2,
-            "editor.renderWhitespace": "selection",
-            "files.autoSave": "afterDelay",
-            "files.autoSaveDelay": 1000,
-            "terminal.integrated.shell.linux": "/bin/bash",
-            "workbench.startupEditor": "none",
-            "update.mode": "none",
-            "update.showReleaseNotes": false
-          }
-          SETTINGS_EOF
+          printf '%s\n' '{' \
+            '  "extensions.autoUpdate": false,' \
+            '  "extensions.autoCheckUpdates": false,' \
+            '  "extensions.ignoreRecommendations": true,' \
+            '  "telemetry.enableCrashReporter": false,' \
+            '  "telemetry.enableTelemetry": false,' \
+            '  "workbench.settings.useSplitJSON": true,' \
+            '  "workbench.colorTheme": "Default Dark+",' \
+            '  "editor.fontSize": 14,' \
+            '  "editor.fontFamily": "Monaco, '"'"'Courier New'"'"', monospace",' \
+            '  "editor.tabSize": 2,' \
+            '  "editor.renderWhitespace": "selection",' \
+            '  "files.autoSave": "afterDelay",' \
+            '  "files.autoSaveDelay": 1000,' \
+            '  "terminal.integrated.shell.linux": "/bin/bash",' \
+            '  "workbench.startupEditor": "none",' \
+            '  "update.mode": "none",' \
+            '  "update.showReleaseNotes": false' \
+            '}' > "$BUILD_DIR/user-data/User/settings.json"
 
           echo "✅ VSCode 配置完成"
 
@@ -497,112 +489,104 @@ jobs:
           echo "✅ 真实可执行文件: $REAL_EXEC"
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
-          cat > "$REAL_EXEC" << 'WRAPPER_EOF'
-          #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
-          export DISPLAY=:0
-          export ELECTRON_DISABLE_CRASH_REPORTER=1
-          export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export CRASHPAD_DISABLE=1
-
-          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/tscode.real"
-          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode.real"
-          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/code-oss.real"
-          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/code-oss.real"
-          else
-              echo "❌ 找不到 VSCode 可执行文件！"
-              exit 1
-          fi
-
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
-              "$@"
-          WRAPPER_EOF
+          printf '%s\n' '#!/bin/bash' \
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+            '' \
+            'export ELECTRON_ENABLE_GPU=0' \
+            'export LIBGL_ALWAYS_SOFTWARE=1' \
+            'export NODE_OPTIONS="--max-old-space-size=4096"' \
+            'export ELECTRON_DISABLE_SANDBOX=1' \
+            'export GDK_BACKEND=x11' \
+            'export QT_QPA_PLATFORM=xcb' \
+            'export DISPLAY=:0' \
+            'export ELECTRON_DISABLE_CRASH_REPORTER=1' \
+            'export ELECTRON_DISABLE_CRASH_REPORTING=1' \
+            'export CRASHPAD_DISABLE=1' \
+            '' \
+            'if [ -f "$SCRIPT_DIR/tscode.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/tscode.real"' \
+            'elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/bin/tscode.real"' \
+            'elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/code-oss.real"' \
+            'elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/bin/code-oss.real"' \
+            'else' \
+            '    echo "❌ 找不到 VSCode 可执行文件！"' \
+            '    exit 1' \
+            'fi' \
+            '' \
+            'exec "$EXEC" \' \
+            '  --no-sandbox \' \
+            '  --disable-gpu-sandbox \' \
+            '  --disable-software-rasterizer \' \
+            '  --disable-gpu \' \
+            '  --user-data-dir="$SCRIPT_DIR/user-data" \' \
+            '  "$@"' > "$REAL_EXEC"
 
           chmod +x "$REAL_EXEC"
 
-          cat > start-vscode.sh << 'START_EOF'
-          #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
-          export DISPLAY=:0
-          export ELECTRON_DISABLE_CRASH_REPORTER=1
-          export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export CRASHPAD_DISABLE=1
-
-          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/tscode.real"
-          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode.real"
-          else
-              echo "❌ 找不到 VSCode 可执行文件！"
-              exit 1
-          fi
-
-          echo "=== VSCode for UOS ==="
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
-              "$@"
-          START_EOF
+          printf '%s\n' '#!/bin/bash' \
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+            '' \
+            'export ELECTRON_ENABLE_GPU=0' \
+            'export LIBGL_ALWAYS_SOFTWARE=1' \
+            'export NODE_OPTIONS="--max-old-space-size=4096"' \
+            'export ELECTRON_DISABLE_SANDBOX=1' \
+            'export GDK_BACKEND=x11' \
+            'export QT_QPA_PLATFORM=xcb' \
+            'export DISPLAY=:0' \
+            'export ELECTRON_DISABLE_CRASH_REPORTER=1' \
+            'export ELECTRON_DISABLE_CRASH_REPORTING=1' \
+            'export CRASHPAD_DISABLE=1' \
+            '' \
+            'if [ -f "$SCRIPT_DIR/tscode.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/tscode.real"' \
+            'elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then' \
+            '    EXEC="$SCRIPT_DIR/bin/tscode.real"' \
+            'else' \
+            '    echo "❌ 找不到 VSCode 可执行文件！"' \
+            '    exit 1' \
+            'fi' \
+            '' \
+            'echo "=== VSCode for UOS ==="' \
+            'exec "$EXEC" \' \
+            '  --no-sandbox \' \
+            '  --disable-gpu-sandbox \' \
+            '  --disable-software-rasterizer \' \
+            '  --disable-gpu \' \
+            '  --user-data-dir="$SCRIPT_DIR/user-data" \' \
+            '  "$@"' > start-vscode.sh
 
           chmod +x start-vscode.sh
 
-          cat > vscode-uos.desktop << 'DESKTOP_EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=VSCode for UOS
-          Comment=Visual Studio Code for UOS with bundled extensions
-          Exec=./tscode %F
-          Icon=./resources/app/resources/linux/code.png
-          Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupNotify=true
-          StartupWMClass=Code
-          DESKTOP_EOF
+          printf '%s\n' '[Desktop Entry]' \
+            'Version=1.0' \
+            'Type=Application' \
+            'Name=VSCode for UOS' \
+            'Comment=Visual Studio Code for UOS with bundled extensions' \
+            'Exec=./tscode %F' \
+            'Icon=./resources/app/resources/linux/code.png' \
+            'Terminal=false' \
+            'Categories=Development;IDE;' \
+            'MimeType=text/plain;inode/directory;' \
+            'StartupNotify=true' \
+            'StartupWMClass=Code' > vscode-uos.desktop
 
           if [ -f "./opencode" ]; then
-            cat > opencode-uos.desktop << 'OP_DESKTOP_EOF'
-            [Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name=OpenCode AI
-            Comment=OpenCode AI Assistant
-            Exec=./opencode-server
-            Icon=./resources/app/resources/linux/code.png
-            Terminal=true
-            Categories=Development;AI;
-            StartupNotify=true
-            OP_DESKTOP_EOF
+            printf '%s\n' '[Desktop Entry]' \
+              'Version=1.0' \
+              'Type=Application' \
+              'Name=OpenCode AI' \
+              'Comment=OpenCode AI Assistant' \
+              'Exec=./opencode-server' \
+              'Icon=./resources/app/resources/linux/code.png' \
+              'Terminal=true' \
+              'Categories=Development;AI;' \
+              'StartupNotify=true' > opencode-uos.desktop
           fi
 
-          cat > 使用说明.txt << 'README_EOF'
+          cat > 使用说明.txt << 'EOF'
           ==========================================
           VSCode for UOS - 使用说明
           ==========================================
@@ -633,7 +617,7 @@ jobs:
           2. 使用 user-data 目录保存配置
           3. 支持离线使用
           ==========================================
-          README_EOF
+          EOF
 
           echo "✅ 双击运行版本创建完成"
           echo ""
