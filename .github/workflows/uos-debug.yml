@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Debug  Double-click)
+name: Build Custom VSCode for UOS (Debug Double-click)
 
 on:
   workflow_dispatch:
@@ -248,12 +248,16 @@ jobs:
           echo "Done: $(date)"
           echo "✅ 构建完成"
 
-      - name: 🔍 Verify
+      # ============================================================
+      # 11. 验证构建产物内容
+      # ============================================================
+      - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
-          echo "🔍 验证构建产物"
+          echo "🔍 验证构建产物内容"
           echo "=========================================="
 
+          # 查找构建目录
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             echo "检查目录: $dir"
@@ -272,12 +276,60 @@ jobs:
           fi
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+
+          echo ""
           echo "📁 构建目录内容:"
-          ls -la "$BUILD_DIR" | head -20
-          echo "✅ 验证完成"
+          ls -la "$BUILD_DIR"
+
+          # 检查 extensions 目录
+          echo ""
+          echo "📌 检查 extensions 目录..."
+          if [ -d "$BUILD_DIR/extensions" ]; then
+            EXT_COUNT=$(find "$BUILD_DIR/extensions" -maxdepth 1 -type d | wc -l)
+            echo "   ✅ extensions 存在 ($EXT_COUNT 个目录)"
+
+            # 检查预构建扩展
+            echo "   📋 预构建扩展:"
+            for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
+              if [ -d "$BUILD_DIR/extensions/$ext" ] || find "$BUILD_DIR/extensions" -name "$ext" -type d 2>/dev/null | grep -q .; then
+                echo "      ✅ $ext"
+              else
+                echo "      ⚠️ $ext (未找到)"
+              fi
+            done
+          else
+            echo "   ❌ extensions 不存在!"
+            echo "   查找 extensions 位置..."
+            find . -name "extensions" -type d 2>/dev/null | head -10
+            exit 1
+          fi
+
+          # 检查 node_modules 目录
+          echo ""
+          echo "📌 检查 node_modules..."
+          if [ -d "$BUILD_DIR/node_modules" ]; then
+            NODE_SIZE=$(du -sh "$BUILD_DIR/node_modules" | cut -f1)
+            echo "   ✅ node_modules 存在 (大小: $NODE_SIZE)"
+          else
+            echo "   ❌ node_modules 不存在!"
+            exit 1
+          fi
+
+          # 检查可执行文件
+          echo ""
+          echo "📌 检查可执行文件..."
+          if [ -f "$BUILD_DIR/tscode" ] || [ -f "$BUILD_DIR/bin/tscode" ]; then
+            echo "   ✅ tscode 存在"
+          else
+            echo "   ❌ tscode 不存在!"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ 所有检查通过!"
 
       # ============================================================
-      # 11. 创建可直接双击运行的 VSCode
+      # 12. 创建可直接双击运行的 VSCode
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
@@ -454,7 +506,7 @@ jobs:
           echo "✅ 双击运行版本创建完成"
 
       # ============================================================
-      # 12. 打包（带详细日志）
+      # 13. 打包（包含所有内容）
       # ============================================================
       - name: 📦 Package artifacts
         run: |
@@ -462,19 +514,37 @@ jobs:
           echo "📦 打包产物"
           echo "=========================================="
 
-          # 获取构建目录
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          echo "📁 构建目录: $BUILD_DIR"
 
-          if [ ! -d "$BUILD_DIR" ]; then
-            echo "❌ 构建目录不存在!"
+          echo "📁 构建目录: $BUILD_DIR"
+          echo ""
+          echo "📁 目录内容:"
+          ls -la "$BUILD_DIR"
+
+          # 检查关键目录
+          echo ""
+          echo "🔍 检查关键目录..."
+
+          if [ -d "$BUILD_DIR/extensions" ]; then
+            EXT_COUNT=$(ls -la "$BUILD_DIR/extensions" | wc -l)
+            echo "✅ extensions 存在 ($EXT_COUNT 项)"
+          else
+            echo "❌ extensions 不存在!"
+            echo "查找 extensions 位置..."
+            find . -name "extensions" -type d 2>/dev/null | head -10
             exit 1
           fi
 
-          echo "📁 构建目录内容:"
-          ls -la "$BUILD_DIR"
+          if [ -d "$BUILD_DIR/node_modules" ]; then
+            NODE_COUNT=$(ls -la "$BUILD_DIR/node_modules" | wc -l)
+            echo "✅ node_modules 存在 ($NODE_COUNT 项)"
+          else
+            echo "❌ node_modules 不存在!"
+            exit 1
+          fi
 
           # 确保所有脚本可执行
+          echo ""
           echo "🔧 设置执行权限..."
           chmod +x $BUILD_DIR/tscode 2>/dev/null || echo "  ⚠️ tscode 不存在"
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || echo "  ⚠️ start-vscode.sh 不存在"
@@ -482,48 +552,48 @@ jobs:
           echo "✅ 权限设置完成"
 
           # 创建 artifacts 目录
-          echo "📌 创建 artifacts 目录..."
           mkdir -p artifacts
-          echo "✅ artifacts 目录已创建"
 
-          # 打包
+          # 打包（不排除任何目录）
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          echo "📌 开始打包 (版本: $VERSION)..."
+          echo ""
+          echo "📌 开始打包..."
 
-          tar -czf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" \
+          # 使用完整路径打包
+          cd "$(dirname "$BUILD_DIR")"
+          tar -czf "$OLDPWD/artifacts/custom-vscode-uos-${VERSION}.tar.gz" \
             --preserve-permissions \
-            -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
+          cd "$OLDPWD"
 
           echo "✅ 打包完成"
-
-          # 显示打包结果
           echo ""
           echo "📦 打包结果:"
-          if [ -d "artifacts" ]; then
-            ls -lh artifacts/
-          else
-            echo "❌ artifacts 目录不存在!"
-            exit 1
-          fi
+          ls -lh artifacts/
 
-          # 验证包是否存在
-          PACKAGE_FILE="artifacts/custom-vscode-uos-${VERSION}.tar.gz"
+          # 验证包内容
           echo ""
-          echo "🔍 验证包文件..."
-          if [ -f "$PACKAGE_FILE" ]; then
-            echo "✅ 包创建成功!"
-            echo "📁 包路径: $PACKAGE_FILE"
-            echo "📊 包大小: $(du -sh "$PACKAGE_FILE" | cut -f1 2>/dev/null || echo '未知')"
+          echo "🔍 验证包内容..."
+          if tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | grep -q "extensions"; then
+            echo "✅ 包中包含 extensions"
           else
-            echo "❌ 包文件不存在: $PACKAGE_FILE"
-            echo "📁 artifacts 目录内容:"
-            ls -la artifacts/ || echo "  目录为空"
+            echo "❌ 包中不包含 extensions!"
             exit 1
           fi
 
-          echo "✅ 打包完成!"
-          echo "=========================================="
+          if tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | grep -q "node_modules"; then
+            echo "✅ 包中包含 node_modules"
+          else
+            echo "❌ 包中不包含 node_modules!"
+            exit 1
+          fi
+
+          echo ""
+          echo "📦 包内容预览（前30行）:"
+          tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | head -30
+
+          echo ""
+          echo "✅ 打包验证通过!"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -540,17 +610,25 @@ jobs:
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "📁 构建目录: $BUILD_DIR"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed!"
             echo ""
             echo "📥 Download: custom-vscode-uos artifact"
             echo ""
+            echo "📌 解压后产物:"
+            echo "  ├── tscode              # 双击运行"
+            echo "  ├── tscode.real         # 真实二进制文件"
+            echo "  ├── start-vscode.sh     # 备用启动脚本"
+            echo "  ├── vscode-uos.desktop  # 桌面快捷方式"
+            echo "  ├── 使用说明.txt        # 使用说明"
+            echo "  ├── extensions/         # ✅ 内置扩展"
+            echo "  ├── node_modules/       # ✅ Node.js 依赖"
+            echo "  └── ..."
+            echo ""
             echo "📌 On UOS (no root needed):"
-            echo "  1. 下载 artifact 并解压"
-            echo "  2. 进入 VSCode-linux-x64 目录"
-            echo "  3. 双击 tscode 即可运行！"
+            echo "  1. 解压到任意目录"
+            echo "  2. 双击 tscode 即可运行！"
           else
             echo "❌ Build failed!"
             echo "请检查日志中的错误信息"
