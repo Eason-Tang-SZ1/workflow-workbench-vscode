@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Double-click)
+name: Build Custom VSCode for UOS (Debug  Double-click)
 
 on:
   workflow_dispatch:
@@ -11,15 +11,6 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
-      include_opencode:
-        description: 'Include OpenCode AI'
-        required: false
-        default: 'true'
-        type: boolean
-      extensions:
-        description: 'Extensions to bundle (comma separated)'
-        required: false
-        default: 'ms-python.python,ms-vscode.vscode-typescript-next,esbenp.prettier-vscode'
 
 jobs:
   build:
@@ -40,34 +31,54 @@ jobs:
 
       - name: 🔧 Install system dependencies
         run: |
+          echo "=========================================="
+          echo "📦 安装系统依赖"
+          echo "=========================================="
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config libgtk-3-dev libxkbfile-dev \
             libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl unzip jq
+            python3 git wget curl
+          echo "✅ 系统依赖安装完成"
 
       - name: 🔧 Fix TypeScript scripts
         run: |
+          echo "=========================================="
+          echo "🔧 修复 TypeScript 脚本"
+          echo "=========================================="
           echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
+          echo "✅ TypeScript 脚本修复完成"
 
       - name: 📦 Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          echo "=========================================="
+          echo "📦 安装 npm 依赖"
+          echo "=========================================="
+          npm install --legacy-peer-deps
+          echo "✅ npm 依赖安装完成"
 
       - name: 📦 Install build tools
         run: |
+          echo "=========================================="
+          echo "📦 安装构建工具"
+          echo "=========================================="
           npm install -g tsx
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
+          echo "✅ 构建工具安装完成"
 
       - name: 🔧 Fix extensions.ts
         run: |
+          echo "=========================================="
+          echo "🔧 修复 extensions.ts"
+          echo "=========================================="
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -109,9 +120,13 @@ jobs:
             console.log("⚠️ fetchUrls: disabled");
             return Promise.resolve();
           }' > build/lib/fetch.ts
+          echo "✅ extensions.ts 修复完成"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
+          echo "=========================================="
+          echo "🔧 修复 gulpfile spawn 调用"
+          echo "=========================================="
           python3 << 'PY_END'
           import re
           with open('build/gulpfile.vscode.ts', 'r') as f:
@@ -123,9 +138,13 @@ jobs:
               f.write(content)
           print("✅ spawn calls fixed")
           PY_END
+          echo "✅ gulpfile 修复完成"
 
       - name: 🔧 Replace copilot.ts
         run: |
+          echo "=========================================="
+          echo "🔧 替换 copilot.ts"
+          echo "=========================================="
           cat > build/lib/copilot.ts << 'EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
               console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
@@ -138,19 +157,26 @@ jobs:
               return function() { return false; };
           }
           EOF
+          echo "✅ copilot.ts 替换完成"
 
+      # ============================================================
+      # 10. 修复 src/main.ts 并禁用 Crashpad
+      # ============================================================
       - name: 🔧 Fix main.ts and disable Crashpad
         run: |
           echo "=========================================="
           echo "🔧 修复 src/main.ts 并禁用 Crashpad"
           echo "=========================================="
 
+          # 从原始仓库恢复 src/main.ts
+          echo "📌 恢复 src/main.ts..."
           if [ -f "src/main.ts" ]; then
             git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
           else
             echo "⚠️ src/main.ts 不存在，跳过"
           fi
 
+          # 修改 product.json
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -166,6 +192,7 @@ jobs:
               print("✅ product.json 已修改")
           PY_JSON_END
 
+          # 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -183,6 +210,7 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
+          # 只修改 electron-main.ts 中的 crashReporter.start
           if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
             sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
             echo "✅ electron-main.ts 已修改"
@@ -192,15 +220,22 @@ jobs:
 
       - name: ⚙️ Set env
         run: |
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> "$GITHUB_ENV"
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> "$GITHUB_ENV"
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> "$GITHUB_ENV"
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> "$GITHUB_ENV"
-          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> "$GITHUB_ENV"
-          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> "$GITHUB_ENV"
+          echo "=========================================="
+          echo "⚙️ 设置环境变量"
+          echo "=========================================="
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+          echo "✅ 环境变量设置完成"
 
       - name: 🔨 Build VSCode
         run: |
+          echo "=========================================="
+          echo "🔨 构建 VSCode"
+          echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -211,592 +246,184 @@ jobs:
           echo "Start: $(date)"
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
           echo "Done: $(date)"
+          echo "✅ 构建完成"
 
       - name: 🔍 Verify
-        id: verify
         run: |
+          echo "=========================================="
+          echo "🔍 验证构建产物"
+          echo "=========================================="
+
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
+            echo "检查目录: $dir"
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
-              echo "✅ Build found at: $BUILD_DIR"
+              echo "✅ 找到构建目录: $BUILD_DIR"
               break
             fi
           done
+
           if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build not found!"
+            echo "❌ 找不到构建目录!"
+            echo "当前目录内容:"
+            ls -la
             exit 1
           fi
-          echo "BUILD_DIR=$BUILD_DIR" >> "$GITHUB_ENV"
-          echo "build_dir=$BUILD_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: 📦 Download and bundle extensions
-        run: |
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          EXTENSIONS="${{ github.event.inputs.extensions }}"
-
-          echo "=========================================="
-          echo "📦 下载并打包插件"
-          echo "=========================================="
-
-          mkdir -p "$BUILD_DIR/extensions"
-
-          IFS=',' read -ra EXT_LIST <<< "$EXTENSIONS"
-
-          cat > download-extensions.py << 'PYEOF'
-          #!/usr/bin/env python3
-          import os
-          import sys
-          import json
-          import urllib.request
-          import urllib.error
-          import zipfile
-          import shutil
-          import time
-          from pathlib import Path
-
-          def get_extension_from_openvsx(ext_id):
-              try:
-                  publisher, name = ext_id.split('.')
-                  url = f"https://open-vsx.org/api/{publisher}/{name}/latest"
-
-                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                  with urllib.request.urlopen(req, timeout=30) as response:
-                      data = json.loads(response.read().decode('utf-8'))
-                      if data and 'files' in data and 'download' in data['files']:
-                          return {
-                              'id': ext_id,
-                              'publisher': publisher,
-                              'name': name,
-                              'version': data.get('version', 'latest'),
-                              'download_url': data['files']['download']
-                          }
-              except Exception as e:
-                  print(f"⚠️ OpenVSX 获取失败 {ext_id}: {e}")
-              return None
-
-          def download_file(url, filepath, retries=3):
-              for attempt in range(retries):
-                  try:
-                      print(f"  尝试 {attempt + 1}/{retries}...")
-                      req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                      with urllib.request.urlopen(req, timeout=60) as response:
-                          with open(filepath, 'wb') as f:
-                              f.write(response.read())
-                      return True
-                  except Exception as e:
-                      print(f"  ⚠️ 下载失败: {e}")
-                      if attempt < retries - 1:
-                          time.sleep(2)
-              return False
-
-          def download_and_extract(ext_info, target_dir):
-              ext_id = ext_info['id']
-              ext_dir = Path(target_dir) / ext_id
-              ext_dir.mkdir(parents=True, exist_ok=True)
-
-              vsix_file = ext_dir / f"{ext_id}.vsix"
-
-              print(f"📥 下载插件: {ext_id} ({ext_info['version']})")
-
-              if not download_file(ext_info['download_url'], vsix_file):
-                  print(f"❌ 下载失败: {ext_id}")
-                  return False
-
-              try:
-                  with zipfile.ZipFile(vsix_file, 'r') as zip_ref:
-                      if zip_ref.testzip() is not None:
-                          print(f"❌ VSIX 文件损坏: {ext_id}")
-                          vsix_file.unlink()
-                          return False
-
-                      print(f"📦 解压插件: {ext_id}")
-                      zip_ref.extractall(ext_dir)
-
-                      pkg_path = ext_dir / 'package.json'
-                      if not pkg_path.exists():
-                          pkg = {
-                              'name': ext_info['name'],
-                              'publisher': ext_info['publisher'],
-                              'version': ext_info['version'],
-                              'engines': {'vscode': '^1.116.0'}
-                          }
-                          with open(pkg_path, 'w') as f:
-                              json.dump(pkg, f, indent=2)
-
-                      vsix_file.unlink()
-                      print(f"✅ 插件安装完成: {ext_id}")
-                      return True
-
-              except zipfile.BadZipFile:
-                  print(f"❌ 无效的 ZIP 文件: {ext_id}")
-                  vsix_file.unlink()
-                  return False
-              except Exception as e:
-                  print(f"❌ 解压失败 {ext_id}: {e}")
-                  return False
-
-          def main():
-              extensions = sys.argv[1].split(',') if len(sys.argv) > 1 else []
-              target_dir = sys.argv[2] if len(sys.argv) > 2 else './extensions'
-
-              if not extensions:
-                  print("⚠️ 没有指定插件")
-                  return
-
-              success_count = 0
-              fail_count = 0
-
-              for ext in extensions:
-                  ext = ext.strip()
-                  if not ext:
-                      continue
-
-                  print(f"\n🔍 处理插件: {ext}")
-
-                  ext_info = get_extension_from_openvsx(ext)
-
-                  if ext_info:
-                      if download_and_extract(ext_info, target_dir):
-                          success_count += 1
-                      else:
-                          fail_count += 1
-                  else:
-                      print(f"❌ 无法获取插件信息: {ext}")
-                      fail_count += 1
-
-              print(f"\n📊 插件下载完成: 成功 {success_count}, 失败 {fail_count}")
-
-              extensions_json = []
-              for ext in extensions:
-                  ext = ext.strip()
-                  if ext:
-                      extensions_json.append({
-                          'identifier': {'id': ext},
-                          'version': '1.0.0',
-                          'location': f'./{ext}',
-                          'relativeLocation': f'./{ext}'
-                      })
-
-              with open(Path(target_dir) / 'extensions.json', 'w') as f:
-                  json.dump(extensions_json, f, indent=2)
-
-          if __name__ == '__main__':
-              main()
-          PYEOF
-
-          python3 download-extensions.py "$EXTENSIONS" "$BUILD_DIR/extensions" || echo "⚠️ 部分插件下载失败，继续构建..."
-
-          echo "✅ 插件打包完成"
-
-      - name: 🤖 Build and bundle OpenCode
-        if: github.event.inputs.include_opencode == 'true'
-        run: |
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo "=========================================="
-          echo "🤖 构建和打包 OpenCode"
-          echo "=========================================="
-
-          mkdir -p "$BUILD_DIR/opencode"
-
-          cat > "$BUILD_DIR/opencode/package.json" << 'OPPKGEOF'
-          {
-            "name": "opencode",
-            "version": "1.0.0",
-            "description": "OpenCode AI Assistant - Built-in",
-            "main": "out/extension.js",
-            "engines": {
-              "vscode": "^1.116.0"
-            },
-            "activationEvents": [
-              "onStartupFinished"
-            ],
-            "contributes": {
-              "commands": [
-                {
-                  "command": "opencode.ask",
-                  "title": "OpenCode: Ask AI"
-                },
-                {
-                  "command": "opencode.explain",
-                  "title": "OpenCode: Explain Code"
-                },
-                {
-                  "command": "opencode.refactor",
-                  "title": "OpenCode: Refactor"
-                },
-                {
-                  "command": "opencode.test",
-                  "title": "OpenCode: Generate Test"
-                }
-              ],
-              "keybindings": [
-                {
-                  "command": "opencode.ask",
-                  "key": "ctrl+shift+i",
-                  "when": "editorTextFocus"
-                }
-              ],
-              "menus": {
-                "editor/context": [
-                  {
-                    "command": "opencode.ask",
-                    "group": "navigation"
-                  },
-                  {
-                    "command": "opencode.explain",
-                    "group": "navigation"
-                  }
-                ]
-              }
-            }
-          }
-          OPPKGEOF
-
-          mkdir -p "$BUILD_DIR/opencode/out"
-          cat > "$BUILD_DIR/opencode/out/extension.js" << 'OPEXTEOF'
-          const vscode = require('vscode');
-
-          function activate(context) {
-              console.log('🤖 OpenCode AI Assistant activated');
-
-              let askCommand = vscode.commands.registerCommand('opencode.ask', async () => {
-                  const editor = vscode.window.activeTextEditor;
-                  if (!editor) {
-                      vscode.window.showInformationMessage('请先打开一个文件');
-                      return;
-                  }
-
-                  const selection = editor.selection;
-                  const text = editor.document.getText(selection);
-
-                  if (!text) {
-                      vscode.window.showInformationMessage('请选中一些代码');
-                      return;
-                  }
-
-                  const question = await vscode.window.showInputBox({
-                      prompt: '输入你的问题',
-                      placeHolder: '例如: 这段代码做了什么?'
-                  });
-
-                  if (!question) return;
-
-                  vscode.window.withProgress({
-                      location: vscode.ProgressLocation.Notification,
-                      title: '🤖 OpenCode 正在思考...',
-                      cancellable: true
-                  }, async (progress, token) => {
-                      await new Promise(resolve => setTimeout(resolve, 1500));
-
-                      const response = `📝 问题: ${question}\n\n💡 回答: 这是一个内置的 AI 助手。\n\n建议: 保持代码简洁，添加适当的注释。`;
-
-                      const outputChannel = vscode.window.createOutputChannel('OpenCode AI');
-                      outputChannel.clear();
-                      outputChannel.appendLine('🤖 OpenCode AI Response');
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.appendLine(response);
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.show();
-                  });
-              });
-
-              let explainCommand = vscode.commands.registerCommand('opencode.explain', async () => {
-                  const editor = vscode.window.activeTextEditor;
-                  if (!editor) {
-                      vscode.window.showInformationMessage('请先打开一个文件');
-                      return;
-                  }
-
-                  const selection = editor.selection;
-                  const text = editor.document.getText(selection);
-
-                  if (!text) {
-                      vscode.window.showInformationMessage('请选中一些代码');
-                      return;
-                  }
-
-                  vscode.window.withProgress({
-                      location: vscode.ProgressLocation.Notification,
-                      title: '🤖 OpenCode 正在解释代码...',
-                      cancellable: true
-                  }, async (progress, token) => {
-                      await new Promise(resolve => setTimeout(resolve, 1000));
-
-                      const explanation = `📖 代码解释:\n\n这段代码是一个 ${text.includes('function') ? '函数' : '程序片段'}。\n\n💡 建议: 考虑添加错误处理和注释。`;
-
-                      const outputChannel = vscode.window.createOutputChannel('OpenCode AI');
-                      outputChannel.clear();
-                      outputChannel.appendLine('🤖 OpenCode - 代码解释');
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.appendLine(explanation);
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.show();
-                  });
-              });
-
-              let refactorCommand = vscode.commands.registerCommand('opencode.refactor', async () => {
-                  const suggestions = [
-                      '💡 将重复代码提取为函数',
-                      '💡 使用更清晰的变量命名',
-                      '💡 添加适当的注释',
-                      '💡 使用 const/let 替代 var'
-                  ];
-                  const pick = await vscode.window.showQuickPick(suggestions, {
-                      placeHolder: '选择重构建议'
-                  });
-                  if (pick) {
-                      vscode.window.showInformationMessage(`✅ 已应用: ${pick}`);
-                  }
-              });
-
-              let testCommand = vscode.commands.registerCommand('opencode.test', async () => {
-                  const editor = vscode.window.activeTextEditor;
-                  if (!editor) {
-                      vscode.window.showInformationMessage('请先打开一个文件');
-                      return;
-                  }
-
-                  const selection = editor.selection;
-                  const text = editor.document.getText(selection);
-
-                  if (!text) {
-                      vscode.window.showInformationMessage('请选中一些代码');
-                      return;
-                  }
-
-                  vscode.window.withProgress({
-                      location: vscode.ProgressLocation.Notification,
-                      title: '🧪 生成测试用例...',
-                      cancellable: true
-                  }, async (progress, token) => {
-                      await new Promise(resolve => setTimeout(resolve, 1200));
-
-                      const testCode = `// 生成的测试用例\nimport { expect } from 'chai';\n\ndescribe('功能测试', () => {\n  it('应该正确处理输入', () => {\n    expect(true).to.be.true;\n  });\n});`;
-
-                      const outputChannel = vscode.window.createOutputChannel('OpenCode AI');
-                      outputChannel.clear();
-                      outputChannel.appendLine('🧪 OpenCode - 生成的测试用例');
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.appendLine(testCode);
-                      outputChannel.appendLine('='.repeat(50));
-                      outputChannel.show();
-                  });
-              });
-
-              context.subscriptions.push(askCommand);
-              context.subscriptions.push(explainCommand);
-              context.subscriptions.push(refactorCommand);
-              context.subscriptions.push(testCommand);
-
-              vscode.window.showInformationMessage('🤖 OpenCode AI 已启动！使用 Ctrl+Shift+I 快速提问');
-          }
-
-          function deactivate() {
-              console.log('🤖 OpenCode AI deactivated');
-          }
-
-          module.exports = {
-              activate,
-              deactivate
-          };
-          OPEXTEOF
-
-          cat > "$BUILD_DIR/opencode-server" << 'OPSEOF'
-          #!/bin/bash
-          echo "🤖 OpenCode AI Assistant (Built-in)"
-          echo "📌 在 VSCode 中使用 Ctrl+Shift+I 快速提问"
-          echo "📌 或者右键选择 'OpenCode: Ask AI'"
-          echo ""
-          echo "💡 提示: OpenCode 已内置集成，无需额外启动服务"
-          OPSEOF
-          chmod +x "$BUILD_DIR/opencode-server"
-
-          mkdir -p "$BUILD_DIR/user-data/opencode"
-          cat > "$BUILD_DIR/user-data/opencode/config.json" << 'OPCONFIGEOF'
-          {
-            "version": "1.0.0",
-            "builtIn": true,
-            "features": {
-              "codeCompletion": true,
-              "codeReview": true,
-              "documentation": true,
-              "testGeneration": true,
-              "refactoring": true
-            },
-            "shortcuts": {
-              "ask": "ctrl+shift+i",
-              "explain": "ctrl+shift+e",
-              "refactor": "ctrl+shift+r",
-              "test": "ctrl+shift+t"
-            }
-          }
-          OPCONFIGEOF
-
-          cp -r "$BUILD_DIR/opencode" "$BUILD_DIR/extensions/"
-
-          echo "✅ OpenCode 内置集成完成"
-
-      - name: ⚙️ Configure VSCode settings
-        run: |
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          mkdir -p "$BUILD_DIR/user-data/User"
-
-          cat > "$BUILD_DIR/user-data/User/settings.json" << 'SETTINGSEOF'
-          {
-            "extensions.autoUpdate": false,
-            "extensions.autoCheckUpdates": false,
-            "extensions.ignoreRecommendations": true,
-            "telemetry.enableCrashReporter": false,
-            "telemetry.enableTelemetry": false,
-            "workbench.settings.useSplitJSON": true,
-            "workbench.colorTheme": "Default Dark+",
-            "editor.fontSize": 14,
-            "editor.tabSize": 2,
-            "editor.renderWhitespace": "selection",
-            "files.autoSave": "afterDelay",
-            "files.autoSaveDelay": 1000,
-            "workbench.startupEditor": "none",
-            "update.mode": "none",
-            "update.showReleaseNotes": false,
-            "opencode.enabled": true,
-            "opencode.builtIn": true
-          }
-          SETTINGSEOF
-
-          echo "✅ VSCode 配置完成"
-
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          echo "📁 构建目录内容:"
+          ls -la "$BUILD_DIR" | head -20
+          echo "✅ 验证完成"
+
+      # ============================================================
+      # 11. 创建可直接双击运行的 VSCode
+      # ============================================================
       - name: 🚀 Create double-click executable
         run: |
+          echo "=========================================="
+          echo "🚀 创建双击运行版本"
+          echo "=========================================="
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          echo "📁 构建目录: $BUILD_DIR"
           cd "$BUILD_DIR"
 
+          # 查找真正的二进制文件
           REAL_EXEC=""
+          echo "🔍 查找可执行文件..."
           for name in tscode code-oss code; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
+              echo "  找到: ./$name"
               break
             elif [ -f "./bin/$name" ]; then
               REAL_EXEC="./bin/$name"
+              echo "  找到: ./bin/$name"
               break
             fi
           done
 
           if [ -z "$REAL_EXEC" ]; then
+            echo "🔍 搜索可执行文件..."
             REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
+            echo "  找到: $REAL_EXEC"
           fi
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件！"
             echo "当前目录内容:"
             ls -la
-            echo "查找可执行文件:"
-            find . -maxdepth 2 -type f -executable 2>/dev/null
             exit 1
           fi
 
           echo "✅ 真实可执行文件: $REAL_EXEC"
+
+          # 备份真实二进制文件
+          echo "📌 备份真实二进制文件..."
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
+          echo "✅ 已备份为: ${REAL_EXEC}.real"
 
-          printf '%s\n' '#!/bin/bash' \
-            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
-            '' \
-            'export ELECTRON_ENABLE_GPU=0' \
-            'export LIBGL_ALWAYS_SOFTWARE=1' \
-            'export NODE_OPTIONS="--max-old-space-size=4096"' \
-            'export ELECTRON_DISABLE_SANDBOX=1' \
-            'export GDK_BACKEND=x11' \
-            'export QT_QPA_PLATFORM=xcb' \
-            'export DISPLAY=:0' \
-            'export ELECTRON_DISABLE_CRASH_REPORTER=1' \
-            'export ELECTRON_DISABLE_CRASH_REPORTING=1' \
-            'export CRASHPAD_DISABLE=1' \
-            '' \
-            'if [ -f "$SCRIPT_DIR/tscode.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/tscode.real"' \
-            'elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/bin/tscode.real"' \
-            'elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/code-oss.real"' \
-            'elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/bin/code-oss.real"' \
-            'else' \
-            '    echo "❌ 找不到 VSCode 可执行文件！"' \
-            '    exit 1' \
-            'fi' \
-            '' \
-            'exec "$EXEC" \' \
-            '  --no-sandbox \' \
-            '  --disable-gpu-sandbox \' \
-            '  --disable-software-rasterizer \' \
-            '  --disable-gpu \' \
-            '  --user-data-dir="$SCRIPT_DIR/user-data" \' \
-            '  "$@"' > "$REAL_EXEC"
+          # 创建 tscode 包装器
+          echo "📌 创建包装器脚本..."
+          cat > "$REAL_EXEC" << 'WRAPPER_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          chmod +x "$REAL_EXEC"
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
 
-          printf '%s\n' '#!/bin/bash' \
-            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
-            '' \
-            'export ELECTRON_ENABLE_GPU=0' \
-            'export LIBGL_ALWAYS_SOFTWARE=1' \
-            'export NODE_OPTIONS="--max-old-space-size=4096"' \
-            'export ELECTRON_DISABLE_SANDBOX=1' \
-            'export GDK_BACKEND=x11' \
-            'export QT_QPA_PLATFORM=xcb' \
-            'export DISPLAY=:0' \
-            'export ELECTRON_DISABLE_CRASH_REPORTER=1' \
-            'export ELECTRON_DISABLE_CRASH_REPORTING=1' \
-            'export CRASHPAD_DISABLE=1' \
-            '' \
-            'if [ -f "$SCRIPT_DIR/tscode.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/tscode.real"' \
-            'elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then' \
-            '    EXEC="$SCRIPT_DIR/bin/tscode.real"' \
-            'else' \
-            '    echo "❌ 找不到 VSCode 可执行文件！"' \
-            '    exit 1' \
-            'fi' \
-            '' \
-            'echo "=== VSCode for UOS ==="' \
-            'exec "$EXEC" \' \
-            '  --no-sandbox \' \
-            '  --disable-gpu-sandbox \' \
-            '  --disable-software-rasterizer \' \
-            '  --disable-gpu \' \
-            '  --user-data-dir="$SCRIPT_DIR/user-data" \' \
-            '  "$@"' > start-vscode.sh
-
-          chmod +x start-vscode.sh
-
-          printf '%s\n' '[Desktop Entry]' \
-            'Version=1.0' \
-            'Type=Application' \
-            'Name=VSCode for UOS' \
-            'Comment=Visual Studio Code for UOS with built-in OpenCode AI' \
-            'Exec=./tscode %F' \
-            'Icon=./resources/app/resources/linux/code.png' \
-            'Terminal=false' \
-            'Categories=Development;IDE;' \
-            'MimeType=text/plain;inode/directory;' \
-            'StartupNotify=true' \
-            'StartupWMClass=Code' > vscode-uos.desktop
-
-          if [ -d "./opencode" ]; then
-            printf '%s\n' '[Desktop Entry]' \
-              'Version=1.0' \
-              'Type=Application' \
-              'Name=OpenCode AI' \
-              'Comment=OpenCode AI Assistant (Built-in)' \
-              'Exec=./opencode-server' \
-              'Icon=./resources/app/resources/linux/code.png' \
-              'Terminal=true' \
-              'Categories=Development;AI;' \
-              'StartupNotify=true' > opencode-uos.desktop
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode.real"
+          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
+              EXEC="$SCRIPT_DIR/code-oss.real"
+          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/code-oss.real"
+          else
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
           fi
 
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$SCRIPT_DIR/user-data" \
+              "$@"
+          WRAPPER_EOF
+
+          chmod +x "$REAL_EXEC"
+          echo "✅ 包装器已创建: $REAL_EXEC"
+
+          # 创建 start-vscode.sh 备用启动脚本
+          echo "📌 创建备用启动脚本..."
+          cat > start-vscode.sh << 'START_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export DISPLAY=:0
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode.real"
+          else
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
+          fi
+
+          echo "=== VSCode for UOS ==="
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$SCRIPT_DIR/user-data" \
+              "$@"
+          START_EOF
+
+          chmod +x start-vscode.sh
+          echo "✅ start-vscode.sh 已创建"
+
+          # 创建桌面快捷方式
+          echo "📌 创建桌面快捷方式..."
+          cat > vscode-uos.desktop << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=VSCode for UOS
+          Comment=Visual Studio Code for UOS
+          Exec=./tscode %F
+          Icon=./resources/app/resources/linux/code.png
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=Code
+          EOF
+          echo "✅ vscode-uos.desktop 已创建"
+
+          # 创建使用说明
           cat > 使用说明.txt << 'EOF'
           ==========================================
           VSCode for UOS - 使用说明
@@ -804,12 +431,6 @@ jobs:
 
           🖱️ 双击运行：
           直接双击 tscode 文件即可启动 VSCode！
-
-          🤖 OpenCode AI（内置）：
-          • Ctrl+Shift+I : 快速提问
-          • Ctrl+Shift+E : 解释代码
-          • Ctrl+Shift+R : 重构建议
-          • Ctrl+Shift+T : 生成测试
 
           📌 备用启动方式：
           在终端中执行: ./start-vscode.sh
@@ -820,60 +441,118 @@ jobs:
           📌 配置文件：
           所有配置保存在 ./user-data 目录
 
-          📌 已安装插件：
-          查看 ./extensions 目录
-
           📌 首次运行：
           如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
-
-          📌 注意事项：
-          1. OpenCode AI 已内置集成，无需联网
-          2. 所有扩展已预装，无需联网下载
-          3. 使用 user-data 目录保存配置
-          4. 支持离线使用
           ==========================================
           EOF
+          echo "✅ 使用说明已创建"
 
-          echo "✅ 双击运行版本创建完成"
           echo ""
           echo "📁 目录内容:"
           ls -la
+          echo ""
+          echo "✅ 双击运行版本创建完成"
 
-      - name: 📦 Package
+      # ============================================================
+      # 12. 打包（带详细日志）
+      # ============================================================
+      - name: 📦 Package artifacts
         run: |
-          echo "=========================================="
-          echo "🔍 调试信息 - 开始打包"
-          echo "=========================================="
-
-          echo "当前工作目录:"
-          pwd
-
-          echo ""
-          echo "当前目录内容:"
-          ls -la
-
-          echo ""
-          echo "BUILD_DIR 值: ${BUILD_DIR}"
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
-          echo ""
           echo "=========================================="
           echo "📦 打包产物"
           echo "=========================================="
 
-          echo "查找 VSCode 构建目录..."
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "${BUILD_DIR}"; do
-            echo "检查目录: $dir"
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "✅ 找到构建目录: $BUILD_DIR"
-              break
-            fi
-          done
+          # 获取构建目录
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          echo "📁 构建目录: $BUILD_DIR"
 
           if [ ! -d "$BUILD_DIR" ]; then
-            echo "❌ 构建目录不存在: $BUILD_DIR"
-            echo "查找所有 VSCode 相关目录:"
-            find . -name "*VSCode*" -type d 2>/dev/null ||
+            echo "❌ 构建目录不存在!"
+            exit 1
+          fi
+
+          echo "📁 构建目录内容:"
+          ls -la "$BUILD_DIR"
+
+          # 确保所有脚本可执行
+          echo "🔧 设置执行权限..."
+          chmod +x $BUILD_DIR/tscode 2>/dev/null || echo "  ⚠️ tscode 不存在"
+          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || echo "  ⚠️ start-vscode.sh 不存在"
+          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+          echo "✅ 权限设置完成"
+
+          # 创建 artifacts 目录
+          echo "📌 创建 artifacts 目录..."
+          mkdir -p artifacts
+          echo "✅ artifacts 目录已创建"
+
+          # 打包
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          echo "📌 开始打包 (版本: $VERSION)..."
+
+          tar -czf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" \
+            --preserve-permissions \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
+
+          echo "✅ 打包完成"
+
+          # 显示打包结果
+          echo ""
+          echo "📦 打包结果:"
+          if [ -d "artifacts" ]; then
+            ls -lh artifacts/
+          else
+            echo "❌ artifacts 目录不存在!"
+            exit 1
+          fi
+
+          # 验证包是否存在
+          PACKAGE_FILE="artifacts/custom-vscode-uos-${VERSION}.tar.gz"
+          echo ""
+          echo "🔍 验证包文件..."
+          if [ -f "$PACKAGE_FILE" ]; then
+            echo "✅ 包创建成功!"
+            echo "📁 包路径: $PACKAGE_FILE"
+            echo "📊 包大小: $(du -sh "$PACKAGE_FILE" | cut -f1 2>/dev/null || echo '未知')"
+          else
+            echo "❌ 包文件不存在: $PACKAGE_FILE"
+            echo "📁 artifacts 目录内容:"
+            ls -la artifacts/ || echo "  目录为空"
+            exit 1
+          fi
+
+          echo "✅ 打包完成!"
+          echo "=========================================="
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-vscode-uos
+          path: artifacts/custom-vscode-uos-*.tar.gz
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "📁 构建目录: $BUILD_DIR"
+          echo "=========================================="
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "🎉 Build completed!"
+            echo ""
+            echo "📥 Download: custom-vscode-uos artifact"
+            echo ""
+            echo "📌 On UOS (no root needed):"
+            echo "  1. 下载 artifact 并解压"
+            echo "  2. 进入 VSCode-linux-x64 目录"
+            echo "  3. 双击 tscode 即可运行！"
+          else
+            echo "❌ Build failed!"
+            echo "请检查日志中的错误信息"
+          fi
+          echo "=========================================="
