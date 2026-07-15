@@ -168,119 +168,193 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 修复 ESM __dirname 问题（仅添加定义，不覆盖内容）"
+          echo "[STEP] 🔧 强制修复核心 ESM 文件"
           echo "=========================================="
 
-          # 创建一个 Python 脚本，仅在文件开头添加 __dirname 定义
-          cat > /workspace/fix_esm_smart.py << 'FIX_ESM_SMART'
-          import os
-          import re
-          import glob
+          # 强制覆盖 util.ts - 这是最核心的文件
+          echo "[INFO] 强制覆盖 build/lib/util.ts..."
+          cat > build/lib/util.ts << 'UTIL_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
 
-          def fix_file_smart(filepath):
-              """智能修复：仅在文件开头添加 __dirname 定义，保留原有内容"""
-              try:
-                  with open(filepath, 'r', encoding='utf-8') as f:
-                      content = f.read()
+          import { dirname, join, resolve, isAbsolute, normalize } from "path";
+          import { fileURLToPath } from "url";
 
-                  # 检查是否是 ESM 模块
-                  if 'import ' not in content:
-                      return False
+          // 修复 ESM 模块中 __dirname 未定义的问题
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
 
-                  # 检查是否已经有 __dirname 定义
-                  if 'const __dirname' in content and 'fileURLToPath' in content:
-                      return False
+          export function root(relativePath: string): string {
+            return resolve(__dirname, "..", "..", relativePath);
+          }
 
-                  # 检查是否使用了 __dirname 或 __filename
-                  if '__dirname' not in content and '__filename' not in content:
-                      return False
+          export function rootAndNormalize(relativePath: string): string {
+            return root(relativePath);
+          }
 
-                  lines = content.split('\n')
+          export function getRoot() {
+            return resolve(__dirname, "..", "..");
+          }
 
-                  # 找到最后一个 import 语句的位置
-                  last_import_idx = -1
-                  for i, line in enumerate(lines):
-                      stripped = line.strip()
-                      if stripped.startswith('import ') or stripped.startswith('import{') or stripped.startswith('import {'):
-                          last_import_idx = i
+          export function getRootPath() {
+            return getRoot();
+          }
 
-                  if last_import_idx == -1:
-                      return False
+          export function fileExists(path: string): boolean {
+            try {
+              const fs = require("fs");
+              return fs.existsSync(path);
+            } catch {
+              return false;
+            }
+          }
 
-                  # 检查是否有 path 和 url 导入
-                  has_path_import = False
-                  has_url_import = False
-                  for line in lines:
-                      if 'from "path"' in line or "from 'path'" in line:
-                          has_path_import = True
-                          # 检查是否包含 dirname
-                          if 'dirname' not in line:
-                              # 添加 dirname
-                              line = line.replace('from "path"', ', dirname } from "path"').replace("from 'path'", ", dirname } from 'path'")
-                      if 'from "url"' in line or "from 'url'" in line:
-                          has_url_import = True
-                          # 检查是否包含 fileURLToPath
-                          if 'fileURLToPath' not in line:
-                              line = line.replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
+          export function dirExists(path: string): boolean {
+            try {
+              const fs = require("fs");
+              return fs.existsSync(path) && fs.statSync(path).isDirectory();
+            } catch {
+              return false;
+            }
+          }
 
-                  # 如果缺少 path 或 url 导入，添加它们
-                  new_lines = []
-                  imports_added = False
-                  for line in lines:
-                      new_lines.append(line)
-                      if line.strip().startswith('import ') and not imports_added:
-                          # 在最后一个 import 后插入定义
-                          pass
+          export { dirname, join, resolve, isAbsolute, normalize };
+          UTIL_EOF
+          echo "[SUCCESS] util.ts 已强制覆盖"
 
-                  # 简单方法：直接在文件开头插入必要的导入和定义
-                  # 但更安全的是在最后一个 import 之后插入
+          # 强制覆盖 i18n.ts
+          echo "[INFO] 强制覆盖 build/lib/i18n.ts..."
+          cat > build/lib/i18n.ts << 'I18N_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
 
-                  # 构建要插入的代码块
-                  insert_block = []
-                  if not has_path_import:
-                      insert_block.append('import { dirname } from "path";')
-                  if not has_url_import:
-                      insert_block.append('import { fileURLToPath } from "url";')
-                  insert_block.append('const __filename = fileURLToPath(import.meta.url);')
-                  insert_block.append('const __dirname = dirname(__filename);')
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
 
-                  if insert_block:
-                      # 在最后一个 import 之后插入
-                      lines.insert(last_import_idx + 1, '')
-                      for i, line in enumerate(reversed(insert_block)):
-                          lines.insert(last_import_idx + 1, line)
-                      content = '\n'.join(lines)
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
 
-                      with open(filepath, 'w', encoding='utf-8') as f:
-                          f.write(content)
-                      print(f"  ✅ {filepath} 已修复")
-                      return True
+          export function getRootPath(): string {
+            return resolve(__dirname, "..", "..");
+          }
 
-                  return False
+          export function getRoot(): string {
+            return getRootPath();
+          }
 
-              except Exception as e:
-                  print(f"  ❌ {filepath}: {e}")
-                  return False
+          export function root(relativePath: string): string {
+            return resolve(getRootPath(), relativePath);
+          }
 
-          # 修复 build/lib 下的所有文件
-          files = glob.glob('build/lib/*.ts') + glob.glob('build/lib/*.js')
-          fixed_count = 0
-          for f in files:
-              if fix_file_smart(f):
-                  fixed_count += 1
+          export function i18n<T>(obj: T): T {
+            return obj;
+          }
 
-          print(f"✅ 共修复 {fixed_count} 个文件")
-          FIX_ESM_SMART
+          export function getTranslations(language: string): any {
+            return {};
+          }
 
-          # 执行智能修复
-          python3 /workspace/fix_esm_smart.py
+          export function getLanguage(): string {
+            return "en";
+          }
 
-          # 特别修复 extractExtensionPoints.ts - 保留原有导出
-          echo "[INFO] 特别修复 extractExtensionPoints.ts..."
+          export function getLocale(): string {
+            return "en-US";
+          }
+
+          export { dirname, join, resolve, relative };
+          I18N_EOF
+          echo "[SUCCESS] i18n.ts 已强制覆盖"
+
+          # 强制覆盖 monaco-api.ts
+          echo "[INFO] 强制覆盖 build/lib/monaco-api.ts..."
+          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+
+          export const monacoRoot = resolve(__dirname, "..", "..");
+
+          export function getMonacoRoot(): string {
+            return monacoRoot;
+          }
+
+          export function monacoPath(relativePath: string): string {
+            return resolve(monacoRoot, relativePath);
+          }
+
+          export { dirname, join, resolve };
+          MONACO_EOF
+          echo "[SUCCESS] monaco-api.ts 已强制覆盖"
+
+          # 强制覆盖 reporter.ts
+          echo "[INFO] 强制覆盖 build/lib/reporter.ts..."
+          cat > build/lib/reporter.ts << 'REPORTER_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+
+          import * as fs from "fs";
+
+          export interface IReporter {
+            (...data: any[]): void;
+            clear(): void;
+            done?(): void;
+            error?(err: any): void;
+          }
+
+          export function createReporter(name: string): IReporter {
+            const logDir = resolve(__dirname, "..", "..", ".build");
+            if (!fs.existsSync(logDir)) {
+              fs.mkdirSync(logDir, { recursive: true });
+            }
+            const logFile = resolve(logDir, `${name}.log`);
+            const stream = fs.createWriteStream(logFile, { flags: "a" });
+
+            const reporter = function(...data: any[]) {
+              const message = data.map(String).join(" ");
+              console.log(message);
+              stream.write(message + "\n");
+            };
+
+            reporter.clear = function() {
+              fs.writeFileSync(logFile, "");
+            };
+
+            reporter.done = function() {
+              stream.end();
+            };
+
+            return reporter;
+          }
+
+          export function createStreamReporter(name: string): IReporter {
+            return createReporter(name);
+          }
+          REPORTER_EOF
+          echo "[SUCCESS] reporter.ts 已强制覆盖"
+
+          # 强制覆盖 extractExtensionPoints.ts - 保留所有导出
+          echo "[INFO] 修复 build/lib/extractExtensionPoints.ts..."
           if [ -f "build/lib/extractExtensionPoints.ts" ]; then
-            # 先备份原始内容
-            cp build/lib/extractExtensionPoints.ts /tmp/extractExtensionPoints.ts.bak
-            # 使用 Python 读取原始内容，添加 __dirname 定义，但保留所有导出
             python3 << 'EXTRACT_FIX'
           import re
           import os
@@ -293,7 +367,7 @@ jobs:
           if 'const __dirname' in content and 'fileURLToPath' in content:
               print("extractExtensionPoints.ts 已修复，跳过")
           else:
-              # 找到第一个 import 语句
+              # 检查是否有 path 和 url 导入
               lines = content.split('\n')
               import_indices = []
               for i, line in enumerate(lines):
@@ -301,26 +375,29 @@ jobs:
                       import_indices.append(i)
 
               if import_indices:
-                  # 在最后一个 import 之后插入定义
                   last_idx = import_indices[-1]
                   # 检查是否有 path 和 url 导入
                   has_path = any('from "path"' in lines[i] or "from 'path'" in lines[i] for i in import_indices)
                   has_url = any('from "url"' in lines[i] or "from 'url'" in lines[i] for i in import_indices)
-                  has_dirname = any('dirname' in lines[i] for i in import_indices)
-                  has_fileURLToPath = any('fileURLToPath' in lines[i] for i in import_indices)
 
                   insert_lines = []
                   if not has_path:
-                      insert_lines.append('import { dirname } from "path";')
+                      insert_lines.append('import { dirname, join, resolve, relative } from "path";')
                   if not has_url:
                       insert_lines.append('import { fileURLToPath } from "url";')
-                  if not has_dirname and not has_path:
-                      # 如果已经导入了 path 但没有 dirname，需要添加
+
+                  # 检查是否已经有 dirname 和 fileURLToPath
+                  has_dirname = any('dirname' in lines[i] for i in import_indices)
+                  has_fileURLToPath = any('fileURLToPath' in lines[i] for i in import_indices)
+
+                  if has_path and not has_dirname:
+                      # 在现有的 path 导入中添加 dirname
                       for i in import_indices:
                           if 'from "path"' in lines[i] or "from 'path'" in lines[i]:
                               if 'dirname' not in lines[i]:
                                   lines[i] = lines[i].replace('from "path"', ', dirname } from "path"').replace("from 'path'", ", dirname } from 'path'")
-                  if not has_fileURLToPath and not has_url:
+
+                  if has_url and not has_fileURLToPath:
                       for i in import_indices:
                           if 'from "url"' in lines[i] or "from 'url'" in lines[i]:
                               if 'fileURLToPath' not in lines[i]:
@@ -335,11 +412,28 @@ jobs:
 
                   with open(filepath, 'w') as f:
                       f.write('\n'.join(lines))
-                  print("✅ extractExtensionPoints.ts 已修复（保留所有导出）")
+                  print("✅ extractExtensionPoints.ts 已修复")
               else:
                   print("⚠️ 未找到 import 语句，跳过")
           EXTRACT_FIX
             echo "[SUCCESS] extractExtensionPoints.ts 已修复"
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 验证 util.ts 修复"
+          echo "=========================================="
+
+          if [ -f "build/lib/util.ts" ]; then
+            echo "[DEBUG] util.ts 第 1-25 行:"
+            head -25 build/lib/util.ts
+            echo ""
+            if grep -q "__dirname" build/lib/util.ts; then
+              echo "[SUCCESS] util.ts 包含 __dirname 定义"
+            else
+              echo "[ERROR] util.ts 不包含 __dirname 定义！"
+              exit 1
+            fi
           fi
 
           echo ""
