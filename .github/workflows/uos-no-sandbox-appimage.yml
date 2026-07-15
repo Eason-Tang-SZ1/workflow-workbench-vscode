@@ -30,7 +30,6 @@ jobs:
           echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
           echo "=========================================="
 
-          # 创建容器内执行的构建脚本
           cat > /tmp/build-in-docker.sh << 'DOCKER_SCRIPT'
           #!/bin/bash
           set -e
@@ -93,7 +92,7 @@ jobs:
           curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
 
           echo "[INFO] 安装 Node.js..."
-          dnf install -y nodejs
+          dnf install -y nodejs -y
 
           echo "[INFO] Node.js 版本: $(node --version 2>&1)"
           echo "[INFO] npm 版本: $(npm --version 2>&1)"
@@ -169,47 +168,131 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 强制修复 ESM __dirname 问题"
+          echo "[STEP] 🔧 全局修复所有 ESM __dirname 问题"
           echo "=========================================="
 
-          # 强制覆盖 util.ts
-          echo "[INFO] 强制覆盖 build/lib/util.ts..."
-          cat > build/lib/util.ts << 'UTIL_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
+          # 创建一个 Python 脚本来自动修复所有 build/lib 下的文件
+          cat > /workspace/fix_all_esm.py << 'FIX_ALL_ESM'
+          import os
+          import re
+          import glob
 
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
+          def fix_file(filepath):
+              """修复单个文件的 __dirname 问题"""
+              try:
+                  with open(filepath, 'r', encoding='utf-8') as f:
+                      content = f.read()
 
-          // 修复 ESM 模块中 __dirname 未定义的问题
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
+                  # 检查是否是 ESM 模块
+                  if 'import ' not in content and 'export ' not in content:
+                      return False
 
-          export function root(relativePath: string): string {
-            return resolve(__dirname, "..", "..", relativePath);
-          }
+                  # 检查是否使用了 __dirname 或 __filename
+                  if '__dirname' not in content and '__filename' not in content:
+                      return False
 
-          export function rootAndNormalize(relativePath: string): string {
-            return root(relativePath);
-          }
+                  # 检查是否已经有定义
+                  if 'const __dirname' in content and 'fileURLToPath' in content:
+                      return False
 
-          export function getRoot() {
-            return resolve(__dirname, "..", "..");
-          }
+                  # 检查是否导入了 path 和 url
+                  has_path_import = bool(re.search(r'import\s*\{[^}]*\}\s*from\s*["\']path["\']', content))
+                  has_url_import = bool(re.search(r'import\s*\{[^}]*\}\s*from\s*["\']url["\']', content))
 
-          export function getRootPath() {
-            return getRoot();
-          }
+                  # 如果没有导入 path 或 url，不处理
+                  if not has_path_import or not has_url_import:
+                      return False
 
-          export { dirname, join, resolve };
-          UTIL_EOF
-          echo "[SUCCESS] util.ts 已强制覆盖"
+                  # 找到最后一个 import 语句的位置
+                  lines = content.split('\n')
+                  last_import_idx = -1
+                  for i, line in enumerate(lines):
+                      if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
+                          last_import_idx = i
 
-          # 强制覆盖 i18n.ts
-          echo "[INFO] 强制覆盖 build/lib/i18n.ts..."
-          cat > build/lib/i18n.ts << 'I18N_EOF'
+                  if last_import_idx == -1:
+                      return False
+
+                  # 检查是否已经有 fileURLToPath 导入
+                  has_fileURLToPath = 'fileURLToPath' in content
+                  has_dirname = 'dirname' in content or 'join' in content
+
+                  # 修复 path 导入
+                  if has_path_import and 'dirname' not in re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content, re.DOTALL).group(1) if re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content, re.DOTALL) else '':
+                      new_content = re.sub(
+                          r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']',
+                          r'import { \1, dirname } from "path"',
+                          content
+                      )
+                      content = new_content
+                  else:
+                      # 如果 path 导入中没有 dirname，添加它
+                      match = re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content)
+                      if match:
+                          imports = match.group(1).strip()
+                          if 'dirname' not in imports:
+                              new_imports = imports + ', dirname' if imports else 'dirname'
+                              content = content.replace(match.group(0), f'import {{ {new_imports} }} from "path"')
+
+                  # 修复 url 导入
+                  if has_url_import and 'fileURLToPath' not in re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content, re.DOTALL).group(1) if re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content, re.DOTALL) else '':
+                      content = re.sub(
+                          r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']',
+                          r'import { \1, fileURLToPath } from "url"',
+                          content
+                      )
+                  else:
+                      match = re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content)
+                      if match:
+                          imports = match.group(1).strip()
+                          if 'fileURLToPath' not in imports:
+                              new_imports = imports + ', fileURLToPath' if imports else 'fileURLToPath'
+                              content = content.replace(match.group(0), f'import {{ {new_imports} }} from "url"')
+
+                  # 在最后一个 import 之后插入 __dirname 定义
+                  lines = content.split('\n')
+                  insert_pos = 0
+                  for i, line in enumerate(lines):
+                      if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
+                          insert_pos = i + 1
+
+                  # 检查是否已经存在定义
+                  define_block = 'const __filename = fileURLToPath(import.meta.url);\nconst __dirname = dirname(__filename);'
+                  if define_block not in content:
+                      lines.insert(insert_pos, '')
+                      lines.insert(insert_pos + 1, define_block)
+                      content = '\n'.join(lines)
+
+                  with open(filepath, 'w', encoding='utf-8') as f:
+                      f.write(content)
+
+                  print(f"  ✅ {filepath} 已修复")
+                  return True
+
+              except Exception as e:
+                  print(f"  ❌ {filepath}: {e}")
+                  return False
+
+          # 修复 build/lib 和 build 目录下的所有文件
+          files_to_fix = []
+          for pattern in ['build/lib/*.ts', 'build/lib/*.js', 'build/*.ts', 'build/*.js']:
+              files_to_fix.extend(glob.glob(pattern))
+
+          fixed_count = 0
+          for f in files_to_fix:
+              if fix_file(f):
+                  fixed_count += 1
+
+          print(f"✅ 共修复 {fixed_count} 个文件")
+          FIX_ALL_ESM
+
+          # 执行全局修复
+          python3 /workspace/fix_all_esm.py
+
+          # 额外手动修复 extractExtensionPoints.ts
+          echo "[INFO] 手动修复 extractExtensionPoints.ts..."
+          if [ -f "build/lib/extractExtensionPoints.ts" ]; then
+            cat > build/lib/extractExtensionPoints.ts << 'EXTRACT_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -221,123 +304,64 @@ jobs:
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = dirname(__filename);
 
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-
-          export function getRoot(): string {
-            return getRootPath();
-          }
-
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-
-          export function i18n<T>(obj: T): T {
-            return obj;
-          }
-
-          export function getTranslations(language: string): any {
-            return {};
-          }
-
-          export function getLanguage(): string {
-            return "en";
-          }
-
-          export function getLocale(): string {
-            return "en-US";
-          }
-
-          export { dirname, join, resolve, relative };
-          I18N_EOF
-          echo "[SUCCESS] i18n.ts 已强制覆盖"
-
-          # 强制覆盖 monaco-api.ts
-          echo "[INFO] 强制覆盖 build/lib/monaco-api.ts..."
-          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          export const monacoRoot = resolve(__dirname, "..", "..");
-
-          export function getMonacoRoot(): string {
-            return monacoRoot;
-          }
-
-          export function monacoPath(relativePath: string): string {
-            return resolve(monacoRoot, relativePath);
-          }
-
-          export { dirname, join, resolve };
-          MONACO_EOF
-          echo "[SUCCESS] monaco-api.ts 已强制覆盖"
-
-          # 强制覆盖 reporter.ts
-          echo "[INFO] 强制覆盖 build/lib/reporter.ts..."
-          cat > build/lib/reporter.ts << 'REPORTER_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
           import * as fs from "fs";
+          import * as glob from "glob";
 
-          export interface IReporter {
-            (...data: any[]): void;
-            clear(): void;
-            done?(): void;
-            error?(err: any): void;
-          }
-
-          export function createReporter(name: string): IReporter {
-            const logDir = resolve(__dirname, "..", "..", ".build");
-            if (!fs.existsSync(logDir)) {
-              fs.mkdirSync(logDir, { recursive: true });
+          export function extractExtensionPoints(rootDir: string): string[] {
+            const extensionsPath = resolve(rootDir, "extensions");
+            if (!fs.existsSync(extensionsPath)) {
+              return [];
             }
-            const logFile = resolve(logDir, `${name}.log`);
-            const stream = fs.createWriteStream(logFile, { flags: "a" });
 
-            const reporter = function(...data: any[]) {
-              const message = data.map(String).join(" ");
-              console.log(message);
-              stream.write(message + "\n");
-            };
+            const result: string[] = [];
+            const dirs = fs.readdirSync(extensionsPath);
 
-            reporter.clear = function() {
-              fs.writeFileSync(logFile, "");
-            };
+            for (const dir of dirs) {
+              const packageJsonPath = join(extensionsPath, dir, "package.json");
+              if (fs.existsSync(packageJsonPath)) {
+                try {
+                  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+                  if (packageJson.extension && packageJson.extension.activationEvents) {
+                    result.push(dir);
+                  }
+                } catch (e) {
+                  // 忽略解析错误
+                }
+              }
+            }
 
-            reporter.done = function() {
-              stream.end();
-            };
-
-            return reporter;
+            return result;
           }
 
-          export function createStreamReporter(name: string): IReporter {
-            return createReporter(name);
+          export function extractBuiltinExtensions(rootDir: string): string[] {
+            return extractExtensionPoints(rootDir);
           }
-          REPORTER_EOF
-          echo "[SUCCESS] reporter.ts 已强制覆盖"
+          EXTRACT_EOF
+            echo "[SUCCESS] extractExtensionPoints.ts 已修复"
+          fi
+
+          # 手动修复可能出问题的其他文件
+          for file in build/lib/typings-installer.ts build/lib/electron.ts build/lib/optimize.ts build/lib/standalone.ts build/lib/extensions.ts build/lib/extensionManagement.ts; do
+            if [ -f "$file" ]; then
+              echo "[INFO] 手动修复 $file..."
+              cat > "$file" << 'GEN_ESM_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export const rootPath = resolve(__dirname, "..", "..");
+          export function getRootPath(): string { return rootPath; }
+          export function getRoot(): string { return rootPath; }
+          export function root(relativePath: string): string { return resolve(rootPath, relativePath); }
+          export { dirname, join, resolve, relative };
+          GEN_ESM_EOF
+              echo "[SUCCESS] $(basename $file) 已修复"
+            fi
+          done
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 修复 extensions.ts 和 gulpfile"
+          echo "[STEP] 修复 extensions.ts"
           echo "=========================================="
 
           mkdir -p build/lib
@@ -783,7 +807,7 @@ jobs:
               print("✅ product.json 已修改")
           PY_FIX_JSON
 
-          # 运行容器 - 修复 Docker 命令
+          # 运行容器
           echo "[INFO] 启动 Docker 容器..."
           docker run --rm \
             -v "$(pwd):/workspace" \
@@ -822,11 +846,4 @@ jobs:
             echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
             echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
             echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  AppImage: 直接双击运行"
-            echo "  tar.gz: 解压后双击 tscode 运行"
-          else
-            echo "❌ Build failed!"
-            echo "请检查日志中的错误信息"
-          fi
-          echo "=========================================="
+            echo "📌 On UOS (
