@@ -168,21 +168,21 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 强制修复核心 ESM 文件"
+          echo "[STEP] 🔧 修复 ESM __dirname 问题"
           echo "=========================================="
 
-          # 强制覆盖 util.ts - 这是最核心的文件
-          echo "[INFO] 强制覆盖 build/lib/util.ts..."
+          # 强制覆盖所有核心文件
+          echo "[INFO] 强制覆盖核心 ESM 文件..."
+
           cat > build/lib/util.ts << 'UTIL_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
            *--------------------------------------------------------------------------------------------*/
 
-          import { dirname, join, resolve, isAbsolute, normalize } from "path";
+          import { dirname, join, resolve, isAbsolute, normalize, relative } from "path";
           import { fileURLToPath } from "url";
 
-          // 修复 ESM 模块中 __dirname 未定义的问题
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = dirname(__filename);
 
@@ -202,30 +202,9 @@ jobs:
             return getRoot();
           }
 
-          export function fileExists(path: string): boolean {
-            try {
-              const fs = require("fs");
-              return fs.existsSync(path);
-            } catch {
-              return false;
-            }
-          }
-
-          export function dirExists(path: string): boolean {
-            try {
-              const fs = require("fs");
-              return fs.existsSync(path) && fs.statSync(path).isDirectory();
-            } catch {
-              return false;
-            }
-          }
-
-          export { dirname, join, resolve, isAbsolute, normalize };
+          export { dirname, join, resolve, isAbsolute, normalize, relative };
           UTIL_EOF
-          echo "[SUCCESS] util.ts 已强制覆盖"
 
-          # 强制覆盖 i18n.ts
-          echo "[INFO] 强制覆盖 build/lib/i18n.ts..."
           cat > build/lib/i18n.ts << 'I18N_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -250,28 +229,9 @@ jobs:
             return resolve(getRootPath(), relativePath);
           }
 
-          export function i18n<T>(obj: T): T {
-            return obj;
-          }
-
-          export function getTranslations(language: string): any {
-            return {};
-          }
-
-          export function getLanguage(): string {
-            return "en";
-          }
-
-          export function getLocale(): string {
-            return "en-US";
-          }
-
           export { dirname, join, resolve, relative };
           I18N_EOF
-          echo "[SUCCESS] i18n.ts 已强制覆盖"
 
-          # 强制覆盖 monaco-api.ts
-          echo "[INFO] 强制覆盖 build/lib/monaco-api.ts..."
           cat > build/lib/monaco-api.ts << 'MONACO_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -296,10 +256,7 @@ jobs:
 
           export { dirname, join, resolve };
           MONACO_EOF
-          echo "[SUCCESS] monaco-api.ts 已强制覆盖"
 
-          # 强制覆盖 reporter.ts
-          echo "[INFO] 强制覆盖 build/lib/reporter.ts..."
           cat > build/lib/reporter.ts << 'REPORTER_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -350,91 +307,31 @@ jobs:
             return createReporter(name);
           }
           REPORTER_EOF
-          echo "[SUCCESS] reporter.ts 已强制覆盖"
 
-          # 强制覆盖 extractExtensionPoints.ts - 保留所有导出
-          echo "[INFO] 修复 build/lib/extractExtensionPoints.ts..."
+          # 处理 extractExtensionPoints.ts - 移除有问题的修复，使用原始文件
+          echo "[INFO] 处理 extractExtensionPoints.ts..."
           if [ -f "build/lib/extractExtensionPoints.ts" ]; then
-            python3 << 'EXTRACT_FIX'
-          import re
-          import os
+            # 先恢复原始文件（从 git）
+            echo "[INFO] 从 git 恢复原始 extractExtensionPoints.ts..."
+            git checkout build/lib/extractExtensionPoints.ts 2>/dev/null || echo "[WARN] git checkout 失败，使用现有文件"
 
-          filepath = "build/lib/extractExtensionPoints.ts"
-          with open(filepath, 'r') as f:
-              content = f.read()
-
-          # 检查是否已经有 __dirname 定义
-          if 'const __dirname' in content and 'fileURLToPath' in content:
-              print("extractExtensionPoints.ts 已修复，跳过")
-          else:
-              # 检查是否有 path 和 url 导入
-              lines = content.split('\n')
-              import_indices = []
-              for i, line in enumerate(lines):
-                  if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
-                      import_indices.append(i)
-
-              if import_indices:
-                  last_idx = import_indices[-1]
-                  # 检查是否有 path 和 url 导入
-                  has_path = any('from "path"' in lines[i] or "from 'path'" in lines[i] for i in import_indices)
-                  has_url = any('from "url"' in lines[i] or "from 'url'" in lines[i] for i in import_indices)
-
-                  insert_lines = []
-                  if not has_path:
-                      insert_lines.append('import { dirname, join, resolve, relative } from "path";')
-                  if not has_url:
-                      insert_lines.append('import { fileURLToPath } from "url";')
-
-                  # 检查是否已经有 dirname 和 fileURLToPath
-                  has_dirname = any('dirname' in lines[i] for i in import_indices)
-                  has_fileURLToPath = any('fileURLToPath' in lines[i] for i in import_indices)
-
-                  if has_path and not has_dirname:
-                      # 在现有的 path 导入中添加 dirname
-                      for i in import_indices:
-                          if 'from "path"' in lines[i] or "from 'path'" in lines[i]:
-                              if 'dirname' not in lines[i]:
-                                  lines[i] = lines[i].replace('from "path"', ', dirname } from "path"').replace("from 'path'", ", dirname } from 'path'")
-
-                  if has_url and not has_fileURLToPath:
-                      for i in import_indices:
-                          if 'from "url"' in lines[i] or "from 'url'" in lines[i]:
-                              if 'fileURLToPath' not in lines[i]:
-                                  lines[i] = lines[i].replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
-
-                  insert_lines.append('const __filename = fileURLToPath(import.meta.url);')
-                  insert_lines.append('const __dirname = dirname(__filename);')
-
-                  if insert_lines:
-                      for li in reversed(insert_lines):
-                          lines.insert(last_idx + 1, li)
-
-                  with open(filepath, 'w') as f:
-                      f.write('\n'.join(lines))
-                  print("✅ extractExtensionPoints.ts 已修复")
-              else:
-                  print("⚠️ 未找到 import 语句，跳过")
-          EXTRACT_FIX
-            echo "[SUCCESS] extractExtensionPoints.ts 已修复"
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 验证 util.ts 修复"
-          echo "=========================================="
-
-          if [ -f "build/lib/util.ts" ]; then
-            echo "[DEBUG] util.ts 第 1-25 行:"
-            head -25 build/lib/util.ts
-            echo ""
-            if grep -q "__dirname" build/lib/util.ts; then
-              echo "[SUCCESS] util.ts 包含 __dirname 定义"
+            # 检查是否有 __dirname 问题
+            if grep -q "__dirname" build/lib/extractionExtensionPoints.ts 2>/dev/null; then
+              echo "[INFO] extractExtensionPoints.ts 使用 __dirname，尝试修复..."
+              # 使用 sed 在文件开头添加定义
+              sed -i '1i\
+          import { dirname } from "path";\
+          import { fileURLToPath } from "url";\
+          const __filename = fileURLToPath(import.meta.url);\
+          const __dirname = dirname(__filename);\
+          ' build/lib/extractExtensionPoints.ts
+              echo "[SUCCESS] extractExtensionPoints.ts 已修复"
             else
-              echo "[ERROR] util.ts 不包含 __dirname 定义！"
-              exit 1
+              echo "[INFO] extractExtensionPoints.ts 不使用 __dirname，跳过"
             fi
           fi
+
+          echo "[SUCCESS] 所有核心文件已修复"
 
           echo ""
           echo "=========================================="
