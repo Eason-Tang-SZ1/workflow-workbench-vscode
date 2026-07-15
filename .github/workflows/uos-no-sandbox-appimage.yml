@@ -24,68 +24,61 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20.x'
-
-      - name: 🔧 Install system dependencies
+      - name: 🐳 Build in Rocky Linux 8 container (glibc 2.28)
         run: |
           echo "=========================================="
-          echo "📦 安装系统依赖"
+          echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
           echo "=========================================="
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libgtk-3-dev libxkbfile-dev \
-            libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
-            libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
-            libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl \
-            libfuse2
-          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
-          chmod +x /tmp/appimagetool
-          sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
-          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64" -O /tmp/runtime
-          chmod +x /tmp/runtime
-          sudo mv /tmp/runtime /usr/local/bin/AppImageRuntime
-          echo "✅ 系统依赖安装完成"
 
-      - name: 🔧 Fix TypeScript scripts
-        run: |
+          cat > /tmp/build-in-container.sh << 'BUILD_SCRIPT'
+          #!/bin/bash
+          set -e
+
           echo "=========================================="
-          echo "🔧 修复 TypeScript 脚本"
+          echo "📦 容器内：安装系统依赖"
           echo "=========================================="
+          dnf install -y \
+            nodejs npm git \
+            gcc-c++ make pkg-config \
+            libX11-devel libXScrnSaver-devel libXtst-devel \
+            libxkbfile-devel krb5-devel \
+            gtk3-devel nss-devel \
+            alsa-lib-devel \
+            python3 wget curl \
+            rpm-build fuse
+
+          echo "📦 容器内：安装 AppImage 工具..."
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64" -O /usr/local/bin/AppImageRuntime
+          chmod +x /usr/local/bin/AppImageRuntime
+
+          echo "=========================================="
+          echo "📦 容器内：安装 Node.js 依赖"
+          echo "=========================================="
+          npm install -g n
+          n 18
+          export PATH="/usr/local/bin:$PATH"
+          node --version
+          npm --version
+
+          echo "=========================================="
+          echo "🔧 容器内：执行修复和构建"
+          echo "=========================================="
+
           echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
-          echo "✅ TypeScript 脚本修复完成"
 
-      - name: 📦 Install dependencies
-        run: |
-          echo "=========================================="
-          echo "📦 安装 npm 依赖"
-          echo "=========================================="
           npm install --legacy-peer-deps
-          echo "✅ npm 依赖安装完成"
 
-      - name: 📦 Install build tools
-        run: |
-          echo "=========================================="
-          echo "📦 安装构建工具"
-          echo "=========================================="
           npm install -g tsx
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
-          echo "✅ 构建工具安装完成"
 
-      - name: 🔧 Fix extensions.ts
-        run: |
-          echo "=========================================="
-          echo "🔧 修复 extensions.ts"
-          echo "=========================================="
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -118,13 +111,18 @@ jobs:
           export const webBuiltInExtensions = empty;
           export const shouldDownloadWebBuiltInExtensions = false;
           EOF
-          echo "✅ extensions.ts 修复完成"
 
-      - name: 🔧 Fix gulpfile spawn calls
-        run: |
-          echo "=========================================="
-          echo "🔧 修复 gulpfile spawn 调用"
-          echo "=========================================="
+          echo 'export const builtInExtensions: any[] = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
+
+          echo 'import { Stream } from "stream";
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("⚠️ fetchUrls: disabled");
+            return Promise.resolve();
+          }' > build/lib/fetch.ts
+
           python3 << 'PY_END'
           import re
           with open('build/gulpfile.vscode.ts', 'r') as f:
@@ -136,13 +134,7 @@ jobs:
               f.write(content)
           print("✅ spawn calls fixed")
           PY_END
-          echo "✅ gulpfile 修复完成"
 
-      - name: 🔧 Replace copilot.ts
-        run: |
-          echo "=========================================="
-          echo "🔧 替换 copilot.ts"
-          echo "=========================================="
           cat > build/lib/copilot.ts << 'EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
               console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
@@ -155,18 +147,11 @@ jobs:
               return function() { return false; };
           }
           EOF
-          echo "✅ copilot.ts 替换完成"
 
-      - name: 🔧 Fix main.ts and disable Crashpad
-        run: |
-          echo "=========================================="
-          echo "🔧 修复 src/main.ts 并禁用 Crashpad"
-          echo "=========================================="
           if [ -f "src/main.ts" ]; then
             git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
-          else
-            echo "⚠️ src/main.ts 不存在，跳过"
           fi
+
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -181,6 +166,7 @@ jobs:
                   json.dump(data, f, indent=2)
               print("✅ product.json 已修改")
           PY_JSON_END
+
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -196,31 +182,11 @@ jobs:
               constructor() { console.log('⚠️ Crash service disabled for UOS build'); }
           }
           CRASH_EOF
-          echo "✅ crashService.ts 已创建"
+
           if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
             sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
-            echo "✅ electron-main.ts 已修改"
           fi
-          echo "✅ 修复完成"
 
-      - name: ⚙️ Set env
-        run: |
-          echo "=========================================="
-          echo "⚙️ 设置环境变量"
-          echo "=========================================="
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
-          echo "✅ 环境变量设置完成"
-
-      - name: 🔨 Build VSCode
-        run: |
-          echo "=========================================="
-          echo "🔨 构建 VSCode"
-          echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -228,137 +194,65 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
+
           echo "Start: $(date)"
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
           echo "✅ 构建完成"
 
-      - name: 🔍 Verify build contents
-        run: |
-          echo "=========================================="
-          echo "🔍 验证构建产物内容"
-          echo "=========================================="
           BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            echo "检查目录: $dir"
+          for dir in ./VSCode-linux-x64 ./vscode/VSCode-linux-x64 ../VSCode-linux-x64; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
               echo "✅ 找到构建目录: $BUILD_DIR"
               break
             fi
           done
+
           if [ -z "$BUILD_DIR" ]; then
             echo "❌ 找不到构建目录!"
-            echo "当前目录内容:"
-            ls -la
             exit 1
           fi
-          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-          echo ""
-          echo "📁 构建目录内容:"
-          ls -la "$BUILD_DIR"
-          if [ -d "$BUILD_DIR/extensions" ]; then
-            EXT_COUNT=$(find "$BUILD_DIR/extensions" -maxdepth 1 -type d | wc -l)
-            echo "   ✅ extensions 存在 ($EXT_COUNT 个目录)"
-          else
-            echo "   ❌ extensions 不存在!"
-          fi
-          if [ -d "$BUILD_DIR/node_modules" ]; then
-            NODE_SIZE=$(du -sh "$BUILD_DIR/node_modules" | cut -f1)
-            echo "   ✅ node_modules 存在 (大小: $NODE_SIZE)"
-          else
-            echo "   ❌ node_modules 不存在!"
-          fi
-          echo ""
-          echo "✅ 验证完成"
 
-      - name: 📂 Copy extensions and prebuilt extensions
-        run: |
-          echo "=========================================="
-          echo "📂 复制 extensions、node_modules 和预构建扩展"
-          echo "=========================================="
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          echo "📁 构建目录: $BUILD_DIR"
-          echo "📁 源码目录: $(pwd)"
           if [ -d "./extensions" ]; then
-            echo "📌 复制 extensions..."
             cp -r ./extensions "$BUILD_DIR/"
             echo "✅ extensions 已复制"
-          else
-            echo "❌ 源码中找不到 extensions 目录!"
-            exit 1
           fi
+
           if [ -d "./node_modules" ]; then
-            echo "📌 复制 node_modules..."
             cp -r ./node_modules "$BUILD_DIR/"
             echo "✅ node_modules 已复制"
-          else
-            echo "⚠️ 源码中找不到 node_modules 目录"
           fi
-          if [ -d "./prebuilt-extensions" ]; then
-            echo "📌 复制预构建扩展到 extensions..."
-            echo "   📋 预构建扩展列表:"
-            ls -la ./prebuilt-extensions/ || echo "   目录为空"
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
-            echo "✅ 预构建扩展已复制到 extensions"
-          else
-            echo "⚠️ 源码中找不到 prebuilt-extensions 目录"
-            find . -name "prebuilt-extensions" -type d 2>/dev/null | head -5
-          fi
-          echo ""
-          echo "📁 extensions 内容:"
-          ls -la "$BUILD_DIR/extensions" | head -30
-          echo ""
-          echo "📌 检查预构建扩展:"
-          PREBUILT_EXTS="cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent"
-          for ext in $PREBUILT_EXTS; do
-            if [ -d "$BUILD_DIR/extensions/$ext" ]; then
-              echo "   ✅ $ext"
-            elif find "$BUILD_DIR/extensions" -name "$ext" -type d 2>/dev/null | grep -q .; then
-              echo "   ✅ $ext (在其他位置)"
-            else
-              echo "   ❌ $ext (未找到)"
-            fi
-          done
-          echo ""
-          echo "✅ 复制完成"
 
-      - name: 🚀 Create double-click executable
-        run: |
-          echo "=========================================="
-          echo "🚀 创建双击运行版本"
-          echo "=========================================="
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          if [ -d "./prebuilt-extensions" ]; then
+            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
+            echo "✅ 预构建扩展已复制"
+          fi
+
           cd "$BUILD_DIR"
+
           REAL_EXEC=""
-          echo "🔍 查找可执行文件..."
           for name in tscode code-oss code; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
-              echo "  找到: ./$name"
               break
             elif [ -f "./bin/$name" ]; then
               REAL_EXEC="./bin/$name"
-              echo "  找到: ./bin/$name"
               break
             fi
           done
-          if [ -z "$REAL_EXEC" ]; then
-            echo "🔍 搜索可执行文件..."
+
+          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
-            echo "  找到: $REAL_EXEC"
           fi
+
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件！"
-            echo "当前目录内容:"
-            ls -la
             exit 1
           fi
-          echo "✅ 真实可执行文件: $REAL_EXEC"
-          echo "📌 备份真实二进制文件..."
+
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
-          echo "✅ 已备份为: ${REAL_EXEC}.real"
-          echo "📌 创建包装器脚本..."
+
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -393,7 +287,7 @@ jobs:
               "$@"
           WRAPPER_EOF
           chmod +x "$REAL_EXEC"
-          echo "✅ 包装器已创建: $REAL_EXEC"
+
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -425,7 +319,7 @@ jobs:
               "$@"
           START_EOF
           chmod +x start-vscode.sh
-          echo "✅ start-vscode.sh 已创建"
+
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -440,43 +334,15 @@ jobs:
           StartupNotify=true
           StartupWMClass=Code
           EOF
-          echo "✅ vscode-uos.desktop 已创建"
-          cat > 使用说明.txt << 'EOF'
-          ==========================================
-          VSCode for UOS - 使用说明
-          ==========================================
-          🖱️ 双击运行：直接双击 tscode
-          📌 终端运行：./start-vscode.sh
-          📌 桌面快捷方式：双击 vscode-uos.desktop
-          📌 配置文件：./user-data 目录
-          📦 预构建扩展：
-          - cweijan.vscode-office
-          - test-tech.beeeyes
-          - test-tech.skillhub
-          - MS-CEINTL.vscode-language-pack-zh-hans
-          - test-tech.TestAgent
-          ==========================================
-          EOF
-          echo "✅ 使用说明已创建"
-          echo ""
-          echo "📁 目录内容:"
-          ls -la
-          echo ""
+
           echo "✅ 双击运行版本创建完成"
 
-      - name: 📦 Create AppImage
-        run: |
-          echo "=========================================="
-          echo "📦 创建 AppImage"
-          echo "=========================================="
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          echo "📁 构建目录: $BUILD_DIR"
+          cd "$OLDPWD"
+          VERSION="${VERSION:-1.116.0}"
           APPDIR="AppDir"
           mkdir -p "$APPDIR"
-          echo "📌 复制应用文件到 AppDir..."
           cp -r "$BUILD_DIR"/* "$APPDIR/"
-          echo "📌 创建 AppRun..."
+
           cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
           #!/bin/bash
           SELF=$(readlink -f "$0")
@@ -512,8 +378,6 @@ jobs:
           fi
           if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
               echo "❌ 找不到 VSCode 可执行文件！"
-              echo "当前目录内容:"
-              ls -la "$HERE" | head -20
               exit 1
           fi
           echo "🚀 启动: $EXEC"
@@ -526,8 +390,7 @@ jobs:
               "$@"
           APP_RUN_EOF
           chmod +x "$APPDIR/AppRun"
-          echo "✅ AppRun 已创建"
-          echo "📌 创建 .desktop 文件..."
+
           cat > "$APPDIR/custom-vscode.desktop" << 'DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -541,122 +404,51 @@ jobs:
           StartupNotify=true
           StartupWMClass=Code
           DESKTOP_EOF
-          echo "✅ .desktop 文件已创建"
-          echo "📌 设置图标..."
-          ICON_FOUND=false
+
           for icon_path in "$APPDIR/resources/app/resources/linux/code.png" \
-                           "$APPDIR/resources/app/linux/code.png" \
-                           "$APPDIR/usr/share/icons/hicolor/128x128/apps/code.png" \
-                           "$APPDIR/usr/share/pixmaps/code.png"; do
+                           "$APPDIR/resources/app/linux/code.png"; do
               if [ -f "$icon_path" ]; then
                   cp "$icon_path" "$APPDIR/code.png" 2>/dev/null || true
-                  echo "  ✅ 图标已复制: $icon_path"
-                  ICON_FOUND=true
                   break
               fi
           done
-          if [ "$ICON_FOUND" = false ]; then
-              echo "  ⚠️ 未找到图标，创建默认图标..."
-              echo "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAF0SURBVFiF7ZbNSsNAEIC/3UUobX/AtCJF8C20ePQgxWMlHkR8B3fiQY9eiygIYi+9+gQ9KGiLkKbBtmQ2TdNdSJJtSkFwYGHYmZ3v22TIamwPhA6EUwKnoIPoA4fAImgURQUj0O8duNeNMSwLh8AqaMvsiD7wF+ipUwFFC1AeVgUOgWvQCi5Be58t0E3+Azr1C/sit9kWsQUMowYcA4lAl0A3sUiAC+AC2ACr0MJHYLHra/gS2KvYVRikC3DtAXAGnIAAhPp7Dcx92kUgGAL92AbXbcc7wDcYjAtcgYBT3rkjMAAOZoC2yNDC++k20I+HAzggisFdAhuwjM/GjwkM1oaW0fosHw4WkB4dOWUAeuqS9VZBC4CYydMt6gIGcDPTl+MggP8q9u+B/g/dMr8bOAPGtt0FjcAHTbCDbcjY9gsnvsI81o35S4Tln5TvTd4f/sAvcNJwAIl2ptuNFeMl5rFuzL6dytD/3xJ0oCFhg2+4AAAAAElFTkSuQmCC" | base64 -d > "$APPDIR/code.png"
-              echo "  ✅ 默认图标已创建"
-          fi
-          echo "📌 生成 AppImage..."
-          cd "$APPDIR/.."
+
           /usr/local/bin/appimagetool \
             --no-appstream \
             --comp zstd \
             --runtime /usr/local/bin/AppImageRuntime \
             "$APPDIR" \
             "custom-vscode-uos-${VERSION}.AppImage"
+
           if [ -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
-              echo "✅ AppImage 生成成功: custom-vscode-uos-${VERSION}.AppImage"
-              ls -lh "custom-vscode-uos-${VERSION}.AppImage"
+              echo "✅ AppImage 生成成功"
               mkdir -p artifacts
               mv "custom-vscode-uos-${VERSION}.AppImage" artifacts/
-              echo "✅ AppImage 已移动到 artifacts/"
           else
               echo "❌ AppImage 生成失败！"
-              echo "当前目录内容:"
-              ls -la
               exit 1
           fi
-          echo "✅ AppImage 创建完成"
 
-      - name: 📦 Package artifacts (tar.gz)
-        run: |
-          echo "=========================================="
-          echo "📦 打包产物 (tar.gz)"
-          echo "=========================================="
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          echo "📁 构建目录: $BUILD_DIR"
-          echo ""
-          echo "📁 目录内容:"
-          ls -la "$BUILD_DIR"
-          echo ""
-          echo "🔍 检查关键目录..."
-          if [ -d "$BUILD_DIR/extensions" ]; then
-            EXT_COUNT=$(ls -la "$BUILD_DIR/extensions" | wc -l)
-            echo "✅ extensions 存在 ($EXT_COUNT 项)"
-          else
-            echo "❌ extensions 不存在!"
-            echo "查找 extensions 位置..."
-            find . -name "extensions" -type d 2>/dev/null | head -10
-            exit 1
-          fi
-          if [ -d "$BUILD_DIR/node_modules" ]; then
-            NODE_COUNT=$(ls -la "$BUILD_DIR/node_modules" | wc -l)
-            echo "✅ node_modules 存在 ($NODE_COUNT 项)"
-          else
-            echo "❌ node_modules 不存在!"
-            exit 1
-          fi
-          echo ""
-          echo "📌 检查预构建扩展:"
-          for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
-            if [ -d "$BUILD_DIR/extensions/$ext" ]; then
-              echo "   ✅ $ext"
-            else
-              echo "   ❌ $ext (未找到)"
-            fi
-          done
-          echo ""
-          echo "🔧 设置执行权限..."
-          chmod +x $BUILD_DIR/tscode 2>/dev/null || echo "  ⚠️ tscode 不存在"
-          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || echo "  ⚠️ start-vscode.sh 不存在"
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
-          echo "✅ 权限设置完成"
-          mkdir -p artifacts
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          echo ""
-          echo "📌 开始打包..."
           cd "$(dirname "$BUILD_DIR")"
           tar -czf "$OLDPWD/artifacts/custom-vscode-uos-${VERSION}.tar.gz" \
             --preserve-permissions \
             "$(basename "$BUILD_DIR")"
           cd "$OLDPWD"
-          echo "✅ 打包完成"
-          echo ""
-          echo "📦 打包结果:"
-          ls -lh artifacts/
-          echo ""
-          echo "🔍 验证包内容..."
-          if tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | grep -q "extensions"; then
-            echo "✅ 包中包含 extensions"
-          else
-            echo "❌ 包中不包含 extensions!"
-            exit 1
-          fi
-          if tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | grep -q "node_modules"; then
-            echo "✅ 包中包含 node_modules"
-          else
-            echo "❌ 包中不包含 node_modules!"
-            exit 1
-          fi
-          echo ""
-          echo "📦 包内容预览（前30行）:"
-          tar -tzf "artifacts/custom-vscode-uos-${VERSION}.tar.gz" | head -30
-          echo ""
-          echo "✅ 打包验证通过!"
+
+          echo "✅ 所有产物已生成"
+          BUILD_SCRIPT
+
+          echo "=========================================="
+          echo "🐳 启动 Rocky Linux 8 容器"
+          echo "=========================================="
+
+          docker run --rm \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            rockylinux:8 \
+            /bin/bash /workspace/tmp/build-in-container.sh
+
+          echo "✅ 容器内构建完成"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -677,6 +469,7 @@ jobs:
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
+            VERSION="${{ github.event.inputs.version || '1.116.0' }}"
             echo "🎉 Build completed!"
             echo ""
             echo "📥 Download artifacts:"
