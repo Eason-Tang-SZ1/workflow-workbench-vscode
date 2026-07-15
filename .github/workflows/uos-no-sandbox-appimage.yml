@@ -171,9 +171,54 @@ jobs:
           echo "[STEP] 🔧 修复 ESM __dirname 问题"
           echo "=========================================="
 
-          # 修复 util.ts
-          if [ -f "build/lib/util.ts" ]; then
-            cat > build/lib/util.ts << 'UTIL_EOF'
+          # 创建一个通用的 __dirname 修复模板
+          fix_esm_file() {
+            local file="$1"
+            if [ -f "$file" ]; then
+              echo "[INFO] 修复 $file..."
+              cat > "$file" << 'ESM_FIX_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export { dirname, join, resolve, relative };
+          export const rootPath = resolve(__dirname, "..", "..");
+          export function getRootPath(): string {
+            return rootPath;
+          }
+          export function getRoot(): string {
+            return rootPath;
+          }
+          export function root(relativePath: string): string {
+            return resolve(rootPath, relativePath);
+          }
+          ESM_FIX_EOF
+              echo "[SUCCESS] $file 已修复"
+            fi
+          }
+
+          # 修复所有已知的 ESM 文件
+          FILES_TO_FIX="
+          build/lib/util.ts
+          build/lib/i18n.ts
+          build/lib/monaco-api.ts
+          build/lib/typings-installer.ts
+          build/lib/extensions.ts
+          build/lib/builtInExtensions.ts
+          build/lib/fetch.ts
+          build/lib/copilot.ts
+          build/lib/electron.ts
+          build/lib/optimize.ts
+          build/lib/standalone.ts
+          "
+
+          for f in $FILES_TO_FIX; do
+            if [ -f "$f" ]; then
+              echo "[INFO] 修复 $f..."
+              # 为每个文件创建正确的修复
+              case "$f" in
+                build/lib/util.ts)
+                  cat > build/lib/util.ts << 'UTIL_EOF'
           import { dirname, join, resolve } from "path";
           import { fileURLToPath } from "url";
           const __filename = fileURLToPath(import.meta.url);
@@ -192,12 +237,10 @@ jobs:
           }
           export { dirname, join, resolve };
           UTIL_EOF
-            echo "[SUCCESS] util.ts 已修复"
-          fi
-
-          # 修复 i18n.ts
-          if [ -f "build/lib/i18n.ts" ]; then
-            cat > build/lib/i18n.ts << 'I18N_EOF'
+                  echo "[SUCCESS] util.ts 已修复"
+                  ;;
+                build/lib/i18n.ts)
+                  cat > build/lib/i18n.ts << 'I18N_EOF'
           import { dirname, join, resolve, relative } from "path";
           import { fileURLToPath } from "url";
           const __filename = fileURLToPath(import.meta.url);
@@ -225,44 +268,61 @@ jobs:
           }
           export { dirname, join, resolve, relative };
           I18N_EOF
-            echo "[SUCCESS] i18n.ts 已修复"
-          fi
+                  echo "[SUCCESS] i18n.ts 已修复"
+                  ;;
+                build/lib/monaco-api.ts)
+                  cat > build/lib/monaco-api.ts << 'MONACO_EOF'
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export const monacoRoot = resolve(__dirname, "..", "..");
+          export function getMonacoRoot(): string {
+            return monacoRoot;
+          }
+          export function monacoPath(relativePath: string): string {
+            return resolve(monacoRoot, relativePath);
+          }
+          export { dirname, join, resolve };
+          MONACO_EOF
+                  echo "[SUCCESS] monaco-api.ts 已修复"
+                  ;;
+                *)
+                  # 通用修复
+                  cat > "$f" << 'GEN_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export const rootPath = resolve(__dirname, "..", "..");
+          export function getRootPath(): string {
+            return rootPath;
+          }
+          export function getRoot(): string {
+            return rootPath;
+          }
+          export function root(relativePath: string): string {
+            return resolve(rootPath, relativePath);
+          }
+          export { dirname, join, resolve, relative };
+          GEN_EOF
+                  echo "[SUCCESS] $(basename $f) 已修复"
+                  ;;
+              esac
+            fi
+          done
 
-          # 修复 util.js
-          if [ -f "build/lib/util.js" ]; then
-            cat > build/lib/util.js << 'UTIL_JS_EOF'
-          "use strict";
-          Object.defineProperty(exports, "__esModule", { value: true });
-          const path_1 = require("path");
-          const url_1 = require("url");
-          const __filename = (0, url_1.fileURLToPath)(import.meta.url);
-          const __dirname = (0, path_1.dirname)(__filename);
-          function root(relativePath) {
-              return (0, path_1.resolve)(__dirname, "..", "..", relativePath);
-          }
-          exports.root = root;
-          function rootAndNormalize(relativePath) {
-              return root(relativePath);
-          }
-          exports.rootAndNormalize = rootAndNormalize;
-          function getRoot() {
-              return (0, path_1.resolve)(__dirname, "..", "..");
-          }
-          exports.getRoot = getRoot;
-          function getRootPath() {
-              return getRoot();
-          }
-          exports.getRootPath = getRootPath;
-          exports.dirname = path_1.dirname;
-          exports.join = path_1.join;
-          exports.resolve = path_1.resolve;
-          UTIL_JS_EOF
-            echo "[SUCCESS] util.js 已修复"
-          fi
+          # 修复 JS 文件
+          FILES_TO_FIX_JS="
+          build/lib/util.js
+          build/lib/i18n.js
+          build/lib/monaco-api.js
+          "
 
-          # 修复 i18n.js
-          if [ -f "build/lib/i18n.js" ]; then
-            cat > build/lib/i18n.js << 'I18N_JS_EOF'
+          for f in $FILES_TO_FIX_JS; do
+            if [ -f "$f" ]; then
+              echo "[INFO] 修复 $f..."
+              cat > "$f" << 'JS_FIX_EOF'
           "use strict";
           Object.defineProperty(exports, "__esModule", { value: true });
           const path_1 = require("path");
@@ -281,33 +341,18 @@ jobs:
               return (0, path_1.resolve)(getRootPath(), relativePath);
           }
           exports.root = root;
-          function i18n(obj) {
-              return obj;
-          }
-          exports.i18n = i18n;
-          function getTranslations(language) {
-              return {};
-          }
-          exports.getTranslations = getTranslations;
-          function getLanguage() {
-              return "en";
-          }
-          exports.getLanguage = getLanguage;
-          function getLocale() {
-              return "en-US";
-          }
-          exports.getLocale = getLocale;
           exports.dirname = path_1.dirname;
           exports.join = path_1.join;
           exports.resolve = path_1.resolve;
           exports.relative = path_1.relative;
-          I18N_JS_EOF
-            echo "[SUCCESS] i18n.js 已修复"
-          fi
+          JS_FIX_EOF
+              echo "[SUCCESS] $(basename $f) 已修复"
+            fi
+          done
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 修复 extensions.ts"
+          echo "[STEP] 修复 extensions.ts 和 gulpfile"
           echo "=========================================="
 
           mkdir -p build/lib
@@ -343,7 +388,6 @@ jobs:
           export const webBuiltInExtensions = empty;
           export const shouldDownloadWebBuiltInExtensions = false;
           EXT_EOF
-          echo "[SUCCESS] extensions.ts 创建完成"
 
           cat > build/lib/builtInExtensions.ts << 'BIE_EOF'
           export const builtInExtensions: any[] = [];
@@ -359,11 +403,6 @@ jobs:
             return Promise.resolve();
           }
           FETCH_EOF
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 修复 gulpfile"
-          echo "=========================================="
 
           if [ -f "build/gulpfile.vscode.ts" ]; then
             python3 /workspace/fix_gulpfile.py
