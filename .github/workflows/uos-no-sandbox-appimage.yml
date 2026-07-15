@@ -441,6 +441,13 @@ jobs:
           echo "复制 $BUILD_DIR 到 $APPDIR..."
           cp -r "$BUILD_DIR"/* "$APPDIR/"
 
+          # 修复 .desktop 文件中的图标路径
+          echo "🔧 修复 .desktop 文件中的图标路径..."
+          sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$APPDIR"/*.desktop 2>/dev/null || true
+          sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$APPDIR"/custom-vscode.desktop 2>/dev/null || true
+          sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$BUILD_DIR"/*.desktop 2>/dev/null || true
+          echo "✅ .desktop 文件已修复"
+
           cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
           #!/bin/bash
           SELF=$(readlink -f "$0")
