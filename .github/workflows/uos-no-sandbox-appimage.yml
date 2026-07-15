@@ -26,16 +26,7 @@ jobs:
 
       - name: 🐳 Build in Rocky Linux 8 container (glibc 2.28)
         run: |
-          echo "=========================================="
-          echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
-          echo "=========================================="
-
-          # 创建容器内执行的构建脚本
-          cat > /tmp/build-in-docker.sh << 'DOCKER_SCRIPT'
-          #!/bin/bash
-          set -e
-
-          # 日志函数
+          # 定义日志函数（外部脚本使用）
           log_info() {
             echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"
           }
@@ -52,9 +43,35 @@ jobs:
             echo "=========================================="
           }
 
-          log_step "开始构建，当前目录: $(pwd)"
-          log_info "目录内容:"
-          ls -la
+          log_step "开始构建"
+
+          echo "=========================================="
+          echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
+          echo "=========================================="
+
+          # 创建容器内执行的构建脚本
+          cat > /tmp/build-in-docker.sh << 'DOCKER_SCRIPT'
+          #!/bin/bash
+          set -e
+
+          # 日志函数（容器内部使用）
+          log_info() {
+            echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"
+          }
+          log_error() {
+            echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2
+          }
+          log_success() {
+            echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') - $*"
+          }
+          log_step() {
+            echo ""
+            echo "=========================================="
+            echo "[STEP] $(date '+%Y-%m-%d %H:%M:%S') - $*"
+            echo "=========================================="
+          }
+
+          log_step "容器内开始构建"
 
           log_step "安装系统依赖"
           log_info "安装 wget, curl..."
@@ -122,8 +139,6 @@ jobs:
           log_step "检查 package.json"
           if [ -f "package.json" ]; then
             log_success "package.json 存在"
-            log_info "package.json 内容预览:"
-            head -20 package.json
           else
             log_error "package.json 不存在！"
             exit 1
@@ -147,7 +162,7 @@ jobs:
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
 
-          log_info "执行 npm install --legacy-peer-deps --ignore-scripts..."
+          log_info "执行 npm install..."
           log_info "开始时间: $(date)"
           npm install --legacy-peer-deps --ignore-scripts || {
             log_error "npm install 失败"
@@ -174,7 +189,6 @@ jobs:
           log_step "修复 extensions.ts"
           log_info "检查 build/lib 目录..."
           mkdir -p build/lib
-          ls -la build/lib/ || log_error "build/lib 不存在"
 
           log_info "创建 extensions.ts..."
           cat > build/lib/extensions.ts << 'EXT_EOF'
@@ -229,16 +243,15 @@ jobs:
           FETCH_EOF
 
           log_step "修复 gulpfile"
-          log_info "检查 build/gulpfile.vscode.ts 是否存在..."
           if [ -f "build/gulpfile.vscode.ts" ]; then
-            log_info "文件存在，执行修复..."
+            log_info "执行修复..."
             python3 /workspace/fix_gulpfile.py || {
               log_error "fix_gulpfile.py 执行失败"
               exit 1
             }
             log_success "gulpfile 修复完成"
           else
-            log_error "build/gulpfile.vscode.ts 不存在！"
+            log_error "build/gulpfile.vscode.ts 不存在"
             log_info "build 目录内容:"
             ls -la build/ || echo "build 目录不存在"
           fi
@@ -275,8 +288,6 @@ jobs:
             log_success "product.json 修复完成"
           else
             log_error "product.json 不存在，跳过"
-            log_info "查找 product.json:"
-            find . -name "product.json" 2>/dev/null | head -5
           fi
 
           log_step "禁用 Crashpad"
@@ -312,30 +323,19 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
 
-          log_info "环境变量设置完成"
-          log_info "NODE_OPTIONS: $NODE_OPTIONS"
-
           log_info "检查 gulp 是否存在..."
           if [ -f "node_modules/gulp/bin/gulp.js" ]; then
             log_success "gulp 存在"
           else
             log_error "gulp 未安装！"
-            log_info "查找 gulp:"
-            find . -name "gulp.js" -type f 2>/dev/null | head -10
             exit 1
           fi
 
           log_info "开始构建，时间: $(date)"
-          log_info "执行命令: npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color"
-
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1 || {
             log_error "gulp 构建失败"
-            log_info "查看构建日志结束部分:"
-            log_info "检查 VSCode 构建输出..."
-            find . -name "*.log" -type f 2>/dev/null | head -10
             exit 1
           }
-
           log_success "构建完成，时间: $(date)"
 
           log_step "查找构建产物"
@@ -353,13 +353,8 @@ jobs:
             log_error "找不到构建目录!"
             log_info "当前目录内容:"
             ls -la
-            log_info "查找 VSCode 目录:"
-            find . -name "*VSCode*" -type d 2>/dev/null | head -10
             exit 1
           fi
-
-          log_info "构建目录内容:"
-          ls -la "$BUILD_DIR" | head -30
 
           log_step "复制 extensions"
           if [ -d "./extensions" ]; then
@@ -382,7 +377,7 @@ jobs:
           log_step "复制预构建扩展"
           if [ -d "./prebuilt-extensions" ]; then
             log_info "复制预构建扩展..."
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || log_error "预构建扩展复制失败"
+            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
             log_success "预构建扩展已复制"
           else
             log_error "./prebuilt-extensions 不存在"
@@ -405,7 +400,6 @@ jobs:
           done
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
-            log_info "搜索可执行文件..."
             REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
             if [ -n "$REAL_EXEC" ]; then
               log_success "找到可执行文件: $REAL_EXEC"
@@ -414,14 +408,12 @@ jobs:
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             log_error "找不到可执行文件！"
-            log_info "当前目录内容:"
-            ls -la
             exit 1
           fi
 
           log_info "备份真实二进制文件..."
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
-          log_success "已备份为: ${REAL_EXEC}.real"
+          log_success "已备份"
 
           log_info "创建包装器脚本..."
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
@@ -493,7 +485,6 @@ jobs:
           START_EOF
           chmod +x start-vscode.sh
 
-          log_info "创建 vscode-uos.desktop..."
           cat > vscode-uos.desktop << 'DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -517,11 +508,8 @@ jobs:
           VERSION="${VERSION:-1.116.0}"
           APPDIR="AppDir"
           mkdir -p "$APPDIR"
-          log_info "复制应用到 AppDir..."
           cp -r "$BUILD_DIR"/* "$APPDIR/"
-          log_success "复制完成"
 
-          log_info "创建 AppRun..."
           cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
           #!/bin/bash
           SELF=$(readlink -f "$0")
@@ -569,9 +557,7 @@ jobs:
               "$@"
           APP_RUN_EOF
           chmod +x "$APPDIR/AppRun"
-          log_success "AppRun 创建完成"
 
-          log_info "创建 custom-vscode.desktop..."
           cat > "$APPDIR/custom-vscode.desktop" << 'CUSTOM_DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -586,12 +572,10 @@ jobs:
           StartupWMClass=Code
           CUSTOM_DESKTOP_EOF
 
-          log_info "查找图标..."
           for icon_path in "$APPDIR/resources/app/resources/linux/code.png" \
                            "$APPDIR/resources/app/linux/code.png"; do
               if [ -f "$icon_path" ]; then
                   cp "$icon_path" "$APPDIR/code.png" 2>/dev/null || true
-                  log_success "图标已复制: $icon_path"
                   break
               fi
           done
@@ -611,7 +595,6 @@ jobs:
             log_success "AppImage 生成成功"
             mkdir -p artifacts
             mv "custom-vscode-uos-${VERSION}.AppImage" artifacts/
-            log_success "AppImage 已移动到 artifacts/"
           else
             log_error "AppImage 生成失败！"
             exit 1
@@ -628,7 +611,7 @@ jobs:
           cd "$OLDPWD"
           log_success "tar.gz 打包完成"
 
-          log_step "构建完成"
+          log_step "容器内构建完成"
           log_success "所有产物已生成"
           log_info "产物列表:"
           ls -la artifacts/
