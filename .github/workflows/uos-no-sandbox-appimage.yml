@@ -28,7 +28,7 @@ jobs:
         run: |
           echo "=========================================="
           echo "🐳 Rocky Linux 8 构建 (glibc 2.28)"
-          echo "使用 Node.js 22 + tsx + 跳过扩展下载"
+          echo "使用 Node.js 22 + streamx 兼容修复"
           echo "=========================================="
 
           cat > /tmp/build.sh << 'BUILD_SH'
@@ -101,6 +101,14 @@ jobs:
 
           echo ""
           echo "=========================================="
+          echo "[STEP] 🔧 修复 streamx 兼容性问题"
+          echo "=========================================="
+          # 强制安装兼容版本的 streamx
+          yarn add -D streamx@2.21.0 --ignore-engines
+          yarn add -D gulp-vinyl-zip@2.5.0 --ignore-engines
+
+          echo ""
+          echo "=========================================="
           echo "[STEP] 安装 gulp 相关依赖"
           echo "=========================================="
           yarn add -D --ignore-engines \
@@ -111,13 +119,9 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 创建必要的构建目录"
+          echo "[STEP] 创建构建目录"
           echo "=========================================="
-          mkdir -p .build/telemetry
-          mkdir -p .build/extensions
-          mkdir -p out
-          mkdir -p out-vscode
-          echo "✅ 构建目录已创建"
+          mkdir -p .build/telemetry .build/extensions out out-vscode
 
           echo ""
           echo "=========================================="
@@ -144,7 +148,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 替换 fetch.ts (跳过所有下载)"
+          echo "[STEP] 替换 fetch.ts"
           echo "=========================================="
           cat > build/lib/fetch.ts << 'FETCH_TS_EOF'
           import { Stream } from "stream";
@@ -172,7 +176,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 替换 extensions.ts (跳过扩展下载)"
+          echo "[STEP] 替换 extensions.ts"
           echo "=========================================="
           cat > build/lib/extensions.ts << 'EXTENSIONS_TS_EOF'
           import { Stream } from "stream";
@@ -218,7 +222,6 @@ jobs:
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
           BIE_EOF
-          echo "✅ builtInExtensions.ts 已替换"
 
           echo ""
           echo "=========================================="
@@ -236,7 +239,6 @@ jobs:
               return function() { return false; };
           }
           COPILOT_EOF
-          echo "✅ copilot.ts 已替换"
 
           echo ""
           echo "=========================================="
@@ -264,7 +266,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 设置 git safe.directory"
+          echo "[STEP] 设置 git safe.directory"
           echo "=========================================="
           git config --global --add safe.directory /workspace
 
