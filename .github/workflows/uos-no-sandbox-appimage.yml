@@ -11,10 +11,6 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
-      node_version:
-        description: 'Node.js version (14, 16, 18, 20)'
-        required: false
-        default: '20'
 
 jobs:
   build:
@@ -28,20 +24,16 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      - name: 🐳 Build in Rocky Linux 8 (glibc 2.28)
+      - name: 🐳 Build in Rocky Linux 8 with Node.js 22
         run: |
           echo "=========================================="
           echo "🐳 Rocky Linux 8 构建 (glibc 2.28)"
-          echo "Node.js 版本: ${{ github.event.inputs.node_version || '20' }}"
+          echo "使用 Node.js 22 (源码要求 >=22.15.0)"
           echo "=========================================="
-
-          NODE_VERSION="${{ github.event.inputs.node_version || '20' }}"
 
           cat > /tmp/build.sh << 'BUILD_SH'
           #!/bin/bash
           set -e
-
-          NODE_VERSION="$1"
 
           echo ""
           echo "=========================================="
@@ -54,9 +46,10 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 安装 Node.js ${NODE_VERSION}"
+          echo "[STEP] 安装 Node.js 22 (从 NodeSource)"
           echo "=========================================="
-          curl -fsSL "https://rpm.nodesource.com/setup_${NODE_VERSION}.x" | bash -
+          # NodeSource 支持 Node.js 22
+          curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
           dnf install -y nodejs
           node --version
           npm --version
@@ -85,20 +78,11 @@ jobs:
           echo 'console.log("OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-          # 移除 package.json 的 type: module（强制 CommonJS）
-          echo "[INFO] 移除 package.json 的 type: module"
-          python3 -c '
-          import json
-          with open("package.json", "r") as f:
-              data = json.load(f)
-          if data.get("type") == "module":
-              del data["type"]
-              with open("package.json", "w") as f:
-                  json.dump(data, f, indent=2)
-              print("✅ 已移除 type: module")
-          else:
-              print("ℹ️ 无需修改")
-          '
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 移除 package-lock.json (避免混合包管理器警告)"
+          echo "=========================================="
+          rm -f package-lock.json
 
           echo ""
           echo "=========================================="
@@ -107,7 +91,15 @@ jobs:
           export npm_config_parcel_watcher_skip_build=true
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
-          yarn install --ignore-scripts --network-timeout 600000
+
+          # 忽略引擎检查，因为 Node.js 22 满足要求
+          yarn install --ignore-scripts --network-timeout 600000 --ignore-engines
+
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 安装 gulp 和构建工具"
+          echo "=========================================="
+          yarn add -D gulp gulp-typescript gulp-sourcemaps del --ignore-engines
 
           echo ""
           echo "=========================================="
@@ -382,7 +374,7 @@ jobs:
             -v "/tmp/build.sh:/workspace/build.sh" \
             --workdir /workspace \
             rockylinux:8 \
-            /bin/bash /workspace/build.sh "${{ github.event.inputs.node_version || '20' }}"
+            /bin/bash /workspace/build.sh
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
