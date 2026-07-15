@@ -41,7 +41,7 @@ jobs:
           echo "=========================================="
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
-            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse which \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which \
             || echo "[WARN] 部分包安装失败"
 
           echo ""
@@ -277,14 +277,12 @@ jobs:
 
           echo "gulp 退出码: $GULP_EXIT_CODE"
 
-          # 如果退出码是 0，说明成功了
-          # 如果是 1，说明失败了，但可能构建产物已经生成
           if [ $GULP_EXIT_CODE -ne 0 ] && [ $GULP_EXIT_CODE -ne 1 ]; then
             echo "❌ gulp 异常退出: $GULP_EXIT_CODE"
             exit 1
           fi
 
-          echo "✅ gulp 执行完成 (或失败但构建产物可能已生成)"
+          echo "✅ gulp 执行完成"
 
           echo ""
           echo "=========================================="
@@ -305,7 +303,6 @@ jobs:
             echo "查找 VSCode 目录:"
             find . -name "*VSCode*" -type d 2>/dev/null | head -10
 
-            # 尝试从 out-vscode 创建
             if [ -d "out-vscode" ]; then
               echo "从 out-vscode 创建 VSCode-linux-x64..."
               mkdir -p VSCode-linux-x64
@@ -326,7 +323,6 @@ jobs:
           [ -d "./node_modules" ] && cp -r ./node_modules "$BUILD_DIR/" && echo "✅ node_modules 已复制"
           [ -d "./prebuilt-extensions" ] && cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null && echo "✅ 预构建扩展已复制"
 
-          # 复制必要的资源
           [ -d "./resources" ] && cp -r ./resources "$BUILD_DIR/" 2>/dev/null && echo "✅ resources 已复制"
 
           echo ""
@@ -335,7 +331,6 @@ jobs:
           echo "=========================================="
           cd "$BUILD_DIR"
 
-          # 查找可执行文件
           REAL_EXEC=""
           for name in tscode code-oss code; do
             [ -f "./$name" ] && { REAL_EXEC="$name"; break; }
@@ -354,12 +349,10 @@ jobs:
 
           echo "✅ 找到可执行文件: $REAL_EXEC"
 
-          # 备份真实二进制文件
           if [ -f "$REAL_EXEC" ]; then
             mv "$REAL_EXEC" "${REAL_EXEC}.real" 2>/dev/null || true
           fi
 
-          # 创建包装器
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -388,7 +381,6 @@ jobs:
           WRAPPER_EOF
           chmod +x "$REAL_EXEC"
 
-          # 创建备用启动脚本
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -416,7 +408,6 @@ jobs:
           START_EOF
           chmod +x start-vscode.sh
 
-          # 创建 desktop 文件
           cat > vscode-uos.desktop << 'DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -506,7 +497,20 @@ jobs:
           done
 
           echo "📦 生成 AppImage..."
-          /usr/local/bin/appimagetool --no-appstream --comp zstd --runtime /usr/local/bin/AppImageRuntime "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+
+          # 尝试直接运行，如果失败则使用 --appimage-extract
+          if /usr/local/bin/appimagetool --version &>/dev/null; then
+            /usr/local/bin/appimagetool --no-appstream --comp zstd --runtime /usr/local/bin/AppImageRuntime "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+          else
+            echo "直接运行 appimagetool 失败，尝试使用 --appimage-extract 参数..."
+            /usr/local/bin/appimagetool --appimage-extract
+            if [ -d "squashfs-root" ]; then
+              ./squashfs-root/AppRun --no-appstream --comp zstd --runtime /usr/local/bin/AppImageRuntime "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+            else
+              echo "❌ 无法提取 appimagetool"
+              exit 1
+            fi
+          fi
 
           if [ ! -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
             echo "❌ AppImage 生成失败！"
