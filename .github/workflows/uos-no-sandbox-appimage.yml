@@ -84,18 +84,15 @@ jobs:
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
           echo "📦 安装 npm 依赖（跳过原生模块编译）..."
-          # 设置环境变量跳过 @parcel/watcher 编译
           export npm_config_parcel_watcher_skip_build=true
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
 
-          # 使用 --ignore-scripts 跳过所有 postinstall 脚本
           npm install --legacy-peer-deps --ignore-scripts || {
             echo "❌ npm install 失败"
             exit 1
           }
 
-          # 手动安装必要的构建工具
           echo "📦 安装构建工具..."
           npm install -g tsx
           npm install --legacy-peer-deps --ignore-scripts \
@@ -153,10 +150,14 @@ jobs:
           FETCH_EOF
 
           echo "📝 修复 gulpfile..."
-          python3 /workspace/fix_gulpfile.py || {
-            echo "❌ fix_gulpfile.py 执行失败"
-            exit 1
-          }
+          if [ -f "build/gulpfile.vscode.ts" ]; then
+            python3 /workspace/fix_gulpfile.py || {
+              echo "❌ fix_gulpfile.py 执行失败"
+              exit 1
+            }
+          else
+            echo "⚠️ build/gulpfile.vscode.ts 不存在，跳过"
+          fi
 
           cat > build/lib/copilot.ts << 'COPILOT_EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
@@ -176,10 +177,14 @@ jobs:
           fi
 
           echo "📝 修复 product.json..."
-          python3 /workspace/fix_product_json.py || {
-            echo "❌ fix_product_json.py 执行失败"
-            exit 1
-          }
+          if [ -f "product.json" ]; then
+            python3 /workspace/fix_product_json.py || {
+              echo "❌ fix_product_json.py 执行失败"
+              exit 1
+            }
+          else
+            echo "⚠️ product.json 不存在，跳过"
+          fi
 
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
@@ -211,12 +216,22 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
 
           echo "Start: $(date)"
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color || {
+
+          # 检查 gulp 是否存在
+          if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
+            echo "❌ gulp 未安装！"
+            echo "node_modules 内容:"
+            ls -la node_modules/ | head -20
+            exit 1
+          fi
+
+          # 执行构建并捕获输出
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1 || {
             echo "❌ gulp 构建失败"
-            echo "查看 build 目录内容:"
-            ls -la build/ || echo "build 目录不存在"
+            echo "构建日志结束"
             exit 1
           }
+
           echo "Done: $(date)"
           echo "✅ 构建完成"
 
@@ -234,6 +249,9 @@ jobs:
             echo "❌ 找不到构建目录!"
             echo "当前目录内容:"
             ls -la
+            echo ""
+            echo "查找 VSCode 目录:"
+            find . -name "*VSCode*" -type d 2>/dev/null | head -10
             exit 1
           fi
 
