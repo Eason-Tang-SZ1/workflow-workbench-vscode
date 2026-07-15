@@ -39,6 +39,9 @@ jobs:
           echo "📦 容器内：安装系统依赖"
           echo "=========================================="
 
+          # 先安装 wget 和基本工具
+          dnf install -y wget curl
+
           dnf install -y epel-release
 
           dnf install -y \
@@ -48,14 +51,18 @@ jobs:
             krb5-devel \
             gtk3-devel nss-devel \
             alsa-lib-devel \
-            python3 wget curl \
+            python3 \
             rpm-build fuse \
-            libxkbfile-devel || echo "⚠️ libxkbfile-devel 跳过"
+            || echo "⚠️ 部分包安装失败，继续..."
+
+          # libxkbfile 在 Rocky Linux 8 中不可用，跳过
+          echo "⚠️ libxkbfile-devel 在 Rocky Linux 8 中不可用，跳过"
 
           echo "📦 容器内：安装 AppImage 工具..."
-          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /usr/local/bin/appimagetool
+          # 使用 curl 替代 wget（如果 wget 不可用）
+          curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /usr/local/bin/appimagetool
-          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64" -O /usr/local/bin/AppImageRuntime
+          curl -L -o /usr/local/bin/AppImageRuntime "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64"
           chmod +x /usr/local/bin/AppImageRuntime
 
           echo "=========================================="
