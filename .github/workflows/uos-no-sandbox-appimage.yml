@@ -34,12 +34,12 @@ jobs:
           cat > /tmp/build-in-docker.sh << 'DOCKER_SCRIPT'
           #!/bin/bash
           set -e
+          set -x  # 开启调试输出
 
           echo "=========================================="
           echo "📦 容器内：安装系统依赖"
           echo "=========================================="
 
-          # 先安装 wget 和基本工具
           dnf install -y wget curl
 
           dnf install -y epel-release
@@ -53,13 +53,12 @@ jobs:
             alsa-lib-devel \
             python3 \
             rpm-build fuse \
+            which \
             || echo "⚠️ 部分包安装失败，继续..."
 
-          # libxkbfile 在 Rocky Linux 8 中不可用，跳过
           echo "⚠️ libxkbfile-devel 在 Rocky Linux 8 中不可用，跳过"
 
           echo "📦 容器内：安装 AppImage 工具..."
-          # 使用 curl 替代 wget（如果 wget 不可用）
           curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /usr/local/bin/appimagetool
           curl -L -o /usr/local/bin/AppImageRuntime "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64"
@@ -71,6 +70,7 @@ jobs:
           npm install -g n
           n 18
           export PATH="/usr/local/bin:$PATH"
+          hash -r
           node --version
           npm --version
 
@@ -83,14 +83,20 @@ jobs:
           echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-          npm install --legacy-peer-deps
+          echo "📦 安装 npm 依赖..."
+          npm install --legacy-peer-deps || {
+            echo "❌ npm install 失败"
+            exit 1
+          }
 
+          echo "📦 安装构建工具..."
           npm install -g tsx
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
+          echo "📝 修复 extensions.ts..."
           cat > build/lib/extensions.ts << 'EXT_EOF'
           import { Stream } from "stream";
           const empty: any[] = [];
@@ -139,8 +145,11 @@ jobs:
           }
           FETCH_EOF
 
-          # 使用 Python 修复 gulpfile
-          python3 /workspace/fix_gulpfile.py
+          echo "📝 修复 gulpfile..."
+          python3 /workspace/fix_gulpfile.py || {
+            echo "❌ fix_gulpfile.py 执行失败"
+            exit 1
+          }
 
           cat > build/lib/copilot.ts << 'COPILOT_EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
@@ -159,8 +168,11 @@ jobs:
             git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
           fi
 
-          # 使用 Python 修改 product.json
-          python3 /workspace/fix_product_json.py
+          echo "📝 修复 product.json..."
+          python3 /workspace/fix_product_json.py || {
+            echo "❌ fix_product_json.py 执行失败"
+            exit 1
+          }
 
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
@@ -182,6 +194,7 @@ jobs:
             sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
           fi
 
+          echo "🔨 开始构建 VSCode..."
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
@@ -191,10 +204,16 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
 
           echo "Start: $(date)"
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color || {
+            echo "❌ gulp 构建失败"
+            echo "查看 build 目录内容:"
+            ls -la build/ || echo "build 目录不存在"
+            exit 1
+          }
           echo "Done: $(date)"
           echo "✅ 构建完成"
 
+          echo "🔍 查找构建产物..."
           BUILD_DIR=""
           for dir in ./VSCode-linux-x64 ./vscode/VSCode-linux-x64 ../VSCode-linux-x64; do
             if [ -d "$dir" ]; then
@@ -206,19 +225,24 @@ jobs:
 
           if [ -z "$BUILD_DIR" ]; then
             echo "❌ 找不到构建目录!"
+            echo "当前目录内容:"
+            ls -la
             exit 1
           fi
 
+          echo "📂 复制 extensions..."
           if [ -d "./extensions" ]; then
             cp -r ./extensions "$BUILD_DIR/"
             echo "✅ extensions 已复制"
           fi
 
+          echo "📂 复制 node_modules..."
           if [ -d "./node_modules" ]; then
             cp -r ./node_modules "$BUILD_DIR/"
             echo "✅ node_modules 已复制"
           fi
 
+          echo "📂 复制预构建扩展..."
           if [ -d "./prebuilt-extensions" ]; then
             cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
             echo "✅ 预构建扩展已复制"
@@ -226,6 +250,7 @@ jobs:
 
           cd "$BUILD_DIR"
 
+          echo "🔍 查找可执行文件..."
           REAL_EXEC=""
           for name in tscode code-oss code; do
             if [ -f "./$name" ]; then
@@ -243,9 +268,12 @@ jobs:
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件！"
+            echo "当前目录内容:"
+            ls -la
             exit 1
           fi
 
+          echo "✅ 找到可执行文件: $REAL_EXEC"
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
           cat > "$REAL_EXEC" << 'WRAPPER_EOF'
