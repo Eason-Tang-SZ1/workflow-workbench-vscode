@@ -65,8 +65,7 @@ jobs:
           echo "=========================================="
           curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /usr/local/bin/appimagetool
-          curl -L -o /usr/local/bin/AppImageRuntime "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64"
-          chmod +x /usr/local/bin/AppImageRuntime
+          # AppImageRuntime 不再需要，appimagetool 已内置 runtime
 
           echo ""
           echo "=========================================="
@@ -498,14 +497,17 @@ jobs:
 
           echo "📦 生成 AppImage..."
 
-          # 尝试直接运行，如果失败则使用 --appimage-extract
+          # 检查 appimagetool 是否可用
           if /usr/local/bin/appimagetool --version &>/dev/null; then
-            /usr/local/bin/appimagetool --no-appstream --comp zstd --runtime /usr/local/bin/AppImageRuntime "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+            echo "直接运行 appimagetool (不包含 --runtime 参数)..."
+            /usr/local/bin/appimagetool --no-appstream --comp zstd "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
           else
-            echo "直接运行 appimagetool 失败，尝试使用 --appimage-extract 参数..."
+            echo "直接运行失败，尝试提取 appimagetool..."
+            # 提取 appimagetool
             /usr/local/bin/appimagetool --appimage-extract
             if [ -d "squashfs-root" ]; then
-              ./squashfs-root/AppRun --no-appstream --comp zstd --runtime /usr/local/bin/AppImageRuntime "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+              echo "使用提取后的 appimagetool (不包含 --runtime 参数)..."
+              ./squashfs-root/AppRun --no-appstream --comp zstd "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
             else
               echo "❌ 无法提取 appimagetool"
               exit 1
