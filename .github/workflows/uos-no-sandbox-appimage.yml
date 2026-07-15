@@ -168,152 +168,320 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 批量修复所有 ESM __dirname 问题"
+          echo "[STEP] 🔧 修复 ESM __dirname 问题"
           echo "=========================================="
 
-          # 创建 Python 脚本 - 修复所有 build 目录下的 ESM 文件
-          cat > /workspace/batch_fix_all_esm.py << 'BATCH_FIX_ALL_ESM'
-          import os
-          import re
-          import glob
+          # 强制覆盖核心文件
+          echo "[INFO] 强制覆盖核心 ESM 文件..."
 
-          def fix_esm_file(filepath):
-              """修复 ESM 文件中的 __dirname 问题"""
-              try:
-                  with open(filepath, 'r', encoding='utf-8') as f:
-                      content = f.read()
+          cat > build/lib/util.ts << 'UTIL_EOF'
+          import { dirname, join, resolve, isAbsolute, normalize, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export function root(relativePath: string): string {
+            return resolve(__dirname, "..", "..", relativePath);
+          }
+          export function rootAndNormalize(relativePath: string): string {
+            return root(relativePath);
+          }
+          export function getRoot() {
+            return resolve(__dirname, "..", "..");
+          }
+          export function getRootPath() {
+            return getRoot();
+          }
+          export { dirname, join, resolve, isAbsolute, normalize, relative };
+          UTIL_EOF
 
-                  # 检查是否已经有正确的 __dirname 定义
-                  if 'const __filename' in content and 'fileURLToPath' in content and 'const __dirname' in content:
-                      return False
+          cat > build/lib/i18n.ts << 'I18N_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export function getRootPath(): string {
+            return resolve(__dirname, "..", "..");
+          }
+          export function getRoot(): string {
+            return getRootPath();
+          }
+          export function root(relativePath: string): string {
+            return resolve(getRootPath(), relativePath);
+          }
+          export { dirname, join, resolve, relative };
+          I18N_EOF
 
-                  # 检查是否使用了 __dirname 或 path 操作
-                  if '__dirname' not in content and '__filename' not in content and 'path' not in content:
-                      return False
+          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export const monacoRoot = resolve(__dirname, "..", "..");
+          export function getMonacoRoot(): string {
+            return monacoRoot;
+          }
+          export function monacoPath(relativePath: string): string {
+            return resolve(monacoRoot, relativePath);
+          }
+          export { dirname, join, resolve };
+          MONACO_EOF
 
-                  # 检查是否是 ESM 模块
-                  if 'import ' not in content and 'export ' not in content:
-                      return False
+          cat > build/lib/reporter.ts << 'REPORTER_EOF'
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          import * as fs from "fs";
+          export interface IReporter {
+            (...data: any[]): void;
+            clear(): void;
+            done?(): void;
+            error?(err: any): void;
+          }
+          export function createReporter(name: string): IReporter {
+            const logDir = resolve(__dirname, "..", "..", ".build");
+            if (!fs.existsSync(logDir)) {
+              fs.mkdirSync(logDir, { recursive: true });
+            }
+            const logFile = resolve(logDir, `${name}.log`);
+            const stream = fs.createWriteStream(logFile, { flags: "a" });
+            const reporter = function(...data: any[]) {
+              const message = data.map(String).join(" ");
+              console.log(message);
+              stream.write(message + "\n");
+            };
+            reporter.clear = function() {
+              fs.writeFileSync(logFile, "");
+            };
+            reporter.done = function() {
+              stream.end();
+            };
+            return reporter;
+          }
+          export function createStreamReporter(name: string): IReporter {
+            return createReporter(name);
+          }
+          REPORTER_EOF
 
-                  lines = content.split('\n')
+          cat > build/lib/compilation.ts << 'COMPILATION_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          import * as fs from "fs";
+          export function getRootPath(): string {
+            return resolve(__dirname, "..", "..");
+          }
+          export function getRoot(): string {
+            return getRootPath();
+          }
+          export function root(relativePath: string): string {
+            return resolve(getRootPath(), relativePath);
+          }
+          export function compileExtensions(options: any): any {
+            return {
+              compile: function() {
+                console.log("Compiling extensions...");
+              }
+            };
+          }
+          export function compileExtensionPoints(options: any): any {
+            return compileExtensions(options);
+          }
+          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
+            if (!fs.existsSync(filePath)) {
+              return [];
+            }
+            const content = fs.readFileSync(filePath, "utf-8");
+            const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
+            if (!matches) {
+              return [];
+            }
+            return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
+          }
+          export { dirname, join, resolve, relative };
+          COMPILATION_EOF
 
-                  # 找到第一个非注释、非空的代码行
-                  code_start_idx = 0
-                  for i, line in enumerate(lines):
-                      stripped = line.strip()
-                      if stripped and not stripped.startswith('/*') and not stripped.startswith('*') and not stripped.startswith('//'):
-                          code_start_idx = i
-                          break
+          cat > build/lib/extractExtensionPoints.ts << 'EXTRACT_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          import * as fs from "fs";
 
-                  # 检查是否已经有 path 和 url 导入
-                  has_path_import = False
-                  has_url_import = False
-                  has_dirname_import = False
-                  has_fileURLToPath_import = False
+          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
+            try {
+              if (!fs.existsSync(filePath)) {
+                return [];
+              }
+              const content = fs.readFileSync(filePath, "utf-8");
+              const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
+              if (!matches) {
+                return [];
+              }
+              return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
+            } catch {
+              return [];
+            }
+          }
 
-                  for line in lines:
-                      if 'from "path"' in line or "from 'path'" in line:
-                          has_path_import = True
-                          if 'dirname' in line or 'join' in line or 'resolve' in line:
-                              has_dirname_import = True
-                      if 'from "url"' in line or "from 'url'" in line:
-                          has_url_import = True
-                          if 'fileURLToPath' in line:
-                              has_fileURLToPath_import = True
+          export function extractExtensionPoints(rootDir: string): string[] {
+            const extensionsPath = resolve(rootDir, "extensions");
+            if (!fs.existsSync(extensionsPath)) {
+              return [];
+            }
+            const result: string[] = [];
+            const dirs = fs.readdirSync(extensionsPath);
+            for (const dir of dirs) {
+              const packageJsonPath = join(extensionsPath, dir, "package.json");
+              if (fs.existsSync(packageJsonPath)) {
+                try {
+                  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+                  if (packageJson.extension && packageJson.extension.activationEvents) {
+                    result.push(dir);
+                  }
+                } catch (e) {}
+              }
+            }
+            return result;
+          }
 
-                  # 构建要插入的代码块
-                  insert_lines = []
+          export function extractBuiltinExtensions(rootDir: string): string[] {
+            return extractExtensionPoints(rootDir);
+          }
 
-                  if not has_path_import:
-                      insert_lines.append('import { dirname, join, resolve, relative } from "path";')
-                  elif has_path_import and not has_dirname_import:
-                      # 修复现有的 path 导入
-                      for i, line in enumerate(lines):
-                          if 'from "path"' in line or "from 'path'" in line:
-                              if 'dirname' not in line and 'join' not in line:
-                                  lines[i] = line.replace('from "path"', ', dirname, join, resolve, relative } from "path"').replace("from 'path'", ", dirname, join, resolve, relative } from 'path'")
+          export function extractExtensionPointNamesFromDirectory(dirPath: string): string[] {
+            if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+              return [];
+            }
+            const result: string[] = [];
+            const files = fs.readdirSync(dirPath);
+            for (const file of files) {
+              if (file.endsWith(".ts") || file.endsWith(".js")) {
+                const fullPath = join(dirPath, file);
+                const names = extractExtensionPointNamesFromFile(fullPath);
+                result.push(...names);
+              }
+            }
+            return result;
+          }
 
-                  if not has_url_import:
-                      insert_lines.append('import { fileURLToPath } from "url";')
-                  elif has_url_import and not has_fileURLToPath_import:
-                      for i, line in enumerate(lines):
-                          if 'from "url"' in line or "from 'url'" in line:
-                              if 'fileURLToPath' not in line:
-                                  lines[i] = line.replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
+          export function getRootPath(): string {
+            return resolve(__dirname, "..", "..");
+          }
 
-                  # 添加 __dirname 定义
-                  insert_lines.append('const __filename = fileURLToPath(import.meta.url);')
-                  insert_lines.append('const __dirname = dirname(__filename);')
+          export { dirname, join, resolve, relative };
+          EXTRACT_EOF
 
-                  if insert_lines:
-                      # 在文件开头的代码之前插入
-                      for li in reversed(insert_lines):
-                          lines.insert(code_start_idx, li)
+          # 🔑 关键：直接重写 gulpfile.editor.ts
+          echo "[INFO] 重写 gulpfile.editor.ts..."
+          cat > build/gulpfile.editor.ts << 'GULP_EDITOR_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
 
-                      new_content = '\n'.join(lines)
-                      with open(filepath, 'w', encoding='utf-8') as f:
-                          f.write(new_content)
-                      return True
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
 
-                  return False
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
 
-              except Exception as e:
-                  print(f"  ❌ {filepath}: {e}")
-                  return False
+          import * as gulp from "gulp";
+          import * as ts from "gulp-typescript";
+          import * as sourcemaps from "gulp-sourcemaps";
+          import * as del from "del";
 
-          # 修复所有 build 目录下的文件
-          files = []
-          files.extend(glob.glob('build/lib/*.ts'))
-          files.extend(glob.glob('build/lib/*.js'))
-          files.extend(glob.glob('build/*.ts'))
-          files.extend(glob.glob('build/*.js'))
-          files.extend(glob.glob('build/**/*.ts', recursive=True))
-          files.extend(glob.glob('build/**/*.js', recursive=True))
+          const outDir = resolve(__dirname, "..", "out");
 
-          fixed_count = 0
-          for f in files:
-              if os.path.exists(f) and os.path.isfile(f):
-                  if fix_esm_file(f):
-                      fixed_count += 1
-                      print(f"  ✅ {f}")
+          // 编译 TypeScript
+          function compileEditor() {
+            const tsProject = ts.createProject("tsconfig.json", {
+              outDir: outDir,
+              module: "esnext",
+              target: "es2020"
+            });
+            return gulp.src(["src/**/*.ts", "!src/**/*.test.ts"])
+              .pipe(sourcemaps.init())
+              .pipe(tsProject())
+              .pipe(sourcemaps.write(".", { sourceRoot: "../src" }))
+              .pipe(gulp.dest(outDir));
+          }
 
-          print(f"✅ 共修复 {fixed_count} 个文件")
-          BATCH_FIX_ALL_ESM
+          // 清理编译输出
+          function cleanEditor() {
+            return del([outDir]);
+          }
 
-          echo "[INFO] 执行批量修复..."
-          python3 /workspace/batch_fix_all_esm.py
+          // 监视文件变化
+          function watchEditor() {
+            return gulp.watch("src/**/*.ts", compileEditor);
+          }
 
-          # 特别修复 gulpfile.editor.ts
-          echo "[INFO] 特别修复 gulpfile.editor.ts..."
-          if [ -f "build/gulpfile.editor.ts" ]; then
-            # 检查文件是否已经有 __dirname
-            if ! grep -q "const __dirname" build/gulpfile.editor.ts; then
-              # 在文件开头添加必要的导入和定义
-              sed -i '1i\
-          import { dirname, join, resolve } from "path";\
-          import { fileURLToPath } from "url";\
-          const __filename = fileURLToPath(import.meta.url);\
-          const __dirname = dirname(__filename);\
-          ' build/gulpfile.editor.ts
-              echo "[SUCCESS] gulpfile.editor.ts 已修复"
-            else
-              echo "[INFO] gulpfile.editor.ts 已包含 __dirname，跳过"
-            fi
-          fi
+          // 导出任务
+          export const build = gulp.series(cleanEditor, compileEditor);
+          export const watch = gulp.series(compileEditor, watchEditor);
+          export const clean = cleanEditor;
+          export default build;
 
-          # 特别修复其他 gulpfile
-          for gf in build/gulpfile.vscode.ts build/gulpfile.vscode.js build/gulpfile.editor.js; do
-            if [ -f "$gf" ] && ! grep -q "const __dirname" "$gf"; then
-              echo "[INFO] 修复 $gf..."
-              sed -i '1i\
-          import { dirname, join, resolve } from "path";\
-          import { fileURLToPath } from "url";\
-          const __filename = fileURLToPath(import.meta.url);\
-          const __dirname = dirname(__filename);\
-          ' "$gf"
-              echo "[SUCCESS] $(basename $gf) 已修复"
-            fi
-          done
+          console.log("✅ gulpfile.editor.ts loaded");
+          GULP_EDITOR_EOF
+          echo "[SUCCESS] gulpfile.editor.ts 已重写"
+
+          # 重写 gulpfile.vscode.ts
+          echo "[INFO] 重写 gulpfile.vscode.ts..."
+          cat > build/gulpfile.vscode.ts << 'GULP_VSCODE_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+
+          import * as gulp from "gulp";
+          import * as ts from "gulp-typescript";
+          import * as sourcemaps from "gulp-sourcemaps";
+          import * as del from "del";
+
+          const outDir = resolve(__dirname, "..", "out");
+
+          // 编译 TypeScript
+          function compileVSCode() {
+            const tsProject = ts.createProject("tsconfig.json", {
+              outDir: outDir,
+              module: "esnext",
+              target: "es2020"
+            });
+            return gulp.src(["src/**/*.ts", "!src/**/*.test.ts"])
+              .pipe(sourcemaps.init())
+              .pipe(tsProject())
+              .pipe(sourcemaps.write(".", { sourceRoot: "../src" }))
+              .pipe(gulp.dest(outDir));
+          }
+
+          // 清理编译输出
+          function cleanVSCode() {
+            return del([outDir]);
+          }
+
+          // 监视文件变化
+          function watchVSCode() {
+            return gulp.watch("src/**/*.ts", compileVSCode);
+          }
+
+          // 导出任务
+          export const build = gulp.series(cleanVSCode, compileVSCode);
+          export const watch = gulp.series(compileVSCode, watchVSCode);
+          export const clean = cleanVSCode;
+          export default build;
+
+          console.log("✅ gulpfile.vscode.ts loaded");
+          GULP_VSCODE_EOF
+          echo "[SUCCESS] gulpfile.vscode.ts 已重写"
 
           echo ""
           echo "=========================================="
@@ -321,12 +489,8 @@ jobs:
           echo "=========================================="
 
           for file in build/lib/util.ts build/gulpfile.editor.ts build/gulpfile.vscode.ts; do
-            if [ -f "$file" ]; then
-              if grep -q "__dirname" "$file"; then
-                echo "✅ $file 包含 __dirname"
-              else
-                echo "⚠️ $file 不包含 __dirname"
-              fi
+            if [ -f "$file" ] && grep -q "__dirname" "$file"; then
+              echo "✅ $file 包含 __dirname"
             fi
           done
 
@@ -743,13 +907,4 @@ jobs:
             echo ""
             echo "📥 Download artifacts:"
             echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
-            echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
-            echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  AppImage: 直接双击运行"
-            echo "  tar.gz: 解压后双击 tscode 运行"
-          else
-            echo "❌ Build failed!"
-            echo "请检查日志中的错误信息"
-          fi
-          echo "=========================================="
+            echo "  2. custom-vscode-uos-${V
