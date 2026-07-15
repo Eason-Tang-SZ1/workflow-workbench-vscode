@@ -30,6 +30,7 @@ jobs:
           echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
           echo "=========================================="
 
+          # 创建容器内执行的构建脚本
           cat > /tmp/build-in-docker.sh << 'DOCKER_SCRIPT'
           #!/bin/bash
           set -e
@@ -171,15 +172,6 @@ jobs:
           echo "[STEP] 🔧 强制修复 ESM __dirname 问题"
           echo "=========================================="
 
-          # 首先检查 util.ts 的当前内容
-          echo "[DEBUG] 检查 build/lib/util.ts 当前内容..."
-          if [ -f "build/lib/util.ts" ]; then
-            echo "[DEBUG] util.ts 前 30 行:"
-            head -30 build/lib/util.ts
-            echo "[DEBUG] 检查 util.ts 是否包含 __dirname..."
-            grep -n "__dirname" build/lib/util.ts || echo "[DEBUG] util.ts 中未找到 __dirname"
-          fi
-
           # 强制覆盖 util.ts
           echo "[INFO] 强制覆盖 build/lib/util.ts..."
           cat > build/lib/util.ts << 'UTIL_EOF'
@@ -214,15 +206,6 @@ jobs:
           export { dirname, join, resolve };
           UTIL_EOF
           echo "[SUCCESS] util.ts 已强制覆盖"
-
-          # 验证修复结果
-          echo "[DEBUG] 验证 util.ts 修复结果..."
-          if [ -f "build/lib/util.ts" ]; then
-            echo "[DEBUG] 修复后 util.ts 前 30 行:"
-            head -30 build/lib/util.ts
-            echo "[DEBUG] 检查 __dirname 定义..."
-            grep -n "__dirname" build/lib/util.ts || echo "[ERROR] __dirname 仍未定义！"
-          fi
 
           # 强制覆盖 i18n.ts
           echo "[INFO] 强制覆盖 build/lib/i18n.ts..."
@@ -336,7 +319,6 @@ jobs:
             };
 
             reporter.clear = function() {
-              // 清空日志文件
               fs.writeFileSync(logFile, "");
             };
 
@@ -352,100 +334,6 @@ jobs:
           }
           REPORTER_EOF
           echo "[SUCCESS] reporter.ts 已强制覆盖"
-
-          # 强制覆盖 util.js
-          if [ -f "build/lib/util.js" ]; then
-            echo "[INFO] 强制覆盖 build/lib/util.js..."
-            cat > build/lib/util.js << 'UTIL_JS_EOF'
-          "use strict";
-          Object.defineProperty(exports, "__esModule", { value: true });
-          const path_1 = require("path");
-          const url_1 = require("url");
-          const __filename = (0, url_1.fileURLToPath)(import.meta.url);
-          const __dirname = (0, path_1.dirname)(__filename);
-          function root(relativePath) {
-              return (0, path_1.resolve)(__dirname, "..", "..", relativePath);
-          }
-          exports.root = root;
-          function rootAndNormalize(relativePath) {
-              return root(relativePath);
-          }
-          exports.rootAndNormalize = rootAndNormalize;
-          function getRoot() {
-              return (0, path_1.resolve)(__dirname, "..", "..");
-          }
-          exports.getRoot = getRoot;
-          function getRootPath() {
-              return getRoot();
-          }
-          exports.getRootPath = getRootPath;
-          exports.dirname = path_1.dirname;
-          exports.join = path_1.join;
-          exports.resolve = path_1.resolve;
-          UTIL_JS_EOF
-            echo "[SUCCESS] util.js 已强制覆盖"
-          fi
-
-          # 强制覆盖 i18n.js
-          if [ -f "build/lib/i18n.js" ]; then
-            echo "[INFO] 强制覆盖 build/lib/i18n.js..."
-            cat > build/lib/i18n.js << 'I18N_JS_EOF'
-          "use strict";
-          Object.defineProperty(exports, "__esModule", { value: true });
-          const path_1 = require("path");
-          const url_1 = require("url");
-          const __filename = (0, url_1.fileURLToPath)(import.meta.url);
-          const __dirname = (0, path_1.dirname)(__filename);
-          function getRootPath() {
-              return (0, path_1.resolve)(__dirname, "..", "..");
-          }
-          exports.getRootPath = getRootPath;
-          function getRoot() {
-              return getRootPath();
-          }
-          exports.getRoot = getRoot;
-          function root(relativePath) {
-              return (0, path_1.resolve)(getRootPath(), relativePath);
-          }
-          exports.root = root;
-          function i18n(obj) {
-              return obj;
-          }
-          exports.i18n = i18n;
-          function getTranslations(language) {
-              return {};
-          }
-          exports.getTranslations = getTranslations;
-          function getLanguage() {
-              return "en";
-          }
-          exports.getLanguage = getLanguage;
-          function getLocale() {
-              return "en-US";
-          }
-          exports.getLocale = getLocale;
-          exports.dirname = path_1.dirname;
-          exports.join = path_1.join;
-          exports.resolve = path_1.resolve;
-          exports.relative = path_1.relative;
-          I18N_JS_EOF
-            echo "[SUCCESS] i18n.js 已强制覆盖"
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 最终验证所有修复的文件"
-          echo "=========================================="
-
-          echo "[DEBUG] 验证 build/lib/util.ts 最终状态:"
-          if [ -f "build/lib/util.ts" ]; then
-            echo "--- util.ts 第 1-25 行 ---"
-            head -25 build/lib/util.ts
-            echo "--- 检查 __dirname ---"
-            grep -n "__dirname" build/lib/util.ts || echo "[ERROR] __dirname 未找到！"
-          else
-            echo "[ERROR] util.ts 不存在！"
-          fi
 
           echo ""
           echo "=========================================="
@@ -895,11 +783,50 @@ jobs:
               print("✅ product.json 已修改")
           PY_FIX_JSON
 
-          # 运行容器
+          # 运行容器 - 修复 Docker 命令
           echo "[INFO] 启动 Docker 容器..."
           docker run --rm \
-            -v $(pwd):/workspace \
-            -v /tmp/fix_gulpfile.py:/workspace/fix_gulpfile.py \
-            -v /tmp/fix_product_json.py:/workspace/fix_product_json.py \
-            -v /tmp/build-in-docker.sh:/workspace/build-in-docker.sh \
-            -w
+            -v "$(pwd):/workspace" \
+            -v "/tmp/fix_gulpfile.py:/workspace/fix_gulpfile.py" \
+            -v "/tmp/fix_product_json.py:/workspace/fix_product_json.py" \
+            -v "/tmp/build-in-docker.sh:/workspace/build-in-docker.sh" \
+            --workdir /workspace \
+            rockylinux:8 \
+            /bin/bash /workspace/build-in-docker.sh
+
+          echo "[SUCCESS] 容器内构建完成"
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-vscode-uos
+          path: |
+            artifacts/custom-vscode-uos-*.tar.gz
+            artifacts/custom-vscode-uos-*.AppImage
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" == "success" ]; then
+            VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+            echo "🎉 Build completed!"
+            echo ""
+            echo "📥 Download artifacts:"
+            echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
+            echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
+            echo ""
+            echo "📌 On UOS (no root needed):"
+            echo "  AppImage: 直接双击运行"
+            echo "  tar.gz: 解压后双击 tscode 运行"
+          else
+            echo "❌ Build failed!"
+            echo "请检查日志中的错误信息"
+          fi
+          echo "=========================================="
