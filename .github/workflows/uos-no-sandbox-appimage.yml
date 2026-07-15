@@ -72,14 +72,12 @@ jobs:
           echo "=========================================="
           echo "[STEP] 修复 package.json"
           echo "=========================================="
-          # 修复 preinstall/postinstall 脚本
           echo 'console.log("OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo 'console.log("OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-          # 移除 package.json 的 type: module（强制使用 CommonJS）
-          echo "[INFO] 移除 package.json 的 type: module"
+          # 移除 package.json 的 type: module
           python3 -c '
           import json
           with open("package.json", "r") as f:
@@ -89,24 +87,7 @@ jobs:
               with open("package.json", "w") as f:
                   json.dump(data, f, indent=2)
               print("✅ 已移除 type: module")
-          else:
-              print("ℹ️ 无需修改")
           '
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 🔧 修复 build/lib/util.ts (移除 ternary-stream 依赖)"
-          echo "=========================================="
-          # 修改 util.ts，移除 ternary-stream 的导入
-          if [ -f "build/lib/util.ts" ]; then
-            # 备份原文件
-            cp build/lib/util.ts build/lib/util.ts.bak
-            # 移除 ternary-stream 相关的导入和使用
-            sed -i '/ternary-stream/d' build/lib/util.ts
-            # 如果文件中使用了 ternaryStream，替换为空操作
-            sed -i 's/ternaryStream(/\/\/ ternaryStream(/g' build/lib/util.ts
-            echo "✅ build/lib/util.ts 已修复"
-          fi
 
           echo ""
           echo "=========================================="
@@ -116,18 +97,34 @@ jobs:
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
 
-          # 删除 package-lock.json 避免混合包管理器警告
           rm -f package-lock.json
-
-          # 安装依赖，忽略引擎检查
           yarn install --ignore-scripts --network-timeout 600000 --ignore-engines
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 安装 gulp 和构建工具"
+          echo "[STEP] 🔧 安装所有 gulp 相关依赖"
           echo "=========================================="
-          # 安装必要的构建工具
-          yarn add -D gulp gulp-typescript gulp-sourcemaps del ternary-stream --ignore-engines
+          # 安装所有可能被 VS Code 构建系统使用的 gulp 插件
+          yarn add -D --ignore-engines \
+            gulp \
+            gulp-typescript \
+            gulp-sourcemaps \
+            gulp-merge-json \
+            gulp-tsb \
+            gulp-filter \
+            gulp-rename \
+            gulp-sort \
+            gulp-uglify \
+            gulp-concat \
+            gulp-clean \
+            gulp-if \
+            gulp-replace \
+            gulp-json-editor \
+            ternary-stream \
+            vscode-gulp-watch \
+            del \
+            esbuild \
+            jsonc-parser
 
           echo ""
           echo "=========================================="
@@ -172,21 +169,40 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 设置 NODE_OPTIONS 启用 CommonJS 兼容"
+          echo "[STEP] 🔧 修复 build/lib 中的 ESM 导入问题"
           echo "=========================================="
-          # 启用实验性的 CommonJS 兼容模式
-          export NODE_OPTIONS="--max-old-space-size=8192 --experimental-require-module"
+          # 修复 util.ts - 移除 ternary-stream 导入
+          if [ -f "build/lib/util.ts" ]; then
+            sed -i '/ternary-stream/d' build/lib/util.ts
+            sed -i 's/ternaryStream(/\/\/ ternaryStream(/g' build/lib/util.ts
+            echo "✅ util.ts 已修复"
+          fi
+
+          # 修复 i18n.ts - 移除 gulp-merge-json 导入
+          if [ -f "build/lib/i18n.ts" ]; then
+            sed -i '/gulp-merge-json/d' build/lib/i18n.ts
+            echo "✅ i18n.ts 已修复"
+          fi
+
+          # 修复可能导入其他 gulp 插件的文件
+          for file in build/lib/*.ts; do
+            if grep -q "gulp-" "$file" 2>/dev/null; then
+              echo "检查 $file..."
+              # 将 import 语句改为动态 require
+              sed -i 's/import.*gulp-.*;/\/\/ 已移除 gulp 插件导入/g' "$file"
+            fi
+          done
 
           echo ""
           echo "=========================================="
           echo "[STEP] 构建 VSCode"
           echo "=========================================="
+          export NODE_OPTIONS="--max-old-space-size=8192 --experimental-require-module"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
-          # 使用 node 直接运行 gulp，带 --experimental-require-module
           node --max-old-space-size=8192 --experimental-require-module ./node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -206,7 +222,6 @@ jobs:
             echo "❌ 找不到构建目录!"
             echo "当前目录内容:"
             ls -la
-            echo "查找 VSCode 目录:"
             find . -name "*VSCode*" -type d 2>/dev/null | head -10
             exit 1
           fi
