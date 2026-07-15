@@ -92,7 +92,7 @@ jobs:
           curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
 
           echo "[INFO] 安装 Node.js..."
-          dnf install -y nodejs -y
+          dnf install -y nodejs
 
           echo "[INFO] Node.js 版本: $(node --version 2>&1)"
           echo "[INFO] npm 版本: $(npm --version 2>&1)"
@@ -168,268 +168,189 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 全局修复所有 ESM __dirname 问题"
+          echo "[STEP] 🔧 修复 ESM __dirname 问题（仅添加定义，不覆盖内容）"
           echo "=========================================="
 
-          # 创建一个 Python 脚本来自动修复所有 build/lib 下的文件
-          cat > /workspace/fix_all_esm.py << 'FIX_ALL_ESM'
+          # 创建一个 Python 脚本，仅在文件开头添加 __dirname 定义
+          cat > /workspace/fix_esm_smart.py << 'FIX_ESM_SMART'
           import os
           import re
           import glob
 
-          def fix_file(filepath):
-              """修复单个文件的 __dirname 问题"""
+          def fix_file_smart(filepath):
+              """智能修复：仅在文件开头添加 __dirname 定义，保留原有内容"""
               try:
                   with open(filepath, 'r', encoding='utf-8') as f:
                       content = f.read()
 
                   # 检查是否是 ESM 模块
-                  if 'import ' not in content and 'export ' not in content:
+                  if 'import ' not in content:
+                      return False
+
+                  # 检查是否已经有 __dirname 定义
+                  if 'const __dirname' in content and 'fileURLToPath' in content:
                       return False
 
                   # 检查是否使用了 __dirname 或 __filename
                   if '__dirname' not in content and '__filename' not in content:
                       return False
 
-                  # 检查是否已经有定义
-                  if 'const __dirname' in content and 'fileURLToPath' in content:
-                      return False
-
-                  # 检查是否导入了 path 和 url
-                  has_path_import = bool(re.search(r'import\s*\{[^}]*\}\s*from\s*["\']path["\']', content))
-                  has_url_import = bool(re.search(r'import\s*\{[^}]*\}\s*from\s*["\']url["\']', content))
-
-                  # 如果没有导入 path 或 url，不处理
-                  if not has_path_import or not has_url_import:
-                      return False
+                  lines = content.split('\n')
 
                   # 找到最后一个 import 语句的位置
-                  lines = content.split('\n')
                   last_import_idx = -1
                   for i, line in enumerate(lines):
-                      if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
+                      stripped = line.strip()
+                      if stripped.startswith('import ') or stripped.startswith('import{') or stripped.startswith('import {'):
                           last_import_idx = i
 
                   if last_import_idx == -1:
                       return False
 
-                  # 检查是否已经有 fileURLToPath 导入
-                  has_fileURLToPath = 'fileURLToPath' in content
-                  has_dirname = 'dirname' in content or 'join' in content
+                  # 检查是否有 path 和 url 导入
+                  has_path_import = False
+                  has_url_import = False
+                  for line in lines:
+                      if 'from "path"' in line or "from 'path'" in line:
+                          has_path_import = True
+                          # 检查是否包含 dirname
+                          if 'dirname' not in line:
+                              # 添加 dirname
+                              line = line.replace('from "path"', ', dirname } from "path"').replace("from 'path'", ", dirname } from 'path'")
+                      if 'from "url"' in line or "from 'url'" in line:
+                          has_url_import = True
+                          # 检查是否包含 fileURLToPath
+                          if 'fileURLToPath' not in line:
+                              line = line.replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
 
-                  # 修复 path 导入
-                  if has_path_import and 'dirname' not in re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content, re.DOTALL).group(1) if re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content, re.DOTALL) else '':
-                      new_content = re.sub(
-                          r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']',
-                          r'import { \1, dirname } from "path"',
-                          content
-                      )
-                      content = new_content
-                  else:
-                      # 如果 path 导入中没有 dirname，添加它
-                      match = re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']path["\']', content)
-                      if match:
-                          imports = match.group(1).strip()
-                          if 'dirname' not in imports:
-                              new_imports = imports + ', dirname' if imports else 'dirname'
-                              content = content.replace(match.group(0), f'import {{ {new_imports} }} from "path"')
+                  # 如果缺少 path 或 url 导入，添加它们
+                  new_lines = []
+                  imports_added = False
+                  for line in lines:
+                      new_lines.append(line)
+                      if line.strip().startswith('import ') and not imports_added:
+                          # 在最后一个 import 后插入定义
+                          pass
 
-                  # 修复 url 导入
-                  if has_url_import and 'fileURLToPath' not in re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content, re.DOTALL).group(1) if re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content, re.DOTALL) else '':
-                      content = re.sub(
-                          r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']',
-                          r'import { \1, fileURLToPath } from "url"',
-                          content
-                      )
-                  else:
-                      match = re.search(r'import\s*\{([^}]*)\}\s*from\s*["\']url["\']', content)
-                      if match:
-                          imports = match.group(1).strip()
-                          if 'fileURLToPath' not in imports:
-                              new_imports = imports + ', fileURLToPath' if imports else 'fileURLToPath'
-                              content = content.replace(match.group(0), f'import {{ {new_imports} }} from "url"')
+                  # 简单方法：直接在文件开头插入必要的导入和定义
+                  # 但更安全的是在最后一个 import 之后插入
 
-                  # 在最后一个 import 之后插入 __dirname 定义
-                  lines = content.split('\n')
-                  insert_pos = 0
-                  for i, line in enumerate(lines):
-                      if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
-                          insert_pos = i + 1
+                  # 构建要插入的代码块
+                  insert_block = []
+                  if not has_path_import:
+                      insert_block.append('import { dirname } from "path";')
+                  if not has_url_import:
+                      insert_block.append('import { fileURLToPath } from "url";')
+                  insert_block.append('const __filename = fileURLToPath(import.meta.url);')
+                  insert_block.append('const __dirname = dirname(__filename);')
 
-                  # 检查是否已经存在定义
-                  define_block = 'const __filename = fileURLToPath(import.meta.url);\nconst __dirname = dirname(__filename);'
-                  if define_block not in content:
-                      lines.insert(insert_pos, '')
-                      lines.insert(insert_pos + 1, define_block)
+                  if insert_block:
+                      # 在最后一个 import 之后插入
+                      lines.insert(last_import_idx + 1, '')
+                      for i, line in enumerate(reversed(insert_block)):
+                          lines.insert(last_import_idx + 1, line)
                       content = '\n'.join(lines)
 
-                  with open(filepath, 'w', encoding='utf-8') as f:
-                      f.write(content)
+                      with open(filepath, 'w', encoding='utf-8') as f:
+                          f.write(content)
+                      print(f"  ✅ {filepath} 已修复")
+                      return True
 
-                  print(f"  ✅ {filepath} 已修复")
-                  return True
+                  return False
 
               except Exception as e:
                   print(f"  ❌ {filepath}: {e}")
                   return False
 
-          # 修复 build/lib 和 build 目录下的所有文件
-          files_to_fix = []
-          for pattern in ['build/lib/*.ts', 'build/lib/*.js', 'build/*.ts', 'build/*.js']:
-              files_to_fix.extend(glob.glob(pattern))
-
+          # 修复 build/lib 下的所有文件
+          files = glob.glob('build/lib/*.ts') + glob.glob('build/lib/*.js')
           fixed_count = 0
-          for f in files_to_fix:
-              if fix_file(f):
+          for f in files:
+              if fix_file_smart(f):
                   fixed_count += 1
 
           print(f"✅ 共修复 {fixed_count} 个文件")
-          FIX_ALL_ESM
+          FIX_ESM_SMART
 
-          # 执行全局修复
-          python3 /workspace/fix_all_esm.py
+          # 执行智能修复
+          python3 /workspace/fix_esm_smart.py
 
-          # 额外手动修复 extractExtensionPoints.ts
-          echo "[INFO] 手动修复 extractExtensionPoints.ts..."
+          # 特别修复 extractExtensionPoints.ts - 保留原有导出
+          echo "[INFO] 特别修复 extractExtensionPoints.ts..."
           if [ -f "build/lib/extractExtensionPoints.ts" ]; then
-            cat > build/lib/extractExtensionPoints.ts << 'EXTRACT_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
+            # 先备份原始内容
+            cp build/lib/extractExtensionPoints.ts /tmp/extractExtensionPoints.ts.bak
+            # 使用 Python 读取原始内容，添加 __dirname 定义，但保留所有导出
+            python3 << 'EXTRACT_FIX'
+          import re
+          import os
 
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
+          filepath = "build/lib/extractExtensionPoints.ts"
+          with open(filepath, 'r') as f:
+              content = f.read()
 
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
+          # 检查是否已经有 __dirname 定义
+          if 'const __dirname' in content and 'fileURLToPath' in content:
+              print("extractExtensionPoints.ts 已修复，跳过")
+          else:
+              # 找到第一个 import 语句
+              lines = content.split('\n')
+              import_indices = []
+              for i, line in enumerate(lines):
+                  if line.strip().startswith('import ') or line.strip().startswith('import{') or line.strip().startswith('import {'):
+                      import_indices.append(i)
 
-          import * as fs from "fs";
-          import * as glob from "glob";
+              if import_indices:
+                  # 在最后一个 import 之后插入定义
+                  last_idx = import_indices[-1]
+                  # 检查是否有 path 和 url 导入
+                  has_path = any('from "path"' in lines[i] or "from 'path'" in lines[i] for i in import_indices)
+                  has_url = any('from "url"' in lines[i] or "from 'url'" in lines[i] for i in import_indices)
+                  has_dirname = any('dirname' in lines[i] for i in import_indices)
+                  has_fileURLToPath = any('fileURLToPath' in lines[i] for i in import_indices)
 
-          export function extractExtensionPoints(rootDir: string): string[] {
-            const extensionsPath = resolve(rootDir, "extensions");
-            if (!fs.existsSync(extensionsPath)) {
-              return [];
-            }
+                  insert_lines = []
+                  if not has_path:
+                      insert_lines.append('import { dirname } from "path";')
+                  if not has_url:
+                      insert_lines.append('import { fileURLToPath } from "url";')
+                  if not has_dirname and not has_path:
+                      # 如果已经导入了 path 但没有 dirname，需要添加
+                      for i in import_indices:
+                          if 'from "path"' in lines[i] or "from 'path'" in lines[i]:
+                              if 'dirname' not in lines[i]:
+                                  lines[i] = lines[i].replace('from "path"', ', dirname } from "path"').replace("from 'path'", ", dirname } from 'path'")
+                  if not has_fileURLToPath and not has_url:
+                      for i in import_indices:
+                          if 'from "url"' in lines[i] or "from 'url'" in lines[i]:
+                              if 'fileURLToPath' not in lines[i]:
+                                  lines[i] = lines[i].replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
 
-            const result: string[] = [];
-            const dirs = fs.readdirSync(extensionsPath);
+                  insert_lines.append('const __filename = fileURLToPath(import.meta.url);')
+                  insert_lines.append('const __dirname = dirname(__filename);')
 
-            for (const dir of dirs) {
-              const packageJsonPath = join(extensionsPath, dir, "package.json");
-              if (fs.existsSync(packageJsonPath)) {
-                try {
-                  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
-                  if (packageJson.extension && packageJson.extension.activationEvents) {
-                    result.push(dir);
-                  }
-                } catch (e) {
-                  // 忽略解析错误
-                }
-              }
-            }
+                  if insert_lines:
+                      for li in reversed(insert_lines):
+                          lines.insert(last_idx + 1, li)
 
-            return result;
-          }
-
-          export function extractBuiltinExtensions(rootDir: string): string[] {
-            return extractExtensionPoints(rootDir);
-          }
-          EXTRACT_EOF
+                  with open(filepath, 'w') as f:
+                      f.write('\n'.join(lines))
+                  print("✅ extractExtensionPoints.ts 已修复（保留所有导出）")
+              else:
+                  print("⚠️ 未找到 import 语句，跳过")
+          EXTRACT_FIX
             echo "[SUCCESS] extractExtensionPoints.ts 已修复"
           fi
 
-          # 手动修复可能出问题的其他文件
-          for file in build/lib/typings-installer.ts build/lib/electron.ts build/lib/optimize.ts build/lib/standalone.ts build/lib/extensions.ts build/lib/extensionManagement.ts; do
-            if [ -f "$file" ]; then
-              echo "[INFO] 手动修复 $file..."
-              cat > "$file" << 'GEN_ESM_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export const rootPath = resolve(__dirname, "..", "..");
-          export function getRootPath(): string { return rootPath; }
-          export function getRoot(): string { return rootPath; }
-          export function root(relativePath: string): string { return resolve(rootPath, relativePath); }
-          export { dirname, join, resolve, relative };
-          GEN_ESM_EOF
-              echo "[SUCCESS] $(basename $file) 已修复"
-            fi
-          done
-
           echo ""
           echo "=========================================="
-          echo "[STEP] 修复 extensions.ts"
+          echo "[STEP] 修复 gulpfile"
           echo "=========================================="
-
-          mkdir -p build/lib
-          cat > build/lib/extensions.ts << 'EXT_EOF'
-          import { Stream } from "stream";
-          const empty: any[] = [];
-          function emptyStream(): Stream {
-            const s = new Stream.Readable();
-            s._read = () => s.push(null);
-            return s;
-          }
-          export function isWebExtension(): boolean { return false; }
-          export function getExtensionStream(): Stream { return emptyStream(); }
-          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
-          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
-          export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
-          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
-          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
-          export function packageExtensionsStream(): Stream { return emptyStream(); }
-          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
-          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
-          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
-          export function fromMarketplace(): any[] { return empty; }
-          export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
-            return Promise.resolve();
-          }
-          export function buildExtensionMedia(): void {}
-          export function compileExtensionMedia(): void {}
-          export function buildExtensionMediaTask(done: any): void { done(); }
-          export const builtInExtensions = empty;
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions = empty;
-          export const shouldDownloadWebBuiltInExtensions = false;
-          EXT_EOF
-
-          cat > build/lib/builtInExtensions.ts << 'BIE_EOF'
-          export const builtInExtensions: any[] = [];
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions: any[] = [];
-          export const shouldDownloadWebBuiltInExtensions = false;
-          BIE_EOF
-
-          cat > build/lib/fetch.ts << 'FETCH_EOF'
-          import { Stream } from "stream";
-          export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
-            return Promise.resolve();
-          }
-          FETCH_EOF
 
           if [ -f "build/gulpfile.vscode.ts" ]; then
             python3 /workspace/fix_gulpfile.py
             echo "[SUCCESS] gulpfile 修复完成"
           fi
-
-          cat > build/lib/copilot.ts << 'COPILOT_EOF'
-          export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
-              console.log("⚠️ Copilot extension shims preparation skipped for UOS build");
-              return;
-          }
-          export function copyCopilotNativeDeps(productRoot: string): void {
-              console.log("⚠️ Copilot native deps copy skipped for UOS build");
-          }
-          export function getCopilotExcludeFilter(): any {
-              return function() { return false; };
-          }
-          COPILOT_EOF
 
           echo ""
           echo "=========================================="
@@ -846,4 +767,11 @@ jobs:
             echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
             echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
             echo ""
-            echo "📌 On UOS (
+            echo "📌 On UOS (no root needed):"
+            echo "  AppImage: 直接双击运行"
+            echo "  tar.gz: 解压后双击 tscode 运行"
+          else
+            echo "❌ Build failed!"
+            echo "请检查日志中的错误信息"
+          fi
+          echo "=========================================="
