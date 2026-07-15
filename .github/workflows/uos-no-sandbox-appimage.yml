@@ -171,193 +171,164 @@ jobs:
           echo "[STEP] 🔧 批量修复所有 ESM __dirname 问题"
           echo "=========================================="
 
-          # 创建一个 Python 脚本，批量修复所有 build/lib 下的 .ts 和 .js 文件
-          cat > /workspace/batch_fix_esm.py << 'BATCH_FIX_ESM'
+          # 创建 Python 脚本 - 修复所有 build 目录下的 ESM 文件
+          cat > /workspace/batch_fix_all_esm.py << 'BATCH_FIX_ALL_ESM'
           import os
           import re
           import glob
 
-          def add_dirname_to_file(filepath):
-              """为 ESM 文件添加 __dirname 定义"""
+          def fix_esm_file(filepath):
+              """修复 ESM 文件中的 __dirname 问题"""
               try:
                   with open(filepath, 'r', encoding='utf-8') as f:
                       content = f.read()
 
-                  # 检查是否已经是 CommonJS 或已经有 __dirname
-                  if '__dirname' in content and 'fileURLToPath' in content:
+                  # 检查是否已经有正确的 __dirname 定义
+                  if 'const __filename' in content and 'fileURLToPath' in content and 'const __dirname' in content:
                       return False
 
-                  # 检查是否使用了 __dirname 或 path.join/resolve
-                  if '__dirname' not in content and '__filename' not in content:
-                      # 检查是否使用了 path 模块
-                      if 'path' not in content:
-                          return False
+                  # 检查是否使用了 __dirname 或 path 操作
+                  if '__dirname' not in content and '__filename' not in content and 'path' not in content:
+                      return False
 
-                  # 检查是否是 ESM 模块（有 import 或 export）
+                  # 检查是否是 ESM 模块
                   if 'import ' not in content and 'export ' not in content:
                       return False
 
                   lines = content.split('\n')
 
-                  # 找到最后一个 import 语句的位置
-                  last_import_idx = -1
+                  # 找到第一个非注释、非空的代码行
+                  code_start_idx = 0
                   for i, line in enumerate(lines):
                       stripped = line.strip()
-                      if stripped.startswith('import ') or stripped.startswith('import{') or stripped.startswith('import {'):
-                          last_import_idx = i
+                      if stripped and not stripped.startswith('/*') and not stripped.startswith('*') and not stripped.startswith('//'):
+                          code_start_idx = i
+                          break
 
-                  if last_import_idx == -1:
-                      # 没有 import，在文件开头添加
-                      insert_idx = 0
-                      # 跳过注释
-                      for i, line in enumerate(lines):
-                          if line.strip().startswith('/*') or line.strip().startswith('*') or line.strip().startswith('//'):
-                              continue
-                          if line.strip() and not line.strip().startswith('/*'):
-                              insert_idx = i
-                              break
-                  else:
-                      insert_idx = last_import_idx + 1
+                  # 检查是否已经有 path 和 url 导入
+                  has_path_import = False
+                  has_url_import = False
+                  has_dirname_import = False
+                  has_fileURLToPath_import = False
 
-                  # 检查是否已经有 path 导入
-                  has_path_import = any('from "path"' in line or "from 'path'" in line for line in lines)
-                  has_url_import = any('from "url"' in line or "from 'url'" in line for line in lines)
-
-                  # 构建要插入的代码
-                  insert_lines = []
-                  if not has_path_import:
-                      # 检查是否已经导入了 path 相关的内容
-                      if 'dirname' not in content:
-                          insert_lines.append('import { dirname, join, resolve, relative } from "path";')
-                  if not has_url_import:
-                      if 'fileURLToPath' not in content:
-                          insert_lines.append('import { fileURLToPath } from "url";')
-
-                  # 如果已经有 path 导入但没有 dirname，修复它
-                  for i, line in enumerate(lines):
+                  for line in lines:
                       if 'from "path"' in line or "from 'path'" in line:
-                          if 'dirname' not in line and 'join' not in line:
-                              lines[i] = line.replace('from "path"', ', dirname, join, resolve, relative } from "path"').replace("from 'path'", ", dirname, join, resolve, relative } from 'path'")
+                          has_path_import = True
+                          if 'dirname' in line or 'join' in line or 'resolve' in line:
+                              has_dirname_import = True
                       if 'from "url"' in line or "from 'url'" in line:
-                          if 'fileURLToPath' not in line:
-                              lines[i] = line.replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
+                          has_url_import = True
+                          if 'fileURLToPath' in line:
+                              has_fileURLToPath_import = True
 
+                  # 构建要插入的代码块
+                  insert_lines = []
+
+                  if not has_path_import:
+                      insert_lines.append('import { dirname, join, resolve, relative } from "path";')
+                  elif has_path_import and not has_dirname_import:
+                      # 修复现有的 path 导入
+                      for i, line in enumerate(lines):
+                          if 'from "path"' in line or "from 'path'" in line:
+                              if 'dirname' not in line and 'join' not in line:
+                                  lines[i] = line.replace('from "path"', ', dirname, join, resolve, relative } from "path"').replace("from 'path'", ", dirname, join, resolve, relative } from 'path'")
+
+                  if not has_url_import:
+                      insert_lines.append('import { fileURLToPath } from "url";')
+                  elif has_url_import and not has_fileURLToPath_import:
+                      for i, line in enumerate(lines):
+                          if 'from "url"' in line or "from 'url'" in line:
+                              if 'fileURLToPath' not in line:
+                                  lines[i] = line.replace('from "url"', ', fileURLToPath } from "url"').replace("from 'url'", ", fileURLToPath } from 'url'")
+
+                  # 添加 __dirname 定义
                   insert_lines.append('const __filename = fileURLToPath(import.meta.url);')
                   insert_lines.append('const __dirname = dirname(__filename);')
 
-                  # 插入代码
-                  for li in reversed(insert_lines):
-                      lines.insert(insert_idx, li)
+                  if insert_lines:
+                      # 在文件开头的代码之前插入
+                      for li in reversed(insert_lines):
+                          lines.insert(code_start_idx, li)
 
-                  new_content = '\n'.join(lines)
+                      new_content = '\n'.join(lines)
+                      with open(filepath, 'w', encoding='utf-8') as f:
+                          f.write(new_content)
+                      return True
 
-                  with open(filepath, 'w', encoding='utf-8') as f:
-                      f.write(new_content)
-
-                  return True
+                  return False
 
               except Exception as e:
                   print(f"  ❌ {filepath}: {e}")
                   return False
 
-          # 修复所有 build/lib 下的文件
-          files = glob.glob('build/lib/*.ts') + glob.glob('build/lib/*.js') + glob.glob('build/*.ts') + glob.glob('build/*.js')
+          # 修复所有 build 目录下的文件
+          files = []
+          files.extend(glob.glob('build/lib/*.ts'))
+          files.extend(glob.glob('build/lib/*.js'))
+          files.extend(glob.glob('build/*.ts'))
+          files.extend(glob.glob('build/*.js'))
+          files.extend(glob.glob('build/**/*.ts', recursive=True))
+          files.extend(glob.glob('build/**/*.js', recursive=True))
 
           fixed_count = 0
           for f in files:
-              if add_dirname_to_file(f):
-                  fixed_count += 1
-                  print(f"  ✅ {f}")
+              if os.path.exists(f) and os.path.isfile(f):
+                  if fix_esm_file(f):
+                      fixed_count += 1
+                      print(f"  ✅ {f}")
 
           print(f"✅ 共修复 {fixed_count} 个文件")
-          BATCH_FIX_ESM
+          BATCH_FIX_ALL_ESM
 
-          # 执行批量修复
           echo "[INFO] 执行批量修复..."
-          python3 /workspace/batch_fix_esm.py
+          python3 /workspace/batch_fix_all_esm.py
 
-          # 特别修复 compilation.ts
-          echo "[INFO] 特别修复 compilation.ts..."
-          if [ -f "build/lib/compilation.ts" ]; then
-            cat > build/lib/compilation.ts << 'COMPILATION_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          import * as fs from "fs";
-          import * as glob from "glob";
-
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-
-          export function getRoot(): string {
-            return getRootPath();
-          }
-
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-
-          export function compileExtensions(options: any): any {
-            // 简化实现
-            return {
-              compile: function() {
-                console.log("Compiling extensions...");
-              }
-            };
-          }
-
-          export function compileExtensionPoints(options: any): any {
-            return compileExtensions(options);
-          }
-
-          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
-            if (!fs.existsSync(filePath)) {
-              return [];
-            }
-            const content = fs.readFileSync(filePath, "utf-8");
-            const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
-            if (!matches) {
-              return [];
-            }
-            return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
-          }
-
-          export { dirname, join, resolve, relative };
-          COMPILATION_EOF
-            echo "[SUCCESS] compilation.ts 已修复"
+          # 特别修复 gulpfile.editor.ts
+          echo "[INFO] 特别修复 gulpfile.editor.ts..."
+          if [ -f "build/gulpfile.editor.ts" ]; then
+            # 检查文件是否已经有 __dirname
+            if ! grep -q "const __dirname" build/gulpfile.editor.ts; then
+              # 在文件开头添加必要的导入和定义
+              sed -i '1i\
+          import { dirname, join, resolve } from "path";\
+          import { fileURLToPath } from "url";\
+          const __filename = fileURLToPath(import.meta.url);\
+          const __dirname = dirname(__filename);\
+          ' build/gulpfile.editor.ts
+              echo "[SUCCESS] gulpfile.editor.ts 已修复"
+            else
+              echo "[INFO] gulpfile.editor.ts 已包含 __dirname，跳过"
+            fi
           fi
+
+          # 特别修复其他 gulpfile
+          for gf in build/gulpfile.vscode.ts build/gulpfile.vscode.js build/gulpfile.editor.js; do
+            if [ -f "$gf" ] && ! grep -q "const __dirname" "$gf"; then
+              echo "[INFO] 修复 $gf..."
+              sed -i '1i\
+          import { dirname, join, resolve } from "path";\
+          import { fileURLToPath } from "url";\
+          const __filename = fileURLToPath(import.meta.url);\
+          const __dirname = dirname(__filename);\
+          ' "$gf"
+              echo "[SUCCESS] $(basename $gf) 已修复"
+            fi
+          done
 
           echo ""
           echo "=========================================="
           echo "[STEP] 验证修复"
           echo "=========================================="
 
-          for file in build/lib/util.ts build/lib/i18n.ts build/lib/compilation.ts; do
-            if [ -f "$file" ] && grep -q "__dirname" "$file"; then
-              echo "✅ $file 包含 __dirname"
-            else
-              echo "❌ $file 问题"
+          for file in build/lib/util.ts build/gulpfile.editor.ts build/gulpfile.vscode.ts; do
+            if [ -f "$file" ]; then
+              if grep -q "__dirname" "$file"; then
+                echo "✅ $file 包含 __dirname"
+              else
+                echo "⚠️ $file 不包含 __dirname"
+              fi
             fi
           done
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 修复 gulpfile"
-          echo "=========================================="
-
-          if [ -f "build/gulpfile.vscode.ts" ]; then
-            python3 /workspace/fix_gulpfile.py
-            echo "[SUCCESS] gulpfile 修复完成"
-          fi
 
           echo ""
           echo "=========================================="
