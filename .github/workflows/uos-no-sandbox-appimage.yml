@@ -65,7 +65,6 @@ jobs:
           echo "=========================================="
           curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /usr/local/bin/appimagetool
-          # AppImageRuntime 不再需要，appimagetool 已内置 runtime
 
           echo ""
           echo "=========================================="
@@ -497,26 +496,48 @@ jobs:
 
           echo "📦 生成 AppImage..."
 
-          # 检查 appimagetool 是否可用
-          if /usr/local/bin/appimagetool --version &>/dev/null; then
-            echo "直接运行 appimagetool (不包含 --runtime 参数)..."
-            /usr/local/bin/appimagetool --no-appstream --comp zstd "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
-          else
-            echo "直接运行失败，尝试提取 appimagetool..."
-            # 提取 appimagetool
-            /usr/local/bin/appimagetool --appimage-extract
-            if [ -d "squashfs-root" ]; then
-              echo "使用提取后的 appimagetool (不包含 --runtime 参数)..."
-              ./squashfs-root/AppRun --no-appstream --comp zstd "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
+          # 使用更简单的 appimagetool 命令
+          echo "尝试使用 appimagetool 生成 AppImage..."
+          echo "命令: /usr/local/bin/appimagetool $APPDIR"
+
+          # 直接运行 appimagetool，不使用任何额外参数
+          if /usr/local/bin/appimagetool "$APPDIR" 2>&1; then
+            echo "appimagetool 执行成功"
+            # 查找生成的 AppImage
+            APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
+            if [ -n "$APPIMAGE_FILE" ]; then
+              echo "找到 AppImage: $APPIMAGE_FILE"
+              mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
             else
-              echo "❌ 无法提取 appimagetool"
-              exit 1
+              echo "警告: appimagetool 执行成功但未找到 AppImage 文件"
             fi
+          else
+            echo "简单命令失败，尝试使用参数..."
+            /usr/local/bin/appimagetool --no-appstream "$APPDIR" 2>&1 || {
+              echo "使用 --no-appstream 失败，尝试提取模式..."
+              /usr/local/bin/appimagetool --appimage-extract
+              if [ -d "squashfs-root" ]; then
+                ./squashfs-root/AppRun "$APPDIR" 2>&1
+              fi
+            }
           fi
 
-          if [ ! -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
-            echo "❌ AppImage 生成失败！"
-            exit 1
+          # 检查是否生成了 AppImage
+          if [ -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
+            echo "✅ AppImage 生成成功: custom-vscode-uos-${VERSION}.AppImage"
+          else
+            # 查找任何 AppImage 文件
+            APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
+            if [ -n "$APPIMAGE_FILE" ]; then
+              echo "找到 AppImage: $APPIMAGE_FILE"
+              mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
+              echo "✅ AppImage 已重命名为 custom-vscode-uos-${VERSION}.AppImage"
+            else
+              echo "❌ AppImage 生成失败！"
+              echo "当前目录内容:"
+              ls -la
+              exit 1
+            fi
           fi
 
           mkdir -p artifacts
