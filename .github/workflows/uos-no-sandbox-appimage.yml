@@ -137,6 +137,140 @@ jobs:
 
           echo ""
           echo "=========================================="
+          echo "[STEP] 🔧 修复 ESM 模块的 __dirname 问题"
+          echo "=========================================="
+
+          # 修复 build/lib/util.ts 中的 __dirname 问题
+          if [ -f "build/lib/util.ts" ]; then
+            echo "[INFO] 修复 build/lib/util.ts..."
+            cat > build/lib/util.ts << 'UTIL_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
+          import { dirname, join, resolve } from 'path';
+          import { fileURLToPath } from 'url';
+
+          // 修复 ESM 模块中 __dirname 未定义的问题
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+
+          export function root(relativePath: string): string {
+            return resolve(__dirname, '..', '..', relativePath);
+          }
+
+          export function rootAndNormalize(relativePath: string): string {
+            return root(relativePath);
+          }
+
+          export function relativePathToRoot(absolutePath: string): string {
+            const r = relative(__dirname, absolutePath);
+            if (r.startsWith('..')) {
+              return r;
+            }
+            return './' + r;
+          }
+
+          export function rootRelativePath(absolutePath: string): string {
+            const r = relative(__dirname, absolutePath);
+            if (r.startsWith('..')) {
+              return r;
+            }
+            return './' + r;
+          }
+
+          export function getRoot() {
+            return resolve(__dirname, '..', '..');
+          }
+
+          export function getRootPath() {
+            return getRoot();
+          }
+
+          // 导出 dirname 和 join 以便其他模块使用
+          export { dirname, join, resolve };
+          UTIL_EOF
+            echo "[SUCCESS] build/lib/util.ts 已修复"
+          else
+            echo "[WARN] build/lib/util.ts 不存在，跳过"
+          fi
+
+          # 修复 build/lib/util.js (如果存在)
+          if [ -f "build/lib/util.js" ]; then
+            echo "[INFO] 修复 build/lib/util.js..."
+            cat > build/lib/util.js << 'UTIL_JS_EOF'
+          "use strict";
+          var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+              if (k2 === undefined) k2 = k;
+              var desc = Object.getOwnPropertyDescriptor(m, k);
+              if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+                  desc = { enumerable: true, get: function() { return m[k]; } };
+              }
+              Object.defineProperty(o, k2, desc);
+          }) : (function(o, m, k, k2) {
+              if (k2 === undefined) k2 = k;
+              o[k2] = m[k];
+          }));
+          var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+              Object.defineProperty(o, "default", { enumerable: true, value: v });
+          }) : function(o, v) {
+              o["default"] = v;
+          });
+          var __importStar = (this && this.__importStar) || function (mod) {
+              if (mod && mod.__esModule) return mod;
+              var result = {};
+              if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+              __setModuleDefault(result, mod);
+              return result;
+          };
+          Object.defineProperty(exports, "__esModule", { value: true });
+          exports.join = exports.dirname = exports.resolve = exports.getRootPath = exports.getRoot = exports.rootRelativePath = exports.relativePathToRoot = exports.rootAndNormalize = exports.root = void 0;
+          const path_1 = require("path");
+          const url_1 = require("url");
+          const __filename = (0, url_1.fileURLToPath)(import.meta.url);
+          const __dirname = (0, path_1.dirname)(__filename);
+          function root(relativePath) {
+              return (0, path_1.resolve)(__dirname, '..', '..', relativePath);
+          }
+          exports.root = root;
+          function rootAndNormalize(relativePath) {
+              return root(relativePath);
+          }
+          exports.rootAndNormalize = rootAndNormalize;
+          function relativePathToRoot(absolutePath) {
+              const r = (0, path_1.relative)(__dirname, absolutePath);
+              if (r.startsWith('..')) {
+                  return r;
+              }
+              return './' + r;
+          }
+          exports.relativePathToRoot = relativePathToRoot;
+          function rootRelativePath(absolutePath) {
+              const r = (0, path_1.relative)(__dirname, absolutePath);
+              if (r.startsWith('..')) {
+                  return r;
+              }
+              return './' + r;
+          }
+          exports.rootRelativePath = rootRelativePath;
+          function getRoot() {
+              return (0, path_1.resolve)(__dirname, '..', '..');
+          }
+          exports.getRoot = getRoot;
+          function getRootPath() {
+              return getRoot();
+          }
+          exports.getRootPath = getRootPath;
+          exports.resolve = path_1.resolve;
+          exports.dirname = path_1.dirname;
+          exports.join = path_1.join;
+          UTIL_JS_EOF
+            echo "[SUCCESS] build/lib/util.js 已修复"
+          fi
+
+          echo ""
+          echo "=========================================="
           echo "[STEP] 安装 npm 依赖（跳过原生模块编译）"
           echo "=========================================="
 
@@ -735,18 +869,4 @@ jobs:
             echo "  1. custom-vscode-uos-${VERSION}.AppImage  (推荐)"
             echo "  2. custom-vscode-uos-${VERSION}.tar.gz   (备选)"
             echo ""
-            echo "📦 包含的预构建扩展:"
-            echo "  - cweijan.vscode-office"
-            echo "  - test-tech.beeeyes"
-            echo "  - test-tech.skillhub"
-            echo "  - MS-CEINTL.vscode-language-pack-zh-hans"
-            echo "  - test-tech.TestAgent"
-            echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  AppImage: 直接双击运行"
-            echo "  tar.gz: 解压后双击 tscode 运行"
-          else
-            echo "❌ Build failed!"
-            echo "请检查日志中的错误信息"
-          fi
-          echo "=========================================="
+            echo "📦
