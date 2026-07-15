@@ -24,7 +24,7 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      - name: 🐳 Build in Rocky Linux 8 container (glibc 2.28)
+      - name: 🐳 Build in Rocky Linux 8 container
         run: |
           echo "=========================================="
           echo "🐳 在 Rocky Linux 8 容器中构建 (glibc 2.28)"
@@ -36,103 +36,128 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 容器内开始构建"
-          echo "=========================================="
-
-          echo ""
-          echo "=========================================="
           echo "[STEP] 安装系统依赖"
           echo "=========================================="
 
-          echo "[INFO] 安装 wget, curl..."
-          dnf install -y wget curl || echo "[WARN] wget/curl 安装失败"
-
-          echo "[INFO] 安装 epel-release..."
-          dnf install -y epel-release || echo "[WARN] epel-release 安装失败"
-
-          echo "[INFO] 安装构建依赖包..."
-          dnf install -y \
-            git \
-            gcc-c++ make pkg-config \
-            libX11-devel libXScrnSaver-devel libXtst-devel \
-            krb5-devel \
-            gtk3-devel nss-devel \
-            alsa-lib-devel \
-            python3 \
-            rpm-build fuse \
-            which \
-            || echo "[WARN] 部分包安装失败，继续"
-
-          echo "[INFO] 检查 Python 版本..."
-          python3 --version || echo "[ERROR] Python 不可用"
-
-          echo "[WARN] libxkbfile-devel 在 Rocky Linux 8 中不可用，跳过"
+          dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
+            libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse which \
+            || echo "[WARN] 部分包安装失败"
 
           echo ""
           echo "=========================================="
           echo "[STEP] 安装 AppImage 工具"
           echo "=========================================="
 
-          echo "[INFO] 下载 appimagetool..."
           curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x /usr/local/bin/appimagetool
-          echo "[SUCCESS] appimagetool 安装完成"
-
-          echo "[INFO] 下载 AppImageRuntime..."
           curl -L -o /usr/local/bin/AppImageRuntime "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64"
           chmod +x /usr/local/bin/AppImageRuntime
-          echo "[SUCCESS] AppImageRuntime 安装完成"
 
           echo ""
           echo "=========================================="
           echo "[STEP] 安装 Node.js 18"
           echo "=========================================="
 
-          echo "[INFO] 添加 NodeSource 仓库..."
           curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-
-          echo "[INFO] 安装 Node.js..."
           dnf install -y nodejs
-
-          echo "[INFO] Node.js 版本: $(node --version 2>&1)"
-          echo "[INFO] npm 版本: $(npm --version 2>&1)"
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 检查工作目录"
-          echo "=========================================="
-
-          echo "[INFO] 当前工作目录: $(pwd)"
-          echo "[INFO] 目录内容:"
-          ls -la
+          node --version
+          npm --version
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 检查 package.json"
+          echo "[STEP] 修复 package.json 脚本"
           echo "=========================================="
 
-          if [ ! -f "package.json" ]; then
-            echo "[ERROR] package.json 不存在！"
-            exit 1
-          fi
-          echo "[SUCCESS] package.json 存在"
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 修复 TypeScript 脚本"
-          echo "=========================================="
-
-          echo "[INFO] 创建 preinstall.js..."
+          # 修复 TypeScript 脚本
           echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
-          echo "[INFO] 修改 package.json preinstall..."
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-
-          echo "[INFO] 创建 postinstall.js..."
           echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
-          echo "[INFO] 修改 package.json postinstall..."
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-          echo "[SUCCESS] TypeScript 脚本修复完成"
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 🔑 创建 ESM Loader - 全局注入 __dirname"
+          echo "=========================================="
+
+          # 创建 loader 脚本，在加载任何 ESM 模块前注入 __dirname
+          cat > /workspace/esm-loader.mjs << 'LOADER_EOF'
+          // ESM Loader for VSCode build - 全局注入 __dirname 和 __filename
+          import { fileURLToPath, pathToFileURL } from 'url';
+          import { dirname } from 'path';
+
+          export async function resolve(specifier, context, nextResolve) {
+            return nextResolve(specifier, context);
+          }
+
+          export async function load(url, context, nextLoad) {
+            const result = await nextLoad(url, context);
+
+            if (result.format === 'module' && result.source) {
+              // 将源代码转换为字符串
+              let source = result.source.toString();
+
+              // 检查是否包含 __dirname 或 __filename，且没有定义
+              if ((source.includes('__dirname') || source.includes('__filename')) &&
+                  !source.includes('const __dirname') &&
+                  !source.includes('const __filename')) {
+
+                // 在文件开头添加 __dirname 和 __filename 定义
+                const importStatements = [
+                  'import { fileURLToPath } from "url";',
+                  'import { dirname } from "path";',
+                  'const __filename = fileURLToPath(import.meta.url);',
+                  'const __dirname = dirname(__filename);'
+                ];
+
+                // 检查是否已经有 path 或 url 导入
+                const hasPathImport = source.includes('from "path"') || source.includes("from 'path'");
+                const hasUrlImport = source.includes('from "url"') || source.includes("from 'url'");
+
+                let newSource = source;
+
+                // 如果缺少 path 或 url 导入，在开头添加
+                if (!hasPathImport || !hasUrlImport) {
+                  const header = importStatements.join('\n');
+                  newSource = header + '\n\n' + source;
+                } else {
+                  // 检查是否已经导入了 dirname 和 fileURLToPath
+                  const hasDirname = source.includes('dirname');
+                  const hasFileURLToPath = source.includes('fileURLToPath');
+
+                  if (!hasDirname || !hasFileURLToPath) {
+                    // 在文件开头添加定义（假设已经导入了 path 和 url）
+                    const dirnameDef = 'const __filename = fileURLToPath(import.meta.url);\nconst __dirname = dirname(__filename);\n';
+                    // 找到第一个 import 之后插入
+                    const lines = source.split('\n');
+                    let insertIdx = 0;
+                    for (let i = 0; i < lines.length; i++) {
+                      if (lines[i].trim().startsWith('import ')) {
+                        insertIdx = i + 1;
+                      }
+                    }
+                    if (insertIdx > 0) {
+                      lines.splice(insertIdx, 0, dirnameDef);
+                      newSource = lines.join('\n');
+                    } else {
+                      newSource = dirnameDef + source;
+                    }
+                  }
+                }
+
+                // 返回修改后的源代码
+                return {
+                  format: 'module',
+                  source: newSource,
+                };
+              }
+            }
+
+            return result;
+          }
+          LOADER_EOF
+
+          echo "[SUCCESS] ESM Loader 已创建"
 
           echo ""
           echo "=========================================="
@@ -143,17 +168,7 @@ jobs:
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
 
-          echo "[INFO] 执行 npm install..."
-          echo "[INFO] 开始时间: $(date)"
           npm install --legacy-peer-deps --ignore-scripts
-
-          if [ $? -ne 0 ]; then
-            echo "[ERROR] npm install 失败"
-            exit 1
-          fi
-          echo "[SUCCESS] npm install 完成"
-          echo "[INFO] 结束时间: $(date)"
-          echo "[INFO] node_modules 大小: $(du -sh node_modules/ 2>/dev/null | cut -f1)"
 
           echo ""
           echo "=========================================="
@@ -161,338 +176,6 @@ jobs:
           echo "=========================================="
 
           npm install -g tsx
-          npm install --legacy-peer-deps --ignore-scripts \
-            ternary-stream vscode-gulp-watch esbuild jsonc-parser \
-            gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
-            gulp-rename gulp-sort 2>/dev/null || true
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 🔧 修复 ESM __dirname 问题"
-          echo "=========================================="
-
-          # 强制覆盖核心文件
-          echo "[INFO] 强制覆盖核心 ESM 文件..."
-
-          cat > build/lib/util.ts << 'UTIL_EOF'
-          import { dirname, join, resolve, isAbsolute, normalize, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export function root(relativePath: string): string {
-            return resolve(__dirname, "..", "..", relativePath);
-          }
-          export function rootAndNormalize(relativePath: string): string {
-            return root(relativePath);
-          }
-          export function getRoot() {
-            return resolve(__dirname, "..", "..");
-          }
-          export function getRootPath() {
-            return getRoot();
-          }
-          export { dirname, join, resolve, isAbsolute, normalize, relative };
-          UTIL_EOF
-
-          cat > build/lib/i18n.ts << 'I18N_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-          export function getRoot(): string {
-            return getRootPath();
-          }
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-          export { dirname, join, resolve, relative };
-          I18N_EOF
-
-          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export const monacoRoot = resolve(__dirname, "..", "..");
-          export function getMonacoRoot(): string {
-            return monacoRoot;
-          }
-          export function monacoPath(relativePath: string): string {
-            return resolve(monacoRoot, relativePath);
-          }
-          export { dirname, join, resolve };
-          MONACO_EOF
-
-          cat > build/lib/reporter.ts << 'REPORTER_EOF'
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          import * as fs from "fs";
-          export interface IReporter {
-            (...data: any[]): void;
-            clear(): void;
-            done?(): void;
-            error?(err: any): void;
-          }
-          export function createReporter(name: string): IReporter {
-            const logDir = resolve(__dirname, "..", "..", ".build");
-            if (!fs.existsSync(logDir)) {
-              fs.mkdirSync(logDir, { recursive: true });
-            }
-            const logFile = resolve(logDir, `${name}.log`);
-            const stream = fs.createWriteStream(logFile, { flags: "a" });
-            const reporter = function(...data: any[]) {
-              const message = data.map(String).join(" ");
-              console.log(message);
-              stream.write(message + "\n");
-            };
-            reporter.clear = function() {
-              fs.writeFileSync(logFile, "");
-            };
-            reporter.done = function() {
-              stream.end();
-            };
-            return reporter;
-          }
-          export function createStreamReporter(name: string): IReporter {
-            return createReporter(name);
-          }
-          REPORTER_EOF
-
-          cat > build/lib/compilation.ts << 'COMPILATION_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          import * as fs from "fs";
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-          export function getRoot(): string {
-            return getRootPath();
-          }
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-          export function compileExtensions(options: any): any {
-            return {
-              compile: function() {
-                console.log("Compiling extensions...");
-              }
-            };
-          }
-          export function compileExtensionPoints(options: any): any {
-            return compileExtensions(options);
-          }
-          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
-            if (!fs.existsSync(filePath)) {
-              return [];
-            }
-            const content = fs.readFileSync(filePath, "utf-8");
-            const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
-            if (!matches) {
-              return [];
-            }
-            return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
-          }
-          export { dirname, join, resolve, relative };
-          COMPILATION_EOF
-
-          cat > build/lib/extractExtensionPoints.ts << 'EXTRACT_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          import * as fs from "fs";
-
-          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
-            try {
-              if (!fs.existsSync(filePath)) {
-                return [];
-              }
-              const content = fs.readFileSync(filePath, "utf-8");
-              const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
-              if (!matches) {
-                return [];
-              }
-              return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
-            } catch {
-              return [];
-            }
-          }
-
-          export function extractExtensionPoints(rootDir: string): string[] {
-            const extensionsPath = resolve(rootDir, "extensions");
-            if (!fs.existsSync(extensionsPath)) {
-              return [];
-            }
-            const result: string[] = [];
-            const dirs = fs.readdirSync(extensionsPath);
-            for (const dir of dirs) {
-              const packageJsonPath = join(extensionsPath, dir, "package.json");
-              if (fs.existsSync(packageJsonPath)) {
-                try {
-                  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
-                  if (packageJson.extension && packageJson.extension.activationEvents) {
-                    result.push(dir);
-                  }
-                } catch (e) {}
-              }
-            }
-            return result;
-          }
-
-          export function extractBuiltinExtensions(rootDir: string): string[] {
-            return extractExtensionPoints(rootDir);
-          }
-
-          export function extractExtensionPointNamesFromDirectory(dirPath: string): string[] {
-            if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
-              return [];
-            }
-            const result: string[] = [];
-            const files = fs.readdirSync(dirPath);
-            for (const file of files) {
-              if (file.endsWith(".ts") || file.endsWith(".js")) {
-                const fullPath = join(dirPath, file);
-                const names = extractExtensionPointNamesFromFile(fullPath);
-                result.push(...names);
-              }
-            }
-            return result;
-          }
-
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-
-          export { dirname, join, resolve, relative };
-          EXTRACT_EOF
-
-          # 🔑 关键：直接重写 gulpfile.editor.ts
-          echo "[INFO] 重写 gulpfile.editor.ts..."
-          cat > build/gulpfile.editor.ts << 'GULP_EDITOR_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          import * as gulp from "gulp";
-          import * as ts from "gulp-typescript";
-          import * as sourcemaps from "gulp-sourcemaps";
-          import * as del from "del";
-
-          const outDir = resolve(__dirname, "..", "out");
-
-          // 编译 TypeScript
-          function compileEditor() {
-            const tsProject = ts.createProject("tsconfig.json", {
-              outDir: outDir,
-              module: "esnext",
-              target: "es2020"
-            });
-            return gulp.src(["src/**/*.ts", "!src/**/*.test.ts"])
-              .pipe(sourcemaps.init())
-              .pipe(tsProject())
-              .pipe(sourcemaps.write(".", { sourceRoot: "../src" }))
-              .pipe(gulp.dest(outDir));
-          }
-
-          // 清理编译输出
-          function cleanEditor() {
-            return del([outDir]);
-          }
-
-          // 监视文件变化
-          function watchEditor() {
-            return gulp.watch("src/**/*.ts", compileEditor);
-          }
-
-          // 导出任务
-          export const build = gulp.series(cleanEditor, compileEditor);
-          export const watch = gulp.series(compileEditor, watchEditor);
-          export const clean = cleanEditor;
-          export default build;
-
-          console.log("✅ gulpfile.editor.ts loaded");
-          GULP_EDITOR_EOF
-          echo "[SUCCESS] gulpfile.editor.ts 已重写"
-
-          # 重写 gulpfile.vscode.ts
-          echo "[INFO] 重写 gulpfile.vscode.ts..."
-          cat > build/gulpfile.vscode.ts << 'GULP_VSCODE_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          import * as gulp from "gulp";
-          import * as ts from "gulp-typescript";
-          import * as sourcemaps from "gulp-sourcemaps";
-          import * as del from "del";
-
-          const outDir = resolve(__dirname, "..", "out");
-
-          // 编译 TypeScript
-          function compileVSCode() {
-            const tsProject = ts.createProject("tsconfig.json", {
-              outDir: outDir,
-              module: "esnext",
-              target: "es2020"
-            });
-            return gulp.src(["src/**/*.ts", "!src/**/*.test.ts"])
-              .pipe(sourcemaps.init())
-              .pipe(tsProject())
-              .pipe(sourcemaps.write(".", { sourceRoot: "../src" }))
-              .pipe(gulp.dest(outDir));
-          }
-
-          // 清理编译输出
-          function cleanVSCode() {
-            return del([outDir]);
-          }
-
-          // 监视文件变化
-          function watchVSCode() {
-            return gulp.watch("src/**/*.ts", compileVSCode);
-          }
-
-          // 导出任务
-          export const build = gulp.series(cleanVSCode, compileVSCode);
-          export const watch = gulp.series(compileVSCode, watchVSCode);
-          export const clean = cleanVSCode;
-          export default build;
-
-          console.log("✅ gulpfile.vscode.ts loaded");
-          GULP_VSCODE_EOF
-          echo "[SUCCESS] gulpfile.vscode.ts 已重写"
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 验证修复"
-          echo "=========================================="
-
-          for file in build/lib/util.ts build/gulpfile.editor.ts build/gulpfile.vscode.ts; do
-            if [ -f "$file" ] && grep -q "__dirname" "$file"; then
-              echo "✅ $file 包含 __dirname"
-            fi
-          done
 
           echo ""
           echo "=========================================="
@@ -501,7 +184,6 @@ jobs:
 
           if [ -f "product.json" ]; then
             python3 /workspace/fix_product_json.py
-            echo "[SUCCESS] product.json 修复完成"
           fi
 
           echo ""
@@ -527,15 +209,14 @@ jobs:
 
           if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
             sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
-            echo "[SUCCESS] electron-main.ts 修改完成"
           fi
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 开始构建 VSCode"
+          echo "[STEP] 🔨 使用 Loader 构建 VSCode"
           echo "=========================================="
 
-          export NODE_OPTIONS="--max-old-space-size=8192"
+          export NODE_OPTIONS="--max-old-space-size=8192 --loader /workspace/esm-loader.mjs"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
@@ -543,19 +224,17 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
 
-          if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
-            echo "[ERROR] gulp 未安装！"
-            exit 1
-          fi
-          echo "[SUCCESS] gulp 存在"
-
           echo "[INFO] 开始构建，时间: $(date)"
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
+          echo "[INFO] 使用 ESM Loader 注入 __dirname..."
+
+          # 使用 node 直接运行 gulp，通过 loader 注入 __dirname
+          npx tsx --loader /workspace/esm-loader.mjs node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
 
           if [ $? -ne 0 ]; then
-            echo "[ERROR] gulp 构建失败"
+            echo "[ERROR] 构建失败"
             exit 1
           fi
+
           echo "[SUCCESS] 构建完成，时间: $(date)"
 
           echo ""
@@ -583,37 +262,21 @@ jobs:
           echo "[STEP] 复制 extensions 和 node_modules"
           echo "=========================================="
 
-          if [ -d "./extensions" ]; then
-            cp -r ./extensions "$BUILD_DIR/"
-            echo "[SUCCESS] extensions 已复制"
-          fi
-
-          if [ -d "./node_modules" ]; then
-            cp -r ./node_modules "$BUILD_DIR/"
-            echo "[SUCCESS] node_modules 已复制"
-          fi
-
-          if [ -d "./prebuilt-extensions" ]; then
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
-            echo "[SUCCESS] 预构建扩展已复制"
-          fi
+          [ -d "./extensions" ] && cp -r ./extensions "$BUILD_DIR/"
+          [ -d "./node_modules" ] && cp -r ./node_modules "$BUILD_DIR/"
+          [ -d "./prebuilt-extensions" ] && cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null || true
 
           cd "$BUILD_DIR"
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 查找可执行文件"
+          echo "[STEP] 创建双击运行版本"
           echo "=========================================="
 
           REAL_EXEC=""
           for name in tscode code-oss code; do
-            if [ -f "./$name" ]; then
-              REAL_EXEC="$name"
-              break
-            elif [ -f "./bin/$name" ]; then
-              REAL_EXEC="./bin/$name"
-              break
-            fi
+            [ -f "./$name" ] && { REAL_EXEC="$name"; break; }
+            [ -f "./bin/$name" ] && { REAL_EXEC="./bin/$name"; break; }
           done
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
@@ -794,18 +457,12 @@ jobs:
               fi
           done
 
-          echo "[INFO] 生成 AppImage..."
           /usr/local/bin/appimagetool \
             --no-appstream \
             --comp zstd \
             --runtime /usr/local/bin/AppImageRuntime \
             "$APPDIR" \
             "custom-vscode-uos-${VERSION}.AppImage"
-
-          if [ $? -ne 0 ]; then
-            echo "[ERROR] appimagetool 执行失败"
-            exit 1
-          fi
 
           if [ -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
             echo "[SUCCESS] AppImage 生成成功"
@@ -825,36 +482,14 @@ jobs:
           tar -czf "$OLDPWD/artifacts/custom-vscode-uos-${VERSION}.tar.gz" \
             --preserve-permissions \
             "$(basename "$BUILD_DIR")"
-
-          if [ $? -ne 0 ]; then
-            echo "[ERROR] tar 打包失败"
-            exit 1
-          fi
           cd "$OLDPWD"
-          echo "[SUCCESS] tar.gz 打包完成"
 
-          echo ""
-          echo "=========================================="
           echo "[SUCCESS] 所有产物已生成"
-          echo "=========================================="
-          echo "[INFO] 产物列表:"
           ls -la artifacts/
 
           DOCKER_SCRIPT
 
           # Python 辅助脚本
-          cat > /tmp/fix_gulpfile.py << 'PY_FIX_GULP'
-          import re
-          with open("build/gulpfile.vscode.ts", "r") as f:
-              content = f.read()
-          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
-          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
-          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
-          with open("build/gulpfile.vscode.ts", "w") as f:
-              f.write(content)
-          print("✅ spawn calls fixed")
-          PY_FIX_GULP
-
           cat > /tmp/fix_product_json.py << 'PY_FIX_JSON'
           import json
           import os
@@ -871,17 +506,15 @@ jobs:
           PY_FIX_JSON
 
           # 运行容器
-          echo "[INFO] 启动 Docker 容器..."
           docker run --rm \
             -v "$(pwd):/workspace" \
-            -v "/tmp/fix_gulpfile.py:/workspace/fix_gulpfile.py" \
             -v "/tmp/fix_product_json.py:/workspace/fix_product_json.py" \
             -v "/tmp/build-in-docker.sh:/workspace/build-in-docker.sh" \
             --workdir /workspace \
             rockylinux:8 \
             /bin/bash /workspace/build-in-docker.sh
 
-          echo "[SUCCESS] 容器内构建完成"
+          echo "[SUCCESS] 构建完成"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -907,4 +540,13 @@ jobs:
             echo ""
             echo "📥 Download artifacts:"
             echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
-            echo "  2. custom-vscode-uos-${V
+            echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
+            echo ""
+            echo "📌 On UOS (no root needed):"
+            echo "  AppImage: 直接双击运行"
+            echo "  tar.gz: 解压后双击 tscode 运行"
+          else
+            echo "❌ Build failed!"
+            echo "请检查日志中的错误信息"
+          fi
+          echo "=========================================="
