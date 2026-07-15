@@ -28,7 +28,7 @@ jobs:
         run: |
           echo "=========================================="
           echo "🐳 Rocky Linux 8 构建 (glibc 2.28)"
-          echo "使用 Node.js 22 (源码要求 >=22.15.0)"
+          echo "使用 Node.js 22 + CommonJS 兼容模式"
           echo "=========================================="
 
           cat > /tmp/build.sh << 'BUILD_SH'
@@ -46,9 +46,8 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 安装 Node.js 22 (从 NodeSource)"
+          echo "[STEP] 安装 Node.js 22"
           echo "=========================================="
-          # NodeSource 支持 Node.js 22
           curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
           dnf install -y nodejs
           node --version
@@ -71,18 +70,43 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 修复 package.json 脚本"
+          echo "[STEP] 修复 package.json"
           echo "=========================================="
+          # 修复 preinstall/postinstall 脚本
           echo 'console.log("OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo 'console.log("OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
+          # 移除 package.json 的 type: module（强制使用 CommonJS）
+          echo "[INFO] 移除 package.json 的 type: module"
+          python3 -c '
+          import json
+          with open("package.json", "r") as f:
+              data = json.load(f)
+          if data.get("type") == "module":
+              del data["type"]
+              with open("package.json", "w") as f:
+                  json.dump(data, f, indent=2)
+              print("✅ 已移除 type: module")
+          else:
+              print("ℹ️ 无需修改")
+          '
+
           echo ""
           echo "=========================================="
-          echo "[STEP] 移除 package-lock.json (避免混合包管理器警告)"
+          echo "[STEP] 🔧 修复 build/lib/util.ts (移除 ternary-stream 依赖)"
           echo "=========================================="
-          rm -f package-lock.json
+          # 修改 util.ts，移除 ternary-stream 的导入
+          if [ -f "build/lib/util.ts" ]; then
+            # 备份原文件
+            cp build/lib/util.ts build/lib/util.ts.bak
+            # 移除 ternary-stream 相关的导入和使用
+            sed -i '/ternary-stream/d' build/lib/util.ts
+            # 如果文件中使用了 ternaryStream，替换为空操作
+            sed -i 's/ternaryStream(/\/\/ ternaryStream(/g' build/lib/util.ts
+            echo "✅ build/lib/util.ts 已修复"
+          fi
 
           echo ""
           echo "=========================================="
@@ -92,14 +116,18 @@ jobs:
           export PARCEL_WATCHER_SKIP_BUILD=true
           export SKIP_NATIVE_MODULES=true
 
-          # 忽略引擎检查，因为 Node.js 22 满足要求
+          # 删除 package-lock.json 避免混合包管理器警告
+          rm -f package-lock.json
+
+          # 安装依赖，忽略引擎检查
           yarn install --ignore-scripts --network-timeout 600000 --ignore-engines
 
           echo ""
           echo "=========================================="
           echo "[STEP] 安装 gulp 和构建工具"
           echo "=========================================="
-          yarn add -D gulp gulp-typescript gulp-sourcemaps del --ignore-engines
+          # 安装必要的构建工具
+          yarn add -D gulp gulp-typescript gulp-sourcemaps del ternary-stream --ignore-engines
 
           echo ""
           echo "=========================================="
@@ -144,15 +172,22 @@ jobs:
 
           echo ""
           echo "=========================================="
+          echo "[STEP] 🔧 设置 NODE_OPTIONS 启用 CommonJS 兼容"
+          echo "=========================================="
+          # 启用实验性的 CommonJS 兼容模式
+          export NODE_OPTIONS="--max-old-space-size=8192 --experimental-require-module"
+
+          echo ""
+          echo "=========================================="
           echo "[STEP] 构建 VSCode"
           echo "=========================================="
-          export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
-          yarn run gulp vscode-linux-x64 --no-color
+          # 使用 node 直接运行 gulp，带 --experimental-require-module
+          node --max-old-space-size=8192 --experimental-require-module ./node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
           echo "=========================================="
