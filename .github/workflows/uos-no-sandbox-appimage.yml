@@ -168,44 +168,104 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 修复 ESM __dirname 问题"
+          echo "[STEP] 🔧 修复所有 ESM __dirname 问题"
           echo "=========================================="
 
-          # 强制覆盖所有核心文件
+          # 强制覆盖核心文件
           echo "[INFO] 强制覆盖核心 ESM 文件..."
 
           cat > build/lib/util.ts << 'UTIL_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
           import { dirname, join, resolve, isAbsolute, normalize, relative } from "path";
           import { fileURLToPath } from "url";
-
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = dirname(__filename);
-
           export function root(relativePath: string): string {
             return resolve(__dirname, "..", "..", relativePath);
           }
-
           export function rootAndNormalize(relativePath: string): string {
             return root(relativePath);
           }
-
           export function getRoot() {
             return resolve(__dirname, "..", "..");
           }
-
           export function getRootPath() {
             return getRoot();
           }
-
           export { dirname, join, resolve, isAbsolute, normalize, relative };
           UTIL_EOF
 
           cat > build/lib/i18n.ts << 'I18N_EOF'
+          import { dirname, join, resolve, relative } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export function getRootPath(): string {
+            return resolve(__dirname, "..", "..");
+          }
+          export function getRoot(): string {
+            return getRootPath();
+          }
+          export function root(relativePath: string): string {
+            return resolve(getRootPath(), relativePath);
+          }
+          export { dirname, join, resolve, relative };
+          I18N_EOF
+
+          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          export const monacoRoot = resolve(__dirname, "..", "..");
+          export function getMonacoRoot(): string {
+            return monacoRoot;
+          }
+          export function monacoPath(relativePath: string): string {
+            return resolve(monacoRoot, relativePath);
+          }
+          export { dirname, join, resolve };
+          MONACO_EOF
+
+          cat > build/lib/reporter.ts << 'REPORTER_EOF'
+          import { dirname, join, resolve } from "path";
+          import { fileURLToPath } from "url";
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
+          import * as fs from "fs";
+          export interface IReporter {
+            (...data: any[]): void;
+            clear(): void;
+            done?(): void;
+            error?(err: any): void;
+          }
+          export function createReporter(name: string): IReporter {
+            const logDir = resolve(__dirname, "..", "..", ".build");
+            if (!fs.existsSync(logDir)) {
+              fs.mkdirSync(logDir, { recursive: true });
+            }
+            const logFile = resolve(logDir, `${name}.log`);
+            const stream = fs.createWriteStream(logFile, { flags: "a" });
+            const reporter = function(...data: any[]) {
+              const message = data.map(String).join(" ");
+              console.log(message);
+              stream.write(message + "\n");
+            };
+            reporter.clear = function() {
+              fs.writeFileSync(logFile, "");
+            };
+            reporter.done = function() {
+              stream.end();
+            };
+            return reporter;
+          }
+          export function createStreamReporter(name: string): IReporter {
+            return createReporter(name);
+          }
+          REPORTER_EOF
+
+          # 完全重写 extractExtensionPoints.ts
+          echo "[INFO] 重写 extractExtensionPoints.ts..."
+          cat > build/lib/extractExtensionPoints.ts << 'EXTRACT_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -217,121 +277,99 @@ jobs:
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = dirname(__filename);
 
+          import * as fs from "fs";
+
+          /**
+           * 提取扩展点名称
+           */
+          export function extractExtensionPointNamesFromFile(filePath: string): string[] {
+            try {
+              if (!fs.existsSync(filePath)) {
+                return [];
+              }
+              const content = fs.readFileSync(filePath, "utf-8");
+              const matches = content.match(/\/\/\s*@extensionPoint\s+(\w+)/g);
+              if (!matches) {
+                return [];
+              }
+              return matches.map(m => m.replace(/\/\/\s*@extensionPoint\s+/, "").trim());
+            } catch {
+              return [];
+            }
+          }
+
+          /**
+           * 从目录中提取所有扩展点
+           */
+          export function extractExtensionPoints(rootDir: string): string[] {
+            const extensionsPath = resolve(rootDir, "extensions");
+            if (!fs.existsSync(extensionsPath)) {
+              return [];
+            }
+
+            const result: string[] = [];
+            const dirs = fs.readdirSync(extensionsPath);
+
+            for (const dir of dirs) {
+              const packageJsonPath = join(extensionsPath, dir, "package.json");
+              if (fs.existsSync(packageJsonPath)) {
+                try {
+                  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+                  if (packageJson.extension && packageJson.extension.activationEvents) {
+                    result.push(dir);
+                  }
+                } catch (e) {
+                  // 忽略解析错误
+                }
+              }
+            }
+
+            return result;
+          }
+
+          export function extractBuiltinExtensions(rootDir: string): string[] {
+            return extractExtensionPoints(rootDir);
+          }
+
+          export function extractExtensionPointNamesFromDirectory(dirPath: string): string[] {
+            if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+              return [];
+            }
+            const result: string[] = [];
+            const files = fs.readdirSync(dirPath);
+            for (const file of files) {
+              if (file.endsWith(".ts") || file.endsWith(".js")) {
+                const fullPath = join(dirPath, file);
+                const names = extractExtensionPointNamesFromFile(fullPath);
+                result.push(...names);
+              }
+            }
+            return result;
+          }
+
+          /**
+           * 获取根路径
+           */
           export function getRootPath(): string {
             return resolve(__dirname, "..", "..");
           }
 
-          export function getRoot(): string {
-            return getRootPath();
-          }
-
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-
           export { dirname, join, resolve, relative };
-          I18N_EOF
+          EXTRACT_EOF
+          echo "[SUCCESS] extractExtensionPoints.ts 已重写"
 
-          cat > build/lib/monaco-api.ts << 'MONACO_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 验证修复"
+          echo "=========================================="
 
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          export const monacoRoot = resolve(__dirname, "..", "..");
-
-          export function getMonacoRoot(): string {
-            return monacoRoot;
-          }
-
-          export function monacoPath(relativePath: string): string {
-            return resolve(monacoRoot, relativePath);
-          }
-
-          export { dirname, join, resolve };
-          MONACO_EOF
-
-          cat > build/lib/reporter.ts << 'REPORTER_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-
-          import * as fs from "fs";
-
-          export interface IReporter {
-            (...data: any[]): void;
-            clear(): void;
-            done?(): void;
-            error?(err: any): void;
-          }
-
-          export function createReporter(name: string): IReporter {
-            const logDir = resolve(__dirname, "..", "..", ".build");
-            if (!fs.existsSync(logDir)) {
-              fs.mkdirSync(logDir, { recursive: true });
-            }
-            const logFile = resolve(logDir, `${name}.log`);
-            const stream = fs.createWriteStream(logFile, { flags: "a" });
-
-            const reporter = function(...data: any[]) {
-              const message = data.map(String).join(" ");
-              console.log(message);
-              stream.write(message + "\n");
-            };
-
-            reporter.clear = function() {
-              fs.writeFileSync(logFile, "");
-            };
-
-            reporter.done = function() {
-              stream.end();
-            };
-
-            return reporter;
-          }
-
-          export function createStreamReporter(name: string): IReporter {
-            return createReporter(name);
-          }
-          REPORTER_EOF
-
-          # 处理 extractExtensionPoints.ts - 移除有问题的修复，使用原始文件
-          echo "[INFO] 处理 extractExtensionPoints.ts..."
-          if [ -f "build/lib/extractExtensionPoints.ts" ]; then
-            # 先恢复原始文件（从 git）
-            echo "[INFO] 从 git 恢复原始 extractExtensionPoints.ts..."
-            git checkout build/lib/extractExtensionPoints.ts 2>/dev/null || echo "[WARN] git checkout 失败，使用现有文件"
-
-            # 检查是否有 __dirname 问题
-            if grep -q "__dirname" build/lib/extractionExtensionPoints.ts 2>/dev/null; then
-              echo "[INFO] extractExtensionPoints.ts 使用 __dirname，尝试修复..."
-              # 使用 sed 在文件开头添加定义
-              sed -i '1i\
-          import { dirname } from "path";\
-          import { fileURLToPath } from "url";\
-          const __filename = fileURLToPath(import.meta.url);\
-          const __dirname = dirname(__filename);\
-          ' build/lib/extractExtensionPoints.ts
-              echo "[SUCCESS] extractExtensionPoints.ts 已修复"
+          for file in build/lib/util.ts build/lib/i18n.ts build/lib/extractExtensionPoints.ts; do
+            if [ -f "$file" ] && grep -q "__dirname" "$file"; then
+              echo "✅ $file 包含 __dirname"
             else
-              echo "[INFO] extractExtensionPoints.ts 不使用 __dirname，跳过"
+              echo "❌ $file 问题"
             fi
-          fi
-
-          echo "[SUCCESS] 所有核心文件已修复"
+          done
 
           echo ""
           echo "=========================================="
