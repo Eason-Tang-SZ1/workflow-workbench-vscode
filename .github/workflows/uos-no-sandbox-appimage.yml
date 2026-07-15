@@ -168,191 +168,173 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔧 修复 ESM __dirname 问题"
+          echo "[STEP] 🔧 全局修复 ESM __dirname 问题"
           echo "=========================================="
 
-          # 创建一个通用的 __dirname 修复模板
-          fix_esm_file() {
-            local file="$1"
-            if [ -f "$file" ]; then
-              echo "[INFO] 修复 $file..."
-              cat > "$file" << 'ESM_FIX_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export { dirname, join, resolve, relative };
-          export const rootPath = resolve(__dirname, "..", "..");
-          export function getRootPath(): string {
-            return rootPath;
-          }
-          export function getRoot(): string {
-            return rootPath;
-          }
-          export function root(relativePath: string): string {
-            return resolve(rootPath, relativePath);
-          }
-          ESM_FIX_EOF
-              echo "[SUCCESS] $file 已修复"
-            fi
-          }
+          # 创建一个 Python 脚本来批量修复所有 build/lib 下的文件
+          cat > /workspace/fix_esm.py << 'FIX_ESM_PY'
+          import os
+          import re
+          import glob
 
-          # 修复所有已知的 ESM 文件
-          FILES_TO_FIX="
-          build/lib/util.ts
-          build/lib/i18n.ts
-          build/lib/monaco-api.ts
-          build/lib/typings-installer.ts
-          build/lib/extensions.ts
-          build/lib/builtInExtensions.ts
-          build/lib/fetch.ts
-          build/lib/copilot.ts
-          build/lib/electron.ts
-          build/lib/optimize.ts
-          build/lib/standalone.ts
-          "
+          def fix_esm_file(filepath):
+              """修复单个 ESM 文件的 __dirname 问题"""
+              try:
+                  with open(filepath, 'r') as f:
+                      content = f.read()
 
-          for f in $FILES_TO_FIX; do
-            if [ -f "$f" ]; then
-              echo "[INFO] 修复 $f..."
-              # 为每个文件创建正确的修复
-              case "$f" in
-                build/lib/util.ts)
-                  cat > build/lib/util.ts << 'UTIL_EOF'
+                  # 检查是否已经包含 __dirname 定义
+                  if 'const __dirname' in content or 'const __filename' in content:
+                      print(f"  ⏭️  {filepath} 已修复，跳过")
+                      return False
+
+                  # 检查是否使用了 __dirname 或 __filename
+                  if '__dirname' not in content and '__filename' not in content:
+                      return False
+
+                  # 检查是否是 ESM 模块 (有 import 语句)
+                  if 'import ' not in content and 'export ' not in content:
+                      return False
+
+                  # 查找 import 语句的位置
+                  lines = content.split('\n')
+                  new_lines = []
+                  import_blocks = []
+                  has_path_import = False
+                  has_url_import = False
+
+                  for line in lines:
+                      if line.startswith('import ') or line.startswith('import{') or line.startswith('import {'):
+                          if 'from "path"' in line or "from 'path'" in line:
+                              has_path_import = True
+                          if 'from "url"' in line or "from 'url'" in line:
+                              has_url_import = True
+                          import_blocks.append(line)
+                      else:
+                          new_lines.append(line)
+
+                  # 如果已经导入了 path 和 url，添加 __dirname 定义
+                  if has_path_import and has_url_import:
+                      # 在 import 块之后添加 __dirname 定义
+                      insert_pos = len(import_blocks)
+                      # 找到最后一个 import 的位置
+                      last_import_idx = -1
+                      for i, line in enumerate(lines):
+                          if line.startswith('import ') or line.startswith('import{') or line.startswith('import {'):
+                              last_import_idx = i
+
+                      if last_import_idx >= 0:
+                          # 重新构建文件
+                          fixed_lines = lines[:last_import_idx + 1]
+                          fixed_lines.append('')
+                          fixed_lines.append('const __filename = fileURLToPath(import.meta.url);')
+                          fixed_lines.append('const __dirname = dirname(__filename);')
+                          fixed_lines.extend(lines[last_import_idx + 1:])
+
+                          # 确保 path 和 url 的导入正确
+                          new_content = '\n'.join(fixed_lines)
+
+                          # 检查是否已经有 fileURLToPath 导入
+                          if 'fileURLToPath' not in new_content:
+                              # 修复 url 导入
+                              new_content = re.sub(
+                                  r'import\s*\{\s*([^}]*)\s*\}\s*from\s*["\']url["\']',
+                                  r'import { \1, fileURLToPath } from "url"',
+                                  new_content
+                              )
+
+                          # 检查是否已经有 dirname 导入
+                          if 'dirname' not in new_content or 'fileURLToPath' not in new_content:
+                              # 修复 path 导入
+                              new_content = re.sub(
+                                  r'import\s*\{\s*([^}]*)\s*\}\s*from\s*["\']path["\']',
+                                  r'import { \1, dirname } from "path"',
+                                  new_content
+                              )
+
+                          # 确保有 fileURLToPath 导入
+                          if 'fileURLToPath' not in new_content:
+                              # 添加独立的 url 导入
+                              for i, line in enumerate(new_content.split('\n')):
+                                  if 'from "url"' in line or "from 'url'" in line:
+                                      if 'fileURLToPath' not in line:
+                                          new_content = new_content.replace(
+                                              line,
+                                              line.replace('from "url"', ', fileURLToPath } from "url"').replace(
+                                                  'from \'url\'', ', fileURLToPath } from \'url\''
+                                              )
+                                          )
+                                      break
+
+                          with open(filepath, 'w') as f:
+                              f.write(new_content)
+                          print(f"  ✅ {filepath} 已修复")
+                          return True
+
+                  return False
+
+              except Exception as e:
+                  print(f"  ❌ {filepath}: {e}")
+                  return False
+
+          # 修复所有 build/lib 下的 .ts 和 .js 文件
+          files = glob.glob('build/lib/*.ts') + glob.glob('build/lib/*.js')
+          fixed_count = 0
+          for f in files:
+              if fix_esm_file(f):
+                  fixed_count += 1
+
+          print(f"✅ 共修复 {fixed_count} 个文件")
+          FIX_ESM_PY
+
+          # 执行修复脚本
+          python3 /workspace/fix_esm.py
+
+          # 额外手动修复 reporter.ts
+          if [ -f "build/lib/reporter.ts" ]; then
+            echo "[INFO] 手动修复 reporter.ts..."
+            cat > build/lib/reporter.ts << 'REPORTER_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
           import { dirname, join, resolve } from "path";
           import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export function root(relativePath: string): string {
-            return resolve(__dirname, "..", "..", relativePath);
-          }
-          export function rootAndNormalize(relativePath: string): string {
-            return root(relativePath);
-          }
-          export function getRoot() {
-            return resolve(__dirname, "..", "..");
-          }
-          export function getRootPath() {
-            return getRoot();
-          }
-          export { dirname, join, resolve };
-          UTIL_EOF
-                  echo "[SUCCESS] util.ts 已修复"
-                  ;;
-                build/lib/i18n.ts)
-                  cat > build/lib/i18n.ts << 'I18N_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export function getRootPath(): string {
-            return resolve(__dirname, "..", "..");
-          }
-          export function getRoot(): string {
-            return getRootPath();
-          }
-          export function root(relativePath: string): string {
-            return resolve(getRootPath(), relativePath);
-          }
-          export function i18n<T>(obj: T): T {
-            return obj;
-          }
-          export function getTranslations(language: string): any {
-            return {};
-          }
-          export function getLanguage(): string {
-            return "en";
-          }
-          export function getLocale(): string {
-            return "en-US";
-          }
-          export { dirname, join, resolve, relative };
-          I18N_EOF
-                  echo "[SUCCESS] i18n.ts 已修复"
-                  ;;
-                build/lib/monaco-api.ts)
-                  cat > build/lib/monaco-api.ts << 'MONACO_EOF'
-          import { dirname, join, resolve } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export const monacoRoot = resolve(__dirname, "..", "..");
-          export function getMonacoRoot(): string {
-            return monacoRoot;
-          }
-          export function monacoPath(relativePath: string): string {
-            return resolve(monacoRoot, relativePath);
-          }
-          export { dirname, join, resolve };
-          MONACO_EOF
-                  echo "[SUCCESS] monaco-api.ts 已修复"
-                  ;;
-                *)
-                  # 通用修复
-                  cat > "$f" << 'GEN_EOF'
-          import { dirname, join, resolve, relative } from "path";
-          import { fileURLToPath } from "url";
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = dirname(__filename);
-          export const rootPath = resolve(__dirname, "..", "..");
-          export function getRootPath(): string {
-            return rootPath;
-          }
-          export function getRoot(): string {
-            return rootPath;
-          }
-          export function root(relativePath: string): string {
-            return resolve(rootPath, relativePath);
-          }
-          export { dirname, join, resolve, relative };
-          GEN_EOF
-                  echo "[SUCCESS] $(basename $f) 已修复"
-                  ;;
-              esac
-            fi
-          done
 
-          # 修复 JS 文件
-          FILES_TO_FIX_JS="
-          build/lib/util.js
-          build/lib/i18n.js
-          build/lib/monaco-api.js
-          "
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = dirname(__filename);
 
-          for f in $FILES_TO_FIX_JS; do
-            if [ -f "$f" ]; then
-              echo "[INFO] 修复 $f..."
-              cat > "$f" << 'JS_FIX_EOF'
-          "use strict";
-          Object.defineProperty(exports, "__esModule", { value: true });
-          const path_1 = require("path");
-          const url_1 = require("url");
-          const __filename = (0, url_1.fileURLToPath)(import.meta.url);
-          const __dirname = (0, path_1.dirname)(__filename);
-          function getRootPath() {
-              return (0, path_1.resolve)(__dirname, "..", "..");
+          import * as fs from 'fs';
+          import * as os from 'os';
+
+          export interface IReporter {
+            (...data: any[]): void;
+            clear(): void;
+            done?(): void;
+            error?(err: any): void;
           }
-          exports.getRootPath = getRootPath;
-          function getRoot() {
-              return getRootPath();
+
+          export function createReporter(name: string): IReporter {
+            const logFile = resolve(__dirname, '..', '..', '.build', `${name}.log`);
+            // ... rest of the implementation
+            const reporter = function(...data: any[]) {
+              console.log(...data);
+            };
+            reporter.clear = function() {};
+            return reporter;
           }
-          exports.getRoot = getRoot;
-          function root(relativePath) {
-              return (0, path_1.resolve)(getRootPath(), relativePath);
+
+          export function createStreamReporter(name: string): IReporter {
+            return createReporter(name);
           }
-          exports.root = root;
-          exports.dirname = path_1.dirname;
-          exports.join = path_1.join;
-          exports.resolve = path_1.resolve;
-          exports.relative = path_1.relative;
-          JS_FIX_EOF
-              echo "[SUCCESS] $(basename $f) 已修复"
-            fi
-          done
+          REPORTER_EOF
+            echo "[SUCCESS] reporter.ts 已修复"
+          fi
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 修复 extensions.ts 和 gulpfile"
+          echo "[STEP] 修复 extensions.ts"
           echo "=========================================="
 
           mkdir -p build/lib
