@@ -1,143 +1,77 @@
-# ... (前面的 steps 保持不变) ...
+name: Build Custom VSCode for UOS (AppImage + Double-click)
 
-# 修复 .desktop 文件中的图标路径
-  echo "🔧 修复 .desktop 文件中的图标路径..."
-  sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$APPDIR"/*.desktop 2>/dev/null || true
-  sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$APPDIR"/custom-vscode.desktop 2>/dev/null || true
-  sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$BUILD_DIR"/*.desktop 2>/dev/null || true
-  echo "✅ .desktop 文件已修复"
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+      version:
+        description: 'Package version'
+        required: false
+        default: '1.116.0'
 
-  cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
-  #!/bin/bash
-  SELF=$(readlink -f "$0")
-  HERE=${SELF%/*}
-  export ELECTRON_ENABLE_GPU=0
-  export LIBGL_ALWAYS_SOFTWARE=1
-  export NODE_OPTIONS="--max-old-space-size=4096"
-  export ELECTRON_DISABLE_SANDBOX=1
-  export GDK_BACKEND=x11
-  export QT_QPA_PLATFORM=xcb
-  export DISPLAY=:0
-  export ELECTRON_DISABLE_CRASH_REPORTER=1
-  export ELECTRON_DISABLE_CRASH_REPORTING=1
-  export CRASHPAD_DISABLE=1
-  EXEC=""
-  [ -f "$HERE/tscode.real" ] && EXEC="$HERE/tscode.real"
-  [ -z "$EXEC" ] && [ -f "$HERE/code.real" ] && EXEC="$HERE/code.real"
-  [ -z "$EXEC" ] && [ -f "$HERE/code-oss.real" ] && EXEC="$HERE/code-oss.real"
-  [ -z "$EXEC" ] && [ -f "$HERE/bin/tscode.real" ] && EXEC="$HERE/bin/tscode.real"
-  [ -z "$EXEC" ] && [ -f "$HERE/bin/code.real" ] && EXEC="$HERE/bin/code.real"
-  if [ -z "$EXEC" ]; then
-  for name in tscode code code-oss; do
-  [ -f "$HERE/$name" ] && { EXEC="$HERE/$name"; break; }
-  [ -f "$HERE/bin/$name" ] && { EXEC="$HERE/bin/$name"; break; }
-  done
-  fi
-  if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
-  echo "❌ 找不到 VSCode 可执行文件！"
-  exit 1
-  fi
-echo "🚀 启动: $EXEC"
-  exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$HERE/user-data" "$@"
-  APP_RUN_EOF
-  chmod +x "$APPDIR/AppRun"
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
-  cat > "$APPDIR/custom-vscode.desktop" << 'CUSTOM_DESKTOP_EOF'
-  [Desktop Entry]
-  Version=1.0
-  Type=Application
-  Name=VSCode for UOS
-  Comment=Custom Visual Studio Code for UOS
-  Exec=AppRun %F
-  Icon=code
-  Terminal=false
-  Categories=Development;IDE
-  StartupNotify=true
-  StartupWMClass=Code
-  CUSTOM_DESKTOP_EOF
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 1
 
-  # ========= 修复：确保图标文件存在 =========
-  echo "🔧 确保图标文件存在..."
-  # 定义可能的图标源路径
-  ICON_SOURCES=(
-  "$APPDIR/resources/app/resources/linux/code.png"
-  "$APPDIR/resources/app/linux/code.png"
-  "$APPDIR/usr/share/pixmaps/code.png"
-  "$BUILD_DIR/resources/app/resources/linux/code.png"
-  "$BUILD_DIR/resources/app/linux/code.png"
-  )
-  # 查找第一个存在的图标文件并复制
-  ICON_COPIED=false
-  for src in "${ICON_SOURCES[@]}"; do
-  if [ -f "$src" ]; then
-echo "找到图标: $src"
-  cp "$src" "$APPDIR/code.png"
-  ICON_COPIED=true
-  echo "✅ 图标已复制到 $APPDIR/code.png"
-  break
-  fi
-  done
-  # 如果没找到，尝试在 APPDIR 中搜索
-  if [ "$ICON_COPIED" = false ]; then
-  echo "在 APPDIR 中搜索图标..."
-  FOUND_ICON=$(find "$APPDIR" -name "code.png" -type f 2>/dev/null | head -1)
-  if [ -n "$FOUND_ICON" ] && [ "$FOUND_ICON" != "$APPDIR/code.png" ]; then
-echo "找到图标: $FOUND_ICON"
-  cp "$FOUND_ICON" "$APPDIR/code.png"
-  ICON_COPIED=true
-  echo "✅ 图标已复制到 $APPDIR/code.png"
-  fi
-  fi
-  # 如果还是没有，创建一个占位图标
-  if [ "$ICON_COPIED" = false ]; then
-  echo "⚠️ 未找到图标，创建占位图标..."
-  # 创建一个简单的 128x128 PNG 占位图标（纯色）
-  convert -size 128x128 xc:blue "$APPDIR/code.png" 2>/dev/null || {
-  # 如果 convert 不可用，使用 base64 创建一个简单的 PNG
-  echo "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAABSSURBVHic7c2xDQAgDAPBzP/tPEGDhsK6U5hZcI6T9jIAAAAAAAAAAAAAAIDfuQD0k9M/U/d6+gCgd9n7Pn0A0Lvs9Z8+AOhd9npPHwD0Lvs9fQDQe+gCq69uS+oQh28AAAAASUVORK5CYII=" | base64 -d > "$APPDIR/code.png"
-  echo "✅ 占位图标已创建"
-}
-  fi
-  # 验证图标文件是否存在
-  if [ -f "$APPDIR/code.png" ]; then
-echo "✅ 图标文件已就绪: $APPDIR/code.png"
-  file "$APPDIR/code.png"
-  else
-  echo "❌ 图标文件仍然缺失！"
-  exit 1
-  fi
-  # ==========================================
+      - name: 🐳 Build in Rocky Linux 8 container
+        run: |
+          echo "=========================================="
+          echo "🐳 Rocky Linux 8 构建 (glibc 2.28)"
+          echo "=========================================="
 
-  echo "📦 生成 AppImage..."
+          # 确保脚本可执行
+          chmod +x .github/scripts/build-in-docker.sh
 
-  # 设置架构环境变量
-  export ARCH=x86_64
-  echo "设置 ARCH=x86_64"
+          # 运行容器，挂载整个仓库，执行脚本
+          docker run --rm \
+            -v "$(pwd):/workspace" \
+            -v "/workspace/.github/scripts/build-in-docker.sh:/workspace/build.sh" \
+            --workdir /workspace \
+            rockylinux:8 \
+            /bin/bash /workspace/build.sh
 
-  # 使用更简单的 appimagetool 命令
-  echo "尝试使用 appimagetool 生成 AppImage..."
-echo "命令: /usr/local/bin/appimagetool $APPDIR"
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-vscode-uos
+          path: |
+            artifacts/custom-vscode-uos-*.tar.gz
+            artifacts/custom-vscode-uos-*.AppImage
+          retention-days: 30
 
-# 直接运行 appimagetool，不使用任何额外参数
-  if /usr/local/bin/appimagetool "$APPDIR" 2>&1; then
-  echo "appimagetool 执行成功"
-  # 查找生成的 AppImage
-  APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
-  if [ -n "$APPIMAGE_FILE" ]; then
-echo "找到 AppImage: $APPIMAGE_FILE"
-  mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
-  else
-echo "警告: appimagetool 执行成功但未找到 AppImage 文件"
-  fi
-  else
-  echo "简单命令失败，尝试使用参数..."
-  /usr/local/bin/appimagetool --no-appstream "$APPDIR" 2>&1 || {
-  echo "使用 --no-appstream 失败，尝试提取模式..."
-  /usr/local/bin/appimagetool --appimage-extract
-  if [ -d "squashfs-root" ]; then
-  ./squashfs-root/AppRun "$APPDIR" 2>&1
-  fi
-}
-  fi
-
-# ... (后续 steps 保持不变) ...
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" == "success" ]; then
+            VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+            echo "🎉 Build completed!"
+            echo ""
+            echo "📥 Download artifacts:"
+            echo "  1. custom-vscode-uos-${VERSION}.AppImage (推荐)"
+            echo "  2. custom-vscode-uos-${VERSION}.tar.gz (备选)"
+            echo ""
+            echo "📌 On UOS (no root needed):"
+            echo "  AppImage: 直接双击运行"
+            echo "  tar.gz: 解压后双击 tscode 运行"
+          else
+            echo "❌ Build failed!"
+            echo "请检查日志中的错误信息"
+          fi
+          echo "=========================================="
