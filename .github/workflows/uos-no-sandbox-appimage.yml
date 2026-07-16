@@ -37,7 +37,7 @@ jobs:
           echo "=========================================="
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
-            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx \
             || echo "[WARN] 部分包安装失败"
 
           echo ""
@@ -311,6 +311,21 @@ jobs:
 
           echo ""
           echo "=========================================="
+          echo "[STEP] 📦 精简 node_modules (删除测试、文档、源码)"
+          echo "=========================================="
+          if [ -d "./node_modules" ]; then
+            echo "精简前大小: $(du -sh ./node_modules | cut -f1)"
+            find ./node_modules -name "*.test.js" -o -name "*.spec.js" -type f -delete 2>/dev/null || true
+            find ./node_modules -name "test" -o -name "tests" -o -name "example" -o -name "examples" -type d -exec rm -rf {} + 2>/dev/null || true
+            find ./node_modules -name "*.ts" -not -name "*.d.ts" -type f -delete 2>/dev/null || true
+            find ./node_modules -name "README.md" -o -name "CHANGELOG.md" -o -name "LICENSE" -type f -delete 2>/dev/null || true
+            find ./node_modules -name "*.map" -type f -delete 2>/dev/null || true
+            echo "精简后大小: $(du -sh ./node_modules | cut -f1)"
+            echo "✅ node_modules 已精简"
+          fi
+
+          echo ""
+          echo "=========================================="
           echo "[STEP] 复制 extensions 和 node_modules"
           echo "=========================================="
           [ -d "./extensions" ] && cp -r ./extensions "$BUILD_DIR/" && echo "✅ extensions 已复制"
@@ -521,11 +536,16 @@ jobs:
             exit 1
           fi
 
-          echo "📦 生成 AppImage..."
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 生成 AppImage"
+          echo "=========================================="
           export ARCH=x86_64
           echo "设置 ARCH=x86_64"
 
-          if /usr/local/bin/appimagetool "$APPDIR" 2>&1; then
+          # 使用 xz 高压缩率打包
+          echo "使用 xz 压缩打包 AppImage (压缩率更高)..."
+          if /usr/local/bin/appimagetool --comp xz --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
             APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
             if [ -n "$APPIMAGE_FILE" ]; then
@@ -533,28 +553,67 @@ jobs:
               mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
             fi
           else
-            echo "简单命令失败，尝试使用 --no-appstream..."
-            /usr/local/bin/appimagetool --no-appstream "$APPDIR" 2>&1 || {
-              echo "使用 --no-appstream 失败，尝试提取模式..."
-              /usr/local/bin/appimagetool --appimage-extract
-              if [ -d "squashfs-root" ]; then
-                ./squashfs-root/AppRun "$APPDIR" 2>&1
-              fi
+            echo "xz 压缩失败，尝试使用 zstd 压缩..."
+            /usr/local/bin/appimagetool --comp zstd --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1 || {
+              echo "使用默认压缩..."
+              /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
             }
           fi
 
-          if [ -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
-            echo "✅ AppImage 生成成功"
-          else
+          # 检查 AppImage 是否生成
+          if [ ! -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
             APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
             if [ -n "$APPIMAGE_FILE" ]; then
               echo "找到 AppImage: $APPIMAGE_FILE"
               mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
-              echo "✅ AppImage 已重命名"
             else
               echo "❌ AppImage 生成失败！"
               exit 1
             fi
+          fi
+
+          echo "✅ AppImage 生成成功: custom-vscode-uos-${VERSION}.AppImage"
+          echo "📊 当前大小: $(du -h custom-vscode-uos-${VERSION}.AppImage | cut -f1)"
+
+          echo ""
+          echo "=========================================="
+          echo "[STEP] 使用 upx 压缩 AppImage 内的二进制文件"
+          echo "=========================================="
+
+          if command -v upx &> /dev/null; then
+            echo "upx 已安装，开始压缩..."
+            # 备份原始 AppImage
+            cp "custom-vscode-uos-${VERSION}.AppImage" "custom-vscode-uos-${VERSION}.AppImage.original"
+            ORIGINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage.original" | cut -f1)
+
+            # 提取 AppImage
+            echo "提取 AppImage 内容..."
+            ./custom-vscode-uos-${VERSION}.AppImage --appimage-extract 2>/dev/null || true
+
+            if [ -d "squashfs-root" ]; then
+              # 压缩所有可执行文件
+              echo "压缩可执行文件 (upx --best --lzma)..."
+              find squashfs-root -type f -executable -exec upx --best --lzma {} \; 2>/dev/null || true
+
+              # 重新打包（使用 xz 高压缩）
+              echo "重新打包 AppImage..."
+              ARCH=x86_64 /usr/local/bin/appimagetool --comp xz --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || \
+              ARCH=x86_64 /usr/local/bin/appimagetool --comp xz squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || \
+              ARCH=x86_64 /usr/local/bin/appimagetool --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || true
+
+              # 清理临时目录
+              rm -rf squashfs-root
+
+              # 显示压缩前后大小对比
+              FINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage" | cut -f1)
+              echo "📊 压缩前大小: $ORIGINAL_SIZE"
+              echo "📊 压缩后大小: $FINAL_SIZE"
+              echo "✅ upx 压缩完成"
+            else
+              echo "⚠️ 提取 AppImage 失败，跳过 upx 压缩"
+            fi
+          else
+            echo "⚠️ upx 未安装，跳过二进制压缩"
           fi
 
           mkdir -p artifacts
