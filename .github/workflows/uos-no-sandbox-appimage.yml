@@ -441,6 +441,11 @@ jobs:
           echo "复制 $BUILD_DIR 到 $APPDIR..."
           cp -r "$BUILD_DIR"/* "$APPDIR/"
 
+          # 删除所有从构建目录复制过来的 .desktop 文件，它们可能包含相对路径的图标
+          echo "🔧 清理有问题的 .desktop 文件..."
+          find "$APPDIR" -maxdepth 1 -name "*.desktop" -type f -exec rm -f {} \;
+          echo "✅ 已删除旧的 .desktop 文件"
+
           # 修复 .desktop 文件中的图标路径
           echo "🔧 修复 .desktop 文件中的图标路径..."
           sed -i 's|Icon=\./resources/app/resources/linux/code.png|Icon=code|g' "$APPDIR"/*.desktop 2>/dev/null || true
