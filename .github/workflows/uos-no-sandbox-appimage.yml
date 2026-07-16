@@ -15,7 +15,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     steps:
       - name: 📥 Checkout
@@ -35,7 +35,6 @@ jobs:
           echo "=========================================="
           echo "[STEP] 安装系统依赖"
           echo "=========================================="
-          # 显式安装 git，因为后续需要用到
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
             gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx \
@@ -137,6 +136,7 @@ jobs:
           echo "=========================================="
           echo "[STEP] 替换 fetch.ts"
           echo "=========================================="
+          mkdir -p build/lib
           cat > build/lib/fetch.ts << 'FETCH_TS_EOF'
           import { Stream } from "stream";
           export async function fetchUrl(url: string): Promise<Buffer> {
@@ -251,7 +251,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔨 运行 gulp vscode-linux-x64 (允许失败)"
+          echo "[STEP] 🔨 运行 gulp vscode-linux-x64"
           echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
@@ -259,8 +259,18 @@ jobs:
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
 
+          echo "检查 gulp 是否存在..."
+          if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
+            echo "❌ gulp 未安装！"
+            echo "查找 gulp:"
+            find . -name "gulp" -type f 2>/dev/null | head -10
+            exit 1
+          fi
+          echo "✅ gulp 存在"
+
+          echo "开始构建，时间: $(date)"
           set +e
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
           GULP_EXIT_CODE=$?
           set -e
 
@@ -271,7 +281,7 @@ jobs:
             exit 1
           fi
 
-          echo "✅ gulp 执行完成"
+          echo "✅ gulp 执行完成，时间: $(date)"
 
           echo ""
           echo "=========================================="
@@ -300,13 +310,18 @@ jobs:
               cp -r extensions VSCode-linux-x64/ 2>/dev/null || true
               BUILD_DIR="VSCode-linux-x64"
             else
+              echo "❌ 无法找到构建产物"
+              echo "当前目录内容:"
+              ls -la
+              echo "查找 out 目录:"
+              find . -name "out" -type d 2>/dev/null | head -10
               exit 1
             fi
           fi
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 📦 精简 node_modules (删除测试、文档、源码)"
+          echo "[STEP] 📦 精简 node_modules"
           echo "=========================================="
           if [ -d "./node_modules" ]; then
             echo "精简前大小: $(du -sh ./node_modules | cut -f1)"
@@ -538,8 +553,7 @@ jobs:
           export ARCH=x86_64
           echo "设置 ARCH=x86_64"
 
-          # 使用 xz 高压缩率打包
-          echo "使用 xz 压缩打包 AppImage (压缩率更高)..."
+          echo "使用 xz 压缩打包 AppImage..."
           if /usr/local/bin/appimagetool --comp xz --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
             APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
@@ -548,14 +562,13 @@ jobs:
               mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
             fi
           else
-            echo "xz 压缩失败，尝试使用 zstd 压缩..."
+            echo "xz 压缩失败，尝试使用 zstd..."
             /usr/local/bin/appimagetool --comp zstd --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1 || {
               echo "使用默认压缩..."
               /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
             }
           fi
 
-          # 检查 AppImage 是否生成
           if [ ! -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
             APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
             if [ -n "$APPIMAGE_FILE" ]; then
@@ -567,48 +580,37 @@ jobs:
             fi
           fi
 
-          echo "✅ AppImage 生成成功: custom-vscode-uos-${VERSION}.AppImage"
+          echo "✅ AppImage 生成成功"
           echo "📊 当前大小: $(du -h custom-vscode-uos-${VERSION}.AppImage | cut -f1)"
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 使用 upx 压缩 AppImage 内的二进制文件"
+          echo "[STEP] upx 压缩"
           echo "=========================================="
 
           if command -v upx &> /dev/null; then
             echo "upx 已安装，开始压缩..."
-            # 备份原始 AppImage
             cp "custom-vscode-uos-${VERSION}.AppImage" "custom-vscode-uos-${VERSION}.AppImage.original"
             ORIGINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage.original" | cut -f1)
 
-            # 提取 AppImage
-            echo "提取 AppImage 内容..."
+            echo "提取 AppImage..."
             ./custom-vscode-uos-${VERSION}.AppImage --appimage-extract 2>/dev/null || true
 
             if [ -d "squashfs-root" ]; then
-              # 压缩所有可执行文件
-              echo "压缩可执行文件 (upx --best --lzma)..."
+              echo "压缩可执行文件..."
               find squashfs-root -type f -executable -exec upx --best --lzma {} \; 2>/dev/null || true
 
-              # 重新打包（使用 xz 高压缩）
-              echo "重新打包 AppImage..."
+              echo "重新打包..."
               ARCH=x86_64 /usr/local/bin/appimagetool --comp xz --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || \
-              ARCH=x86_64 /usr/local/bin/appimagetool --comp xz squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || \
               ARCH=x86_64 /usr/local/bin/appimagetool --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || true
 
-              # 清理临时目录
               rm -rf squashfs-root
 
-              # 显示压缩前后大小对比
               FINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage" | cut -f1)
-              echo "📊 压缩前大小: $ORIGINAL_SIZE"
-              echo "📊 压缩后大小: $FINAL_SIZE"
-              echo "✅ upx 压缩完成"
-            else
-              echo "⚠️ 提取 AppImage 失败，跳过 upx 压缩"
+              echo "📊 压缩前: $ORIGINAL_SIZE → 压缩后: $FINAL_SIZE"
             fi
           else
-            echo "⚠️ upx 未安装，跳过二进制压缩"
+            echo "⚠️ upx 未安装"
           fi
 
           mkdir -p artifacts
