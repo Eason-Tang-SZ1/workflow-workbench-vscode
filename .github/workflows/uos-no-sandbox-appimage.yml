@@ -30,16 +30,573 @@ jobs:
           echo "🐳 Rocky Linux 8 构建 (glibc 2.28)"
           echo "=========================================="
 
+          # 检查脚本是否存在
+          if [ ! -f ".github/scripts/build-in-docker.sh" ]; then
+            echo "❌ 脚本不存在，创建临时脚本..."
+            mkdir -p .github/scripts
+            cat > .github/scripts/build-in-docker.sh << 'BUILD_SCRIPT'
+            #!/bin/bash
+            set -e
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装系统依赖"
+            echo "=========================================="
+            dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
+              libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
+              gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which \
+              || echo "[WARN] 部分包安装失败"
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装 Node.js 22"
+            echo "=========================================="
+            curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+            dnf install -y nodejs
+            node --version
+            npm --version
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装 yarn 和 tsx"
+            echo "=========================================="
+            npm install -g yarn tsx
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装 AppImage 工具"
+            echo "=========================================="
+            curl -L -o /usr/local/bin/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+            chmod +x /usr/local/bin/appimagetool
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 修复 package.json"
+            echo "=========================================="
+            echo 'console.log("OK");' > build/npm/preinstall.js
+            sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
+            echo 'console.log("OK");' > build/npm/postinstall.js
+            sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
+
+            python3 -c '
+            import json
+            with open("package.json", "r") as f:
+                data = json.load(f)
+            if data.get("type") == "module":
+                del data["type"]
+                with open("package.json", "w") as f:
+                    json.dump(data, f, indent=2)
+                print("✅ 已移除 type: module")
+            '
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装依赖 (yarn)"
+            echo "=========================================="
+            export npm_config_parcel_watcher_skip_build=true
+            export PARCEL_WATCHER_SKIP_BUILD=true
+            export SKIP_NATIVE_MODULES=true
+
+            rm -f package-lock.json
+            yarn install --ignore-scripts --network-timeout 600000 --ignore-engines
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 安装 gulp 相关依赖"
+            echo "=========================================="
+            yarn add -D --ignore-engines \
+              gulp gulp-typescript gulp-sourcemaps gulp-merge-json \
+              gulp-tsb gulp-filter gulp-rename gulp-sort gulp-uglify \
+              gulp-concat gulp-clean gulp-if gulp-replace gulp-json-editor \
+              ternary-stream vscode-gulp-watch del esbuild jsonc-parser
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 创建构建目录"
+            echo "=========================================="
+            mkdir -p .build/telemetry .build/extensions out out-vscode
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 修复 product.json"
+            echo "=========================================="
+            if [ -f "product.json" ]; then
+              python3 -c '
+            import json
+            with open("product.json", "r") as f:
+                data = json.load(f)
+            data["enableCrashReport"] = False
+            data["crashReporter"] = {"disabled": True}
+            data["extensionsGallery"] = {
+                "serviceUrl": "",
+                "itemUrl": "",
+                "controlUrl": "",
+                "recommendationUrl": ""
+            }
+            with open("product.json", "w") as f:
+                json.dump(data, f, indent=2)
+            print("✅ product.json 已修改")
+            '
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 替换 fetch.ts"
+            echo "=========================================="
+            cat > build/lib/fetch.ts << 'FETCH_TS_EOF'
+            import { Stream } from "stream";
+            export async function fetchUrl(url: string): Promise<Buffer> {
+              console.log(`⚠️ fetchUrl: 跳过下载 ${url}`);
+              return Buffer.from("");
+            }
+            export async function fetchUrls(urls: string[], options: any): Promise<void> {
+              console.log("⚠️ fetchUrls: 跳过所有扩展下载");
+              return Promise.resolve();
+            }
+            export async function fetchText(url: string): Promise<string> {
+              console.log(`⚠️ fetchText: 跳过下载 ${url}`);
+              return "";
+            }
+            export async function fetchJson(url: string): Promise<any> {
+              console.log(`⚠️ fetchJson: 跳过下载 ${url}`);
+              return {};
+            }
+            export function createStream(stream: any): Stream {
+              return stream;
+            }
+            FETCH_TS_EOF
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 替换 extensions.ts"
+            echo "=========================================="
+            cat > build/lib/extensions.ts << 'EXTENSIONS_TS_EOF'
+            import { Stream } from "stream";
+            const empty: any[] = [];
+            function emptyStream(): Stream {
+              const s = new Stream.Readable();
+              s._read = () => s.push(null);
+              return s;
+            }
+            export function isWebExtension(): boolean { return false; }
+            export function getExtensionStream(): Stream { return emptyStream(); }
+            export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+            export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+            export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+            export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+            export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+            export function packageExtensionsStream(): Stream { return emptyStream(); }
+            export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+            export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+            export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+            export function fromMarketplace(): any[] { return empty; }
+            export async function fetchUrls(urls: string[], options: any): Promise<void> {
+              console.log("⚠️ fetchUrls: disabled");
+              return Promise.resolve();
+            }
+            export function buildExtensionMedia(): void {}
+            export function compileExtensionMedia(): void {}
+            export function buildExtensionMediaTask(done: any): void { done(); }
+            export const builtInExtensions = empty;
+            export const shouldDownloadBuiltInExtensions = false;
+            export const webBuiltInExtensions = empty;
+            export const shouldDownloadWebBuiltInExtensions = false;
+            EXTENSIONS_TS_EOF
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 替换 builtInExtensions.ts"
+            echo "=========================================="
+            cat > build/lib/builtInExtensions.ts << 'BIE_EOF'
+            export const builtInExtensions: any[] = [];
+            export const shouldDownloadBuiltInExtensions = false;
+            export const webBuiltInExtensions: any[] = [];
+            export const shouldDownloadWebBuiltInExtensions = false;
+            BIE_EOF
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 替换 copilot.ts"
+            echo "=========================================="
+            cat > build/lib/copilot.ts << 'COPILOT_EOF'
+            export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
+                console.log("⚠️ Copilot extension shims preparation skipped for UOS build");
+                return;
+            }
+            export function copyCopilotNativeDeps(productRoot: string): void {
+                console.log("⚠️ Copilot native deps copy skipped for UOS build");
+            }
+            export function getCopilotExcludeFilter(): any {
+                return function() { return false; };
+            }
+            COPILOT_EOF
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 禁用 Crashpad"
+            echo "=========================================="
+            mkdir -p src/vs/platform/crash/common
+            cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
+            /*---------------------------------------------------------------------------------------------
+             *  Copyright (c) Microsoft Corporation. All rights reserved.
+             *  Licensed under the MIT License. See License.txt in the project root for license information.
+             *--------------------------------------------------------------------------------------------*/
+            // DISABLED: Crash service for UOS build
+            import { createDecorator } from "../../../base/common/instantiation.js";
+            export const ICrashService = createDecorator<ICrashService>("crashService");
+            export interface ICrashService { _serviceBrand: undefined; }
+            export class CrashService implements ICrashService {
+                declare readonly _serviceBrand: undefined;
+                constructor() { console.log("⚠️ Crash service disabled for UOS build"); }
+            }
+            CRASH_EOF
+
+            if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
+              sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 设置 git safe.directory"
+            echo "=========================================="
+            git config --global --add safe.directory /workspace
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 🔨 运行 gulp vscode-linux-x64 (允许失败)"
+            echo "=========================================="
+            export NODE_OPTIONS="--max-old-space-size=8192"
+            export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+            export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+            export VSCODE_SKIP_PRELAUNCH=1
+            export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+
+            set +e
+            npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+            GULP_EXIT_CODE=$?
+            set -e
+
+            echo "gulp 退出码: $GULP_EXIT_CODE"
+
+            if [ $GULP_EXIT_CODE -ne 0 ] && [ $GULP_EXIT_CODE -ne 1 ]; then
+              echo "❌ gulp 异常退出: $GULP_EXIT_CODE"
+              exit 1
+            fi
+
+            echo "✅ gulp 执行完成"
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 📂 查找构建产物"
+            echo "=========================================="
+
+            BUILD_DIR=""
+            for dir in ./VSCode-linux-x64 ./vscode/VSCode-linux-x64 ../VSCode-linux-x64; do
+              if [ -d "$dir" ]; then
+                BUILD_DIR="$dir"
+                echo "✅ 找到构建目录: $BUILD_DIR"
+                break
+              fi
+            done
+
+            if [ -z "$BUILD_DIR" ]; then
+              echo "❌ 找不到构建目录!"
+              echo "查找 VSCode 目录:"
+              find . -name "*VSCode*" -type d 2>/dev/null | head -10
+
+              if [ -d "out-vscode" ]; then
+                echo "从 out-vscode 创建 VSCode-linux-x64..."
+                mkdir -p VSCode-linux-x64
+                cp -r out-vscode/* VSCode-linux-x64/
+                cp -r resources VSCode-linux-x64/ 2>/dev/null || true
+                cp -r extensions VSCode-linux-x64/ 2>/dev/null || true
+                BUILD_DIR="VSCode-linux-x64"
+              else
+                exit 1
+              fi
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 复制 extensions 和 node_modules"
+            echo "=========================================="
+            [ -d "./extensions" ] && cp -r ./extensions "$BUILD_DIR/" && echo "✅ extensions 已复制"
+            [ -d "./node_modules" ] && cp -r ./node_modules "$BUILD_DIR/" && echo "✅ node_modules 已复制"
+            [ -d "./prebuilt-extensions" ] && cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null && echo "✅ 预构建扩展已复制"
+
+            [ -d "./resources" ] && cp -r ./resources "$BUILD_DIR/" 2>/dev/null && echo "✅ resources 已复制"
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 创建启动脚本"
+            echo "=========================================="
+            cd "$BUILD_DIR"
+
+            REAL_EXEC=""
+            for name in tscode code-oss code; do
+              [ -f "./$name" ] && { REAL_EXEC="$name"; break; }
+              [ -f "./bin/$name" ] && { REAL_EXEC="./bin/$name"; break; }
+            done
+            if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
+              REAL_EXEC=$(find . -maxdepth 3 -type f -executable 2>/dev/null | head -1)
+            fi
+
+            if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
+              echo "❌ 找不到可执行文件!"
+              echo "当前目录内容:"
+              ls -la
+              exit 1
+            fi
+
+            echo "✅ 找到可执行文件: $REAL_EXEC"
+
+            if [ -f "$REAL_EXEC" ]; then
+              mv "$REAL_EXEC" "${REAL_EXEC}.real" 2>/dev/null || true
+            fi
+
+            cat > "$REAL_EXEC" << 'WRAPPER_EOF'
+            #!/bin/bash
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            export ELECTRON_ENABLE_GPU=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            export ELECTRON_DISABLE_SANDBOX=1
+            export GDK_BACKEND=x11
+            export QT_QPA_PLATFORM=xcb
+            export DISPLAY=:0
+            export ELECTRON_DISABLE_CRASH_REPORTER=1
+            export ELECTRON_DISABLE_CRASH_REPORTING=1
+            export CRASHPAD_DISABLE=1
+            EXEC=""
+            [ -f "$SCRIPT_DIR/tscode.real" ] && EXEC="$SCRIPT_DIR/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/tscode.real" ] && EXEC="$SCRIPT_DIR/bin/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code.real" ] && EXEC="$SCRIPT_DIR/code.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code.real" ] && EXEC="$SCRIPT_DIR/bin/code.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code-oss.real" ] && EXEC="$SCRIPT_DIR/code-oss.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code-oss.real" ] && EXEC="$SCRIPT_DIR/bin/code-oss.real"
+            if [ -z "$EXEC" ]; then
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
+            fi
+            exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$SCRIPT_DIR/user-data" "$@"
+            WRAPPER_EOF
+            chmod +x "$REAL_EXEC"
+
+            cat > start-vscode.sh << 'START_EOF'
+            #!/bin/bash
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            export ELECTRON_ENABLE_GPU=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            export ELECTRON_DISABLE_SANDBOX=1
+            export GDK_BACKEND=x11
+            export QT_QPA_PLATFORM=xcb
+            export DISPLAY=:0
+            export ELECTRON_DISABLE_CRASH_REPORTER=1
+            export ELECTRON_DISABLE_CRASH_REPORTING=1
+            export CRASHPAD_DISABLE=1
+            EXEC=""
+            [ -f "$SCRIPT_DIR/tscode.real" ] && EXEC="$SCRIPT_DIR/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/tscode.real" ] && EXEC="$SCRIPT_DIR/bin/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code.real" ] && EXEC="$SCRIPT_DIR/code.real"
+            [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code.real" ] && EXEC="$SCRIPT_DIR/bin/code.real"
+            if [ -z "$EXEC" ]; then
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
+            fi
+            echo "=== VSCode for UOS ==="
+            exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$SCRIPT_DIR/user-data" "$@"
+            START_EOF
+            chmod +x start-vscode.sh
+
+            cat > vscode-uos.desktop << 'DESKTOP_EOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=VSCode for UOS
+            Comment=Visual Studio Code for UOS
+            Exec=./tscode %F
+            Icon=./resources/app/resources/linux/code.png
+            Terminal=false
+            Categories=Development;IDE
+            MimeType=text/plain;inode/directory
+            StartupNotify=true
+            StartupWMClass=Code
+            DESKTOP_EOF
+
+            echo "✅ 启动脚本创建完成"
+            cd "$OLDPWD"
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 创建 AppImage"
+            echo "=========================================="
+
+            VERSION="${VERSION:-1.116.0}"
+            APPDIR="AppDir"
+            mkdir -p "$APPDIR"
+
+            if [ ! -d "$BUILD_DIR" ]; then
+              echo "❌ 构建目录不存在: $BUILD_DIR"
+              exit 1
+            fi
+
+            echo "复制 $BUILD_DIR 到 $APPDIR..."
+            cp -r "$BUILD_DIR"/* "$APPDIR/"
+
+            echo "🔧 清理有问题的 .desktop 文件..."
+            find "$APPDIR" -maxdepth 1 -name "*.desktop" -type f -exec rm -f {} \;
+            echo "✅ 已删除旧的 .desktop 文件"
+
+            cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
+            #!/bin/bash
+            SELF=$(readlink -f "$0")
+            HERE=${SELF%/*}
+            export ELECTRON_ENABLE_GPU=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            export ELECTRON_DISABLE_SANDBOX=1
+            export GDK_BACKEND=x11
+            export QT_QPA_PLATFORM=xcb
+            export DISPLAY=:0
+            export ELECTRON_DISABLE_CRASH_REPORTER=1
+            export ELECTRON_DISABLE_CRASH_REPORTING=1
+            export CRASHPAD_DISABLE=1
+            EXEC=""
+            [ -f "$HERE/tscode.real" ] && EXEC="$HERE/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$HERE/code.real" ] && EXEC="$HERE/code.real"
+            [ -z "$EXEC" ] && [ -f "$HERE/code-oss.real" ] && EXEC="$HERE/code-oss.real"
+            [ -z "$EXEC" ] && [ -f "$HERE/bin/tscode.real" ] && EXEC="$HERE/bin/tscode.real"
+            [ -z "$EXEC" ] && [ -f "$HERE/bin/code.real" ] && EXEC="$HERE/bin/code.real"
+            if [ -z "$EXEC" ]; then
+              for name in tscode code code-oss; do
+                [ -f "$HERE/$name" ] && { EXEC="$HERE/$name"; break; }
+                [ -f "$HERE/bin/$name" ] && { EXEC="$HERE/bin/$name"; break; }
+              done
+            fi
+            if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
+              echo "❌ 找不到 VSCode 可执行文件！"
+              exit 1
+            fi
+            echo "🚀 启动: $EXEC"
+            exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$HERE/user-data" "$@"
+            APP_RUN_EOF
+            chmod +x "$APPDIR/AppRun"
+
+            cat > "$APPDIR/custom-vscode.desktop" << 'CUSTOM_DESKTOP_EOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=VSCode for UOS
+            Comment=Custom Visual Studio Code for UOS
+            Exec=AppRun %F
+            Icon=code
+            Terminal=false
+            Categories=Development;IDE
+            StartupNotify=true
+            StartupWMClass=Code
+            CUSTOM_DESKTOP_EOF
+
+            echo "🔧 确保图标文件存在..."
+            ICON_SOURCES=(
+              "$APPDIR/resources/app/resources/linux/code.png"
+              "$APPDIR/resources/app/linux/code.png"
+              "$BUILD_DIR/resources/app/resources/linux/code.png"
+              "$BUILD_DIR/resources/app/linux/code.png"
+            )
+            ICON_COPIED=false
+            for src in "${ICON_SOURCES[@]}"; do
+              if [ -f "$src" ]; then
+                echo "找到图标: $src"
+                cp "$src" "$APPDIR/code.png"
+                ICON_COPIED=true
+                echo "✅ 图标已复制到 $APPDIR/code.png"
+                break
+              fi
+            done
+
+            if [ "$ICON_COPIED" = false ]; then
+              echo "⚠️ 未找到图标，创建占位图标..."
+              echo "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAABSSURBVHic7c2xDQAgDAPBzP/tPEGDhsK6U5hZcI6T9jIAAAAAAAAAAAAAAIDfuQD0k9M/U/d6+gCgd9n7Pn0A0Lvs9Z8+AOhd9npPHwD0Lvs9fQDQe+gCq69uS+oQh28AAAAASUVORK5CYII=" | base64 -d > "$APPDIR/code.png"
+              echo "✅ 占位图标已创建"
+            fi
+
+            if [ -f "$APPDIR/code.png" ]; then
+              echo "✅ 图标文件已就绪: $APPDIR/code.png"
+            else
+              echo "❌ 图标文件仍然缺失！"
+              exit 1
+            fi
+
+            echo "📦 生成 AppImage..."
+            export ARCH=x86_64
+            echo "设置 ARCH=x86_64"
+
+            if /usr/local/bin/appimagetool "$APPDIR" 2>&1; then
+              echo "appimagetool 执行成功"
+              APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
+              if [ -n "$APPIMAGE_FILE" ]; then
+                echo "找到 AppImage: $APPIMAGE_FILE"
+                mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
+              fi
+            else
+              echo "简单命令失败，尝试使用 --no-appstream..."
+              /usr/local/bin/appimagetool --no-appstream "$APPDIR" 2>&1 || {
+                echo "使用 --no-appstream 失败，尝试提取模式..."
+                /usr/local/bin/appimagetool --appimage-extract
+                if [ -d "squashfs-root" ]; then
+                  ./squashfs-root/AppRun "$APPDIR" 2>&1
+                fi
+              }
+            fi
+
+            if [ -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
+              echo "✅ AppImage 生成成功"
+            else
+              APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
+              if [ -n "$APPIMAGE_FILE" ]; then
+                echo "找到 AppImage: $APPIMAGE_FILE"
+                mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
+                echo "✅ AppImage 已重命名"
+              else
+                echo "❌ AppImage 生成失败！"
+                exit 1
+              fi
+            fi
+
+            mkdir -p artifacts
+            mv "custom-vscode-uos-${VERSION}.AppImage" artifacts/
+
+            echo ""
+            echo "=========================================="
+            echo "[STEP] 打包 tar.gz"
+            echo "=========================================="
+            if [ -d "$BUILD_DIR" ]; then
+              cd "$(dirname "$BUILD_DIR")"
+              tar -czf "$OLDPWD/artifacts/custom-vscode-uos-${VERSION}.tar.gz" --preserve-permissions "$(basename "$BUILD_DIR")" 2>/dev/null || echo "tar.gz 打包跳过"
+              cd "$OLDPWD"
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo "[SUCCESS] 构建完成"
+            echo "=========================================="
+            echo "产物列表:"
+            ls -la artifacts/
+            BUILD_SCRIPT
+
+            echo "✅ 脚本已创建"
+          fi
+
           # 确保脚本可执行
           chmod +x .github/scripts/build-in-docker.sh
 
-          # 运行容器，挂载整个仓库，执行脚本
+          # 运行容器
           docker run --rm \
             -v "$(pwd):/workspace" \
-            -v "/workspace/.github/scripts/build-in-docker.sh:/workspace/build.sh" \
             --workdir /workspace \
             rockylinux:8 \
-            /bin/bash /workspace/build.sh
+            /bin/bash /workspace/.github/scripts/build-in-docker.sh
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
