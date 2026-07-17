@@ -265,7 +265,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 🔨 运行 gulp vscode-linux-x64"
+          echo "[STEP] 构建 VSCode (使用完整构建命令)"
           echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
@@ -274,6 +274,7 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export PATH="/usr/bin:$PATH"
 
+          # 检查 gulp
           if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
             echo "❌ gulp 未安装！"
             exit 1
@@ -282,12 +283,14 @@ jobs:
 
           echo "开始构建，时间: $(date)"
           set +e
+          # 使用完整的 vscode-linux-x64 任务
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
           GULP_EXIT_CODE=$?
           set -e
 
           echo "gulp 退出码: $GULP_EXIT_CODE"
 
+          # 如果退出码是 1 或 0，继续执行后续步骤
           if [ $GULP_EXIT_CODE -ne 0 ] && [ $GULP_EXIT_CODE -ne 1 ]; then
             echo "❌ gulp 异常退出: $GULP_EXIT_CODE"
             exit 1
@@ -301,37 +304,49 @@ jobs:
           echo "=========================================="
 
           BUILD_DIR=""
+          # 查找 VSCode-linux-x64 目录
           for dir in ./VSCode-linux-x64 ./vscode/VSCode-linux-x64 ../VSCode-linux-x64; do
             if [ -d "$dir" ]; then
+              # 检查是否有可执行文件
               if [ -f "$dir/code" ] || [ -f "$dir/bin/code" ] || [ -f "$dir/tscode" ]; then
                 BUILD_DIR="$dir"
                 echo "✅ 找到可执行构建目录: $BUILD_DIR"
                 break
               else
                 echo "⚠️ 目录存在但没有可执行文件: $dir"
+                echo "目录内容:"
+                ls -la "$dir" | head -20
               fi
             fi
           done
 
-          if [ -z "$BUILD_DIR" ]; then
-            echo "❌ 找不到可执行的构建产物!"
-            echo "查找可能的构建产物位置:"
-            find . -name "code" -o -name "code-oss" -o -name "tscode" -type f 2>/dev/null | head -10
+          # 如果没找到，尝试从 out-vscode 创建
+          if [ -z "$BUILD_DIR" ] && [ -d "out-vscode" ]; then
+            echo "从 out-vscode 创建 VSCode-linux-x64..."
+            mkdir -p VSCode-linux-x64
+            cp -r out-vscode/* VSCode-linux-x64/
+            cp -r resources VSCode-linux-x64/ 2>/dev/null || true
+            cp -r extensions VSCode-linux-x64/ 2>/dev/null || true
+            cp -r node_modules VSCode-linux-x64/ 2>/dev/null || true
 
-            if [ -d "out-vscode" ]; then
-              echo "从 out-vscode 创建 VSCode-linux-x64..."
-              mkdir -p VSCode-linux-x64
-              cp -r out-vscode/* VSCode-linux-x64/
-              cp -r resources VSCode-linux-x64/ 2>/dev/null || true
-              cp -r extensions VSCode-linux-x64/ 2>/dev/null || true
-              cp -r node_modules VSCode-linux-x64/ 2>/dev/null || true
-              BUILD_DIR="VSCode-linux-x64"
-              echo "✅ 从 out-vscode 创建了构建目录"
-            else
-              echo "当前目录内容:"
-              ls -la
-              exit 1
-            fi
+            # 创建可执行文件
+            cat > VSCode-linux-x64/code << 'CODE_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$SCRIPT_DIR/node_modules/electron/dist/electron" "$SCRIPT_DIR" "$@"
+          CODE_EOF
+            chmod +x VSCode-linux-x64/code
+            BUILD_DIR="VSCode-linux-x64"
+            echo "✅ 从 out-vscode 创建了构建目录"
+          fi
+
+          if [ -z "$BUILD_DIR" ]; then
+            echo "❌ 找不到构建产物!"
+            echo "当前目录内容:"
+            ls -la
+            echo "查找 electron:"
+            find . -name "electron" -type f 2>/dev/null | head -5
+            exit 1
           fi
 
           echo ""
@@ -368,14 +383,13 @@ jobs:
             fi
           done
 
-          if [ -z "$REAL_EXEC" ]; then
-            REAL_EXEC=$(find . -maxdepth 3 -type f -executable -name "code" 2>/dev/null | head -1)
-            if [ -n "$REAL_EXEC" ]; then
-              echo "找到可执行文件: $REAL_EXEC"
-            fi
+          if [ -z "$REAL_EXEC" ] && [ -f "node_modules/electron/dist/electron" ]; then
+            # 使用 electron 直接运行
+            REAL_EXEC="node_modules/electron/dist/electron"
+            echo "使用 electron: $REAL_EXEC"
           fi
 
-          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
+          if [ -z "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件!"
             echo "当前目录内容:"
             ls -la
@@ -386,7 +400,7 @@ jobs:
 
           if [ -f "$REAL_EXEC" ]; then
             mv "$REAL_EXEC" "${REAL_EXEC}.real" 2>/dev/null || true
-            echo "已备份真实二进制文件: ${REAL_EXEC}.real"
+            echo "已备份真实可执行文件: ${REAL_EXEC}.real"
           fi
 
           WRAPPER_NAME="$(basename "$REAL_EXEC")"
@@ -403,50 +417,35 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
-          EXEC=""
-          [ -f "$SCRIPT_DIR/tscode.real" ] && EXEC="$SCRIPT_DIR/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/tscode.real" ] && EXEC="$SCRIPT_DIR/bin/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code.real" ] && EXEC="$SCRIPT_DIR/code.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code.real" ] && EXEC="$SCRIPT_DIR/bin/code.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code-oss.real" ] && EXEC="$SCRIPT_DIR/code-oss.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code-oss.real" ] && EXEC="$SCRIPT_DIR/bin/code-oss.real"
-          if [ -z "$EXEC" ]; then
-            echo "❌ 找不到 VSCode 可执行文件！"
+
+          # 查找真实可执行文件
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+            EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+            EXEC="$SCRIPT_DIR/bin/tscode.real"
+          elif [ -f "$SCRIPT_DIR/code.real" ]; then
+            EXEC="$SCRIPT_DIR/code.real"
+          elif [ -f "$SCRIPT_DIR/bin/code.real" ]; then
+            EXEC="$SCRIPT_DIR/bin/code.real"
+          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
+            EXEC="$SCRIPT_DIR/code-oss.real"
+          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
+            EXEC="$SCRIPT_DIR/bin/code-oss.real"
+          elif [ -f "$SCRIPT_DIR/node_modules/electron/dist/electron.real" ]; then
+            # 如果使用 electron，需要传递 VS Code 目录
+            EXEC="$SCRIPT_DIR/node_modules/electron/dist/electron.real"
+            # 使用 electron 运行 VS Code
+            exec "$EXEC" "$SCRIPT_DIR" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$SCRIPT_DIR/user-data" "$@"
+          else
+            echo "❌ 找不到可执行文件！"
             exit 1
           fi
+
           exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$SCRIPT_DIR/user-data" "$@"
           WRAPPER_EOF
           chmod +x "$WRAPPER_NAME"
           echo "✅ 包装器已创建: $WRAPPER_NAME"
 
-          cat > start-vscode.sh << 'START_EOF'
-          #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
-          export DISPLAY=:0
-          export ELECTRON_DISABLE_CRASH_REPORTER=1
-          export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export CRASHPAD_DISABLE=1
-          EXEC=""
-          [ -f "$SCRIPT_DIR/tscode.real" ] && EXEC="$SCRIPT_DIR/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/tscode.real" ] && EXEC="$SCRIPT_DIR/bin/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/code.real" ] && EXEC="$SCRIPT_DIR/code.real"
-          [ -z "$EXEC" ] && [ -f "$SCRIPT_DIR/bin/code.real" ] && EXEC="$SCRIPT_DIR/bin/code.real"
-          if [ -z "$EXEC" ]; then
-            echo "❌ 找不到 VSCode 可执行文件！"
-            exit 1
-          fi
-          echo "=== VSCode for UOS ==="
-          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$SCRIPT_DIR/user-data" "$@"
-          START_EOF
-          chmod +x start-vscode.sh
-
-          # 注意：这里不创建 vscode-uos.desktop，避免污染 AppDir
           echo "✅ 启动脚本创建完成"
           cd "$OLDPWD"
 
@@ -472,7 +471,6 @@ jobs:
           find "$APPDIR" -name "*.desktop" -type f -exec rm -f {} \;
           echo "✅ 已删除所有 .desktop 文件"
 
-          # 创建 AppRun
           cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
           #!/bin/bash
           SELF=$(readlink -f "$0")
@@ -487,28 +485,42 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
+
+          # 查找可执行文件
           EXEC=""
-          [ -f "$HERE/tscode.real" ] && EXEC="$HERE/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$HERE/code.real" ] && EXEC="$HERE/code.real"
-          [ -z "$EXEC" ] && [ -f "$HERE/code-oss.real" ] && EXEC="$HERE/code-oss.real"
-          [ -z "$EXEC" ] && [ -f "$HERE/bin/tscode.real" ] && EXEC="$HERE/bin/tscode.real"
-          [ -z "$EXEC" ] && [ -f "$HERE/bin/code.real" ] && EXEC="$HERE/bin/code.real"
+          if [ -f "$HERE/tscode.real" ]; then
+            EXEC="$HERE/tscode.real"
+          elif [ -f "$HERE/code.real" ]; then
+            EXEC="$HERE/code.real"
+          elif [ -f "$HERE/code-oss.real" ]; then
+            EXEC="$HERE/code-oss.real"
+          elif [ -f "$HERE/bin/tscode.real" ]; then
+            EXEC="$HERE/bin/tscode.real"
+          elif [ -f "$HERE/bin/code.real" ]; then
+            EXEC="$HERE/bin/code.real"
+          elif [ -f "$HERE/node_modules/electron/dist/electron.real" ]; then
+            EXEC="$HERE/node_modules/electron/dist/electron.real"
+            exec "$EXEC" "$HERE" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$HERE/user-data" "$@"
+          fi
+
           if [ -z "$EXEC" ]; then
+            # 尝试查找
             for name in tscode code code-oss; do
               [ -f "$HERE/$name" ] && { EXEC="$HERE/$name"; break; }
               [ -f "$HERE/bin/$name" ] && { EXEC="$HERE/bin/$name"; break; }
             done
           fi
+
           if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
             echo "❌ 找不到 VSCode 可执行文件！"
             exit 1
           fi
+
           echo "🚀 启动: $EXEC"
           exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$HERE/user-data" "$@"
           APP_RUN_EOF
           chmod +x "$APPDIR/AppRun"
 
-          # 创建正确的 .desktop 文件（使用绝对图标名）
           cat > "$APPDIR/custom-vscode.desktop" << 'CUSTOM_DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -561,12 +573,11 @@ jobs:
           export ARCH=x86_64
           echo "设置 ARCH=x86_64"
 
-          echo "使用 appimagetool 打包（排除 .desktop 错误）..."
-          # 使用 --no-appstream 避免 appstream 警告
+          echo "使用 appimagetool 打包..."
           if /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
           else
-            echo "简单命令失败，尝试提取模式..."
+            echo "尝试提取模式..."
             /usr/local/bin/appimagetool --appimage-extract
             if [ -d "squashfs-root" ]; then
               ./squashfs-root/AppRun --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
@@ -586,35 +597,6 @@ jobs:
 
           echo "✅ AppImage 生成成功"
           echo "📊 当前大小: $(du -h custom-vscode-uos-${VERSION}.AppImage | cut -f1)"
-
-          echo ""
-          echo "=========================================="
-          echo "[STEP] upx 压缩"
-          echo "=========================================="
-
-          if command -v upx &> /dev/null; then
-            echo "upx 已安装，开始压缩..."
-            cp "custom-vscode-uos-${VERSION}.AppImage" "custom-vscode-uos-${VERSION}.AppImage.original"
-            ORIGINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage.original" | cut -f1)
-
-            echo "提取 AppImage..."
-            ./custom-vscode-uos-${VERSION}.AppImage --appimage-extract 2>/dev/null || true
-
-            if [ -d "squashfs-root" ]; then
-              echo "压缩可执行文件..."
-              find squashfs-root -type f -executable -exec upx --best --lzma {} \; 2>/dev/null || true
-
-              echo "重新打包..."
-              ARCH=x86_64 /usr/local/bin/appimagetool --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || true
-
-              rm -rf squashfs-root
-
-              FINAL_SIZE=$(du -h "custom-vscode-uos-${VERSION}.AppImage" | cut -f1)
-              echo "📊 压缩前: $ORIGINAL_SIZE → 压缩后: $FINAL_SIZE"
-            fi
-          else
-            echo "⚠️ upx 未安装"
-          fi
 
           mkdir -p artifacts
           mv "custom-vscode-uos-${VERSION}.AppImage" artifacts/
