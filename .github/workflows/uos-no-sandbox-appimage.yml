@@ -37,11 +37,12 @@ jobs:
           echo "=========================================="
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
-            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils file \
             || echo "[WARN] 部分包安装失败"
 
           export PATH="/usr/bin:$PATH"
           git --version || echo "git 未找到"
+          file --version || echo "file 未找到"
 
           echo ""
           echo "=========================================="
@@ -265,13 +266,14 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "[STEP] 构建 VSCode (使用完整构建命令)"
+          echo "[STEP] 🔨 构建 VSCode (跳过 prebuilt-extensions)"
           echo "=========================================="
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+          export VSCODE_SKIP_PREBUILT_EXTENSIONS=1
           export PATH="/usr/bin:$PATH"
 
           if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
@@ -282,6 +284,7 @@ jobs:
 
           echo "开始构建，时间: $(date)"
           set +e
+          # 使用特定的 gulp 任务，跳过 prebuilt-extensions
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
           GULP_EXIT_CODE=$?
           set -e
@@ -343,11 +346,11 @@ jobs:
           echo "=========================================="
           if [ -d "$BUILD_DIR/node_modules" ]; then
             echo "精简前大小: $(du -sh $BUILD_DIR/node_modules | cut -f1)"
-            /usr/bin/find "$BUILD_DIR/node_modules" -name "*.test.js" -o -name "*.spec.js" -type f -delete 2>/dev/null || true
-            /usr/bin/find "$BUILD_DIR/node_modules" -name "test" -o -name "tests" -o -name "example" -o -name "examples" -type d -exec rm -rf {} + 2>/dev/null || true
-            /usr/bin/find "$BUILD_DIR/node_modules" -name "*.ts" -not -name "*.d.ts" -type f -delete 2>/dev/null || true
-            /usr/bin/find "$BUILD_DIR/node_modules" -name "README.md" -o -name "CHANGELOG.md" -o -name "LICENSE" -type f -delete 2>/dev/null || true
-            /usr/bin/find "$BUILD_DIR/node_modules" -name "*.map" -type f -delete 2>/dev/null || true
+            find "$BUILD_DIR/node_modules" -name "*.test.js" -o -name "*.spec.js" -type f -delete 2>/dev/null || true
+            find "$BUILD_DIR/node_modules" -name "test" -o -name "tests" -o -name "example" -o -name "examples" -type d -exec rm -rf {} + 2>/dev/null || true
+            find "$BUILD_DIR/node_modules" -name "*.ts" -not -name "*.d.ts" -type f -delete 2>/dev/null || true
+            find "$BUILD_DIR/node_modules" -name "README.md" -o -name "CHANGELOG.md" -o -name "LICENSE" -type f -delete 2>/dev/null || true
+            find "$BUILD_DIR/node_modules" -name "*.map" -type f -delete 2>/dev/null || true
             echo "精简后大小: $(du -sh $BUILD_DIR/node_modules | cut -f1)"
             echo "✅ node_modules 已精简"
           fi
