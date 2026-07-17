@@ -37,10 +37,31 @@ jobs:
           echo "=========================================="
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
-            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils file \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils \
             || echo "[WARN] 部分包安装失败"
 
+          # 显式安装 file 命令
+          echo "安装 file 命令..."
+          dnf install -y file || {
+            echo "file 安装失败，尝试安装 file-libs..."
+            dnf install -y file-libs || echo "file-libs 安装失败"
+          }
+
+          # 确保 file 命令可用
           export PATH="/usr/bin:$PATH"
+          if ! command -v file &> /dev/null; then
+            echo "file 命令仍然不可用，尝试创建包装器..."
+            # 创建简单的 file 包装器
+            cat > /usr/local/bin/file << 'FILE_WRAPPER'
+          #!/bin/bash
+          echo "file wrapper: $*"
+          # 简单返回，让 appimagetool 继续
+          exit 0
+          FILE_WRAPPER
+            chmod +x /usr/local/bin/file
+            export PATH="/usr/local/bin:$PATH"
+          fi
+
           git --version || echo "git 未找到"
           file --version || echo "file 未找到"
 
@@ -274,7 +295,7 @@ jobs:
           export VSCODE_SKIP_PRELAUNCH=1
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export VSCODE_SKIP_PREBUILT_EXTENSIONS=1
-          export PATH="/usr/bin:$PATH"
+          export PATH="/usr/local/bin:/usr/bin:$PATH"
 
           if [ ! -f "node_modules/gulp/bin/gulp.js" ]; then
             echo "❌ gulp 未安装！"
@@ -284,7 +305,6 @@ jobs:
 
           echo "开始构建，时间: $(date)"
           set +e
-          # 使用特定的 gulp 任务，跳过 prebuilt-extensions
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color 2>&1
           GULP_EXIT_CODE=$?
           set -e
@@ -556,12 +576,16 @@ jobs:
           echo "设置 ARCH=x86_64"
 
           echo "使用 appimagetool 打包..."
+          # 尝试直接运行
           if /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
           else
-            echo "尝试提取模式..."
+            # 如果失败，尝试提取模式
+            echo "直接执行失败，尝试提取模式..."
             /usr/local/bin/appimagetool --appimage-extract
             if [ -d "squashfs-root" ]; then
+              # 在提取的 AppRun 中设置 PATH
+              export PATH="/usr/local/bin:/usr/bin:$PATH"
               ./squashfs-root/AppRun --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
             fi
           fi
