@@ -40,7 +40,6 @@ jobs:
             gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx \
             || echo "[WARN] 部分包安装失败"
 
-          # 确保 git 在 PATH 中
           export PATH="/usr/bin:$PATH"
           git --version || echo "git 未找到"
 
@@ -70,7 +69,6 @@ jobs:
           echo "=========================================="
           echo "[STEP] 创建占位 prebuilt-extensions 目录"
           echo "=========================================="
-          # 如果 prebuilt-extensions 不存在，创建一个空目录以避免 git clone 失败
           if [ ! -d "prebuilt-extensions" ]; then
             mkdir -p prebuilt-extensions
             echo "✅ 创建了空的 prebuilt-extensions 目录"
@@ -448,21 +446,7 @@ jobs:
           START_EOF
           chmod +x start-vscode.sh
 
-          cat > vscode-uos.desktop << 'DESKTOP_EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=VSCode for UOS
-          Comment=Visual Studio Code for UOS
-          Exec=./tscode %F
-          Icon=./resources/app/resources/linux/code.png
-          Terminal=false
-          Categories=Development;IDE
-          MimeType=text/plain;inode/directory
-          StartupNotify=true
-          StartupWMClass=Code
-          DESKTOP_EOF
-
+          # 注意：这里不创建 vscode-uos.desktop，避免污染 AppDir
           echo "✅ 启动脚本创建完成"
           cd "$OLDPWD"
 
@@ -473,6 +457,7 @@ jobs:
 
           VERSION="${VERSION:-1.116.0}"
           APPDIR="AppDir"
+          rm -rf "$APPDIR"
           mkdir -p "$APPDIR"
 
           if [ ! -d "$BUILD_DIR" ]; then
@@ -483,10 +468,11 @@ jobs:
           echo "复制 $BUILD_DIR 到 $APPDIR..."
           cp -r "$BUILD_DIR"/* "$APPDIR/"
 
-          echo "🔧 清理有问题的 .desktop 文件..."
-          find "$APPDIR" -maxdepth 1 -name "*.desktop" -type f -exec rm -f {} \;
-          echo "✅ 已删除旧的 .desktop 文件"
+          echo "🔧 彻底清理所有 .desktop 文件..."
+          find "$APPDIR" -name "*.desktop" -type f -exec rm -f {} \;
+          echo "✅ 已删除所有 .desktop 文件"
 
+          # 创建 AppRun
           cat > "$APPDIR/AppRun" << 'APP_RUN_EOF'
           #!/bin/bash
           SELF=$(readlink -f "$0")
@@ -522,6 +508,7 @@ jobs:
           APP_RUN_EOF
           chmod +x "$APPDIR/AppRun"
 
+          # 创建正确的 .desktop 文件（使用绝对图标名）
           cat > "$APPDIR/custom-vscode.desktop" << 'CUSTOM_DESKTOP_EOF'
           [Desktop Entry]
           Version=1.0
@@ -574,20 +561,16 @@ jobs:
           export ARCH=x86_64
           echo "设置 ARCH=x86_64"
 
-          echo "使用 xz 压缩打包 AppImage..."
-          if /usr/local/bin/appimagetool --comp xz --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
+          echo "使用 appimagetool 打包（排除 .desktop 错误）..."
+          # 使用 --no-appstream 避免 appstream 警告
+          if /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
-            APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" 2>/dev/null | head -1)
-            if [ -n "$APPIMAGE_FILE" ]; then
-              echo "找到 AppImage: $APPIMAGE_FILE"
-              mv "$APPIMAGE_FILE" "custom-vscode-uos-${VERSION}.AppImage"
-            fi
           else
-            echo "xz 压缩失败，尝试使用 zstd..."
-            /usr/local/bin/appimagetool --comp zstd --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1 || {
-              echo "使用默认压缩..."
-              /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
-            }
+            echo "简单命令失败，尝试提取模式..."
+            /usr/local/bin/appimagetool --appimage-extract
+            if [ -d "squashfs-root" ]; then
+              ./squashfs-root/AppRun --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
+            fi
           fi
 
           if [ ! -f "custom-vscode-uos-${VERSION}.AppImage" ]; then
@@ -622,7 +605,6 @@ jobs:
               find squashfs-root -type f -executable -exec upx --best --lzma {} \; 2>/dev/null || true
 
               echo "重新打包..."
-              ARCH=x86_64 /usr/local/bin/appimagetool --comp xz --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || \
               ARCH=x86_64 /usr/local/bin/appimagetool --no-appstream squashfs-root "custom-vscode-uos-${VERSION}.AppImage" 2>/dev/null || true
 
               rm -rf squashfs-root
