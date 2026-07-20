@@ -37,54 +37,10 @@ jobs:
           echo "=========================================="
           dnf install -y wget curl epel-release git gcc-c++ make pkg-config \
             libX11-devel libXScrnSaver-devel libXtst-devel krb5-devel \
-            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils \
+            gtk3-devel nss-devel alsa-lib-devel python3 rpm-build fuse fuse-libs which upx findutils file \
             || echo "[WARN] 部分包安装失败"
 
-          # ========= 关键修复：显式安装 file 命令 =========
-          echo ""
-          echo "=========================================="
-          echo "[STEP] 安装 file 命令 (appimagetool 需要)"
-          echo "=========================================="
-          # 尝试多个可能的包名
-          dnf install -y file || dnf install -y file-libs || echo "file 安装失败"
-
-          # 验证 file 命令是否可用
-          if command -v file &> /dev/null; then
-            echo "✅ file 命令已安装: $(which file)"
-            file --version | head -1
-          else
-            echo "❌ file 命令未找到，尝试创建包装器..."
-            # 创建简单的 file 包装器
-            cat > /usr/local/bin/file << 'FILE_WRAPPER'
-          #!/bin/bash
-          # 简单包装器，返回文件类型
-          if [ -z "$1" ]; then
-            echo "Usage: file [file]"
-            exit 1
-          fi
-          # 使用系统命令或简单检测
-          if command -v /usr/bin/file &> /dev/null; then
-            exec /usr/bin/file "$@"
-          else
-            # 简单返回 ELF 信息
-            if [ -f "$1" ]; then
-              if head -c 4 "$1" | grep -q "^ELF"; then
-                echo "$1: ELF 64-bit LSB executable"
-              else
-                echo "$1: data"
-              fi
-            else
-              echo "file: $1: No such file or directory"
-            fi
-          fi
-          FILE_WRAPPER
-            chmod +x /usr/local/bin/file
-            export PATH="/usr/local/bin:$PATH"
-            echo "✅ 已创建 file 包装器"
-          fi
-          # ===============================================
-
-          export PATH="/usr/bin:/usr/local/bin:$PATH"
+          export PATH="/usr/bin:$PATH"
           git --version || echo "git 未找到"
           file --version || echo "file 未找到"
 
@@ -601,14 +557,6 @@ jobs:
           echo "设置 ARCH=x86_64"
 
           echo "使用 appimagetool 打包..."
-          # 先确认 file 命令可用
-          if command -v file &> /dev/null; then
-            echo "✅ file 命令可用: $(which file)"
-          else
-            echo "⚠️ file 命令不可用，尝试设置 PATH"
-            export PATH="/usr/bin:/usr/local/bin:$PATH"
-          fi
-
           if /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
             echo "appimagetool 执行成功"
           else
@@ -694,8 +642,6 @@ jobs:
           echo "📦 文件大小:"
           du -h "$APPIMAGE_FILE"
           ls -lh "$APPIMAGE_FILE"
-
-          chmod +x "$APPIMAGE_FILE"
 
           echo ""
           echo "📂 提取内容验证..."
