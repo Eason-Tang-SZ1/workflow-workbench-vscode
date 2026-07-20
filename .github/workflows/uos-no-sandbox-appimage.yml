@@ -557,14 +557,54 @@ jobs:
           echo "设置 ARCH=x86_64"
 
           echo "使用 appimagetool 打包..."
+
+          # 方案1: 直接运行（需要 FUSE）
           if /usr/local/bin/appimagetool --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1; then
-            echo "appimagetool 执行成功"
+            echo "✅ appimagetool 执行成功"
           else
-            echo "直接执行失败，尝试提取模式..."
+            echo "直接执行失败，尝试使用 --appimage-extract 提取后运行..."
+
+            # 提取 appimagetool
             /usr/local/bin/appimagetool --appimage-extract
+
             if [ -d "squashfs-root" ]; then
-              export PATH="/usr/local/bin:/usr/bin:$PATH"
-              ./squashfs-root/AppRun --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage" 2>&1
+              # 确保 file 命令在 PATH 中
+              export PATH="/usr/bin:/usr/local/bin:$PATH"
+
+              # 在提取的 AppRun 中设置 PATH，并创建 file 软链接
+              if command -v file &> /dev/null; then
+                echo "✅ file 命令可用: $(which file)"
+                # 复制 file 命令到 squashfs-root/usr/bin 供 AppRun 使用
+                mkdir -p squashfs-root/usr/bin
+                cp $(which file) squashfs-root/usr/bin/file 2>/dev/null || true
+                chmod +x squashfs-root/usr/bin/file 2>/dev/null || true
+              else
+                echo "⚠️ file 命令不可用，创建包装器..."
+                # 在 squashfs-root 中创建 file 包装器
+                mkdir -p squashfs-root/usr/bin
+                cat > squashfs-root/usr/bin/file << 'FILE_WRAPPER'
+          #!/bin/bash
+          if [ -z "$1" ]; then
+            echo "Usage: file [file]"
+            exit 1
+          fi
+          if [ -f "$1" ]; then
+            if head -c 4 "$1" 2>/dev/null | grep -q "^ELF"; then
+              echo "$1: ELF 64-bit LSB executable"
+            else
+              echo "$1: data"
+            fi
+          else
+            echo "file: $1: No such file or directory"
+          fi
+          FILE_WRAPPER
+                chmod +x squashfs-root/usr/bin/file
+              fi
+
+              # 运行提取后的 appimagetool
+              echo "使用提取后的 appimagetool 生成 AppImage..."
+              PATH="/usr/bin:/usr/local/bin:$PATH" \
+              ./squashfs-root/AppRun --no-appstream "$APPDIR" "custom-vscode-uos-${VERSION}.AppImage"
             fi
           fi
 
