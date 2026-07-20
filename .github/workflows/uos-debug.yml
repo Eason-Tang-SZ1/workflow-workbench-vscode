@@ -230,6 +230,7 @@ jobs:
 
           if [ -d "$BUILD_DIR/extensions" ]; then
             echo "✅ extensions 存在"
+            echo "📊 扩展数量: $(ls -la $BUILD_DIR/extensions/ | wc -l)"
           else
             echo "⚠️ extensions 不存在"
           fi
@@ -241,45 +242,17 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 复制 extensions 和预构建扩展
+      # 12. 【核心】从官方 VSCode 完整复制所有扩展
       # ============================================================
-      - name: 📂 Copy extensions and prebuilt extensions
+      - name: 📥 Download official VSCode extensions
         run: |
           echo "=========================================="
-          echo "📂 复制 extensions、node_modules 和预构建扩展"
+          echo "📥 从官方 VSCode 下载所有扩展"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          mkdir -p "$BUILD_DIR/extensions"
 
-          if [ -d "./extensions" ]; then
-            echo "📌 从源码复制 extensions..."
-            cp -r ./extensions/* "$BUILD_DIR/extensions/" 2>/dev/null
-            echo "✅ extensions 已复制"
-          fi
-
-          if [ -d "./node_modules" ]; then
-            echo "📌 复制 node_modules..."
-            cp -r ./node_modules "$BUILD_DIR/"
-            echo "✅ node_modules 已复制"
-          fi
-
-          if [ -d "./prebuilt-extensions" ]; then
-            echo "📌 复制预构建扩展..."
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null
-            echo "✅ 预构建扩展已复制"
-          fi
-
-      # ============================================================
-      # 13. 强制下载 Git 扩展
-      # ============================================================
-      - name: 📥 Force download Git extension
-        run: |
-          echo "=========================================="
-          echo "📥 强制下载 Git 扩展"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          # 确保 extensions 目录存在
           mkdir -p "$BUILD_DIR/extensions"
 
           echo "📌 下载官方 VSCode..."
@@ -287,46 +260,71 @@ jobs:
 
           if [ -f "/tmp/vscode.tar.gz" ]; then
             mkdir -p /tmp/vscode-official
+            echo "📌 解压官方 VSCode..."
             tar -xzf /tmp/vscode.tar.gz -C /tmp/vscode-official 2>/dev/null
 
-            OFFICIAL_GIT=$(find /tmp/vscode-official -type d -name "git" -path "*/extensions/git" 2>/dev/null | head -1)
-            if [ -n "$OFFICIAL_GIT" ] && [ -d "$OFFICIAL_GIT" ]; then
-              rm -rf "$BUILD_DIR/extensions/git"
-              cp -r "$OFFICIAL_GIT" "$BUILD_DIR/extensions/"
-              echo "✅ Git 扩展已复制"
-            else
-              echo "⚠️ 未找到 Git 扩展"
-            fi
+            # 查找官方 extensions 目录
+            OFFICIAL_EXT=$(find /tmp/vscode-official -type d -name "extensions" -path "*/VSCode-linux-x64/extensions" 2>/dev/null | head -1)
 
-            OFFICIAL_GITHUB=$(find /tmp/vscode-official -type d -name "github" -path "*/extensions/github" 2>/dev/null | head -1)
-            if [ -n "$OFFICIAL_GITHUB" ] && [ -d "$OFFICIAL_GITHUB" ]; then
-              rm -rf "$BUILD_DIR/extensions/github"
-              cp -r "$OFFICIAL_GITHUB" "$BUILD_DIR/extensions/"
-              echo "✅ GitHub 扩展已复制"
+            if [ -n "$OFFICIAL_EXT" ] && [ -d "$OFFICIAL_EXT" ]; then
+              echo "📌 找到官方扩展目录: $OFFICIAL_EXT"
+              echo "📌 官方扩展数量: $(ls -la $OFFICIAL_EXT | wc -l)"
+
+              # 删除当前扩展
+              echo "📌 删除当前 extensions..."
+              rm -rf "$BUILD_DIR/extensions"/*
+
+              # 复制所有官方扩展
+              echo "📌 复制所有官方扩展..."
+              cp -r "$OFFICIAL_EXT"/* "$BUILD_DIR/extensions/"
+
+              # 复制 node_modules（如果存在）
+              OFFICIAL_NODE=$(find /tmp/vscode-official -type d -name "node_modules" -path "*/VSCode-linux-x64/node_modules" 2>/dev/null | head -1)
+              if [ -n "$OFFICIAL_NODE" ] && [ -d "$OFFICIAL_NODE" ]; then
+                echo "📌 复制 node_modules..."
+                rm -rf "$BUILD_DIR/node_modules"
+                cp -r "$OFFICIAL_NODE" "$BUILD_DIR/"
+              fi
+
+              echo "✅ 官方扩展已复制"
+            else
+              echo "❌ 找不到官方扩展目录！"
+              echo "尝试搜索..."
+              find /tmp/vscode-official -name "extensions" -type d 2>/dev/null | head -10
+              exit 1
             fi
 
             rm -rf /tmp/vscode-official
           else
             echo "❌ 无法下载官方 VSCode"
+            exit 1
           fi
 
           rm -f /tmp/vscode.tar.gz
 
+          # 验证
           echo ""
-          echo "📌 验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            ls -la "$BUILD_DIR/extensions/git" | head -10
-            cat "$BUILD_DIR/extensions/git/package.json" | grep -E '"name"|"version"' 2>/dev/null || echo "   ⚠️ 无法读取 package.json"
-          else
-            echo "   ❌ Git 扩展不存在!"
-            echo "   目录内容:"
-            ls -la "$BUILD_DIR/extensions/" 2>/dev/null || echo "   extensions 目录不存在"
+          echo "📌 验证复制结果:"
+          echo "   extensions 数量: $(ls -la $BUILD_DIR/extensions/ | wc -l)"
+          echo "   extensions/git 存在: $(if [ -d $BUILD_DIR/extensions/git ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   extensions/github 存在: $(if [ -d $BUILD_DIR/extensions/github ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   node_modules 存在: $(if [ -d $BUILD_DIR/node_modules ]; then echo '✅'; else echo '❌'; fi)"
+
+          if [ ! -d "$BUILD_DIR/extensions/git" ]; then
+            echo "❌ Git 扩展不存在！"
             exit 1
           fi
 
+          echo ""
+          echo "📌 Git 扩展 package.json:"
+          cat "$BUILD_DIR/extensions/git/package.json" | grep -E '"name"|"version"' 2>/dev/null || echo "   无法读取"
+
+          echo ""
+          echo "📌 extensions 目录内容 (前20个):"
+          ls -la "$BUILD_DIR/extensions/" | head -20
+
       # ============================================================
-      # 14. 创建可直接双击运行的 VSCode
+      # 13. 创建可直接双击运行的 VSCode
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
@@ -461,6 +459,7 @@ jobs:
           📌 配置文件：./user-data 目录
 
           📦 包含的扩展:
+          - 所有官方内置扩展
           - Git 扩展 (已修复)
           - GitHub 扩展
           - 预构建扩展
@@ -473,7 +472,7 @@ jobs:
           ls -la
 
       # ============================================================
-      # 15. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -485,12 +484,13 @@ jobs:
           chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
           echo ""
-          echo "📌 打包前验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            ls -la "$BUILD_DIR/extensions/git" | head -5
-          else
-            echo "   ❌ Git 扩展不存在!"
+          echo "📌 打包前验证:"
+          echo "   extensions 数量: $(ls -la $BUILD_DIR/extensions/ | wc -l)"
+          echo "   Git 扩展存在: $(if [ -d $BUILD_DIR/extensions/git ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   GitHub 扩展存在: $(if [ -d $BUILD_DIR/extensions/github ]; then echo '✅'; else echo '❌'; fi)"
+
+          if [ ! -d "$BUILD_DIR/extensions/git" ]; then
+            echo "❌ Git 扩展不存在！"
             exit 1
           fi
 
@@ -527,6 +527,13 @@ jobs:
             echo "  1. 解压到任意目录"
             echo "  2. 双击 tscode 即可运行！"
             echo ""
-            echo "📦 包含 Git 扩展 (已修复)"
+            echo "📦 包含的扩展:"
+            echo "  - 所有官方内置扩展"
+            echo "  - Git 扩展 (已修复)"
+            echo "  - GitHub 扩展"
+            echo "  - 5 个预构建扩展"
+            echo ""
+            echo "📌 验证 Git 功能:"
+            echo "  Ctrl+Shift+X → 搜索 @builtin:git"
           fi
           echo "=========================================="
