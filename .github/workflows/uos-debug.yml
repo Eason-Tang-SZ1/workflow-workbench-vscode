@@ -131,18 +131,15 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 修复 src/main.ts 并禁用 Crashpad
+      # 10. 禁用 Crashpad
       # ============================================================
-      - name: 🔧 Fix main.ts and disable Crashpad
+      - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
-          echo "🔧 修复 src/main.ts 并禁用 Crashpad"
+          echo "🔧 禁用 Crashpad"
           echo "=========================================="
 
-          if [ -f "src/main.ts" ]; then
-            git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
-          fi
-
+          # 修改 product.json
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -158,6 +155,7 @@ jobs:
               print("✅ product.json 已修改")
           PY_JSON_END
 
+          # 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
@@ -175,11 +173,7 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
-          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
-            sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
-          fi
-
-          echo "✅ 修复完成"
+          echo "✅ Crashpad 已禁用"
 
       - name: ⚙️ Set env
         run: |
@@ -263,11 +257,20 @@ jobs:
             echo "📌 解压官方 VSCode..."
             tar -xzf /tmp/vscode.tar.gz -C /tmp/vscode-official 2>/dev/null
 
-            # 查找官方 extensions 目录
-            OFFICIAL_EXT=$(find /tmp/vscode-official -type d -name "extensions" -path "*/VSCode-linux-x64/extensions" 2>/dev/null | head -1)
+            # 查找官方 extensions 目录（多种可能路径）
+            OFFICIAL_EXT=""
+            for path in \
+              "/tmp/vscode-official/VSCode-linux-x64/resources/app/extensions" \
+              "/tmp/vscode-official/VSCode-linux-x64/extensions" \
+              "/tmp/vscode-official/resources/app/extensions"; do
+              if [ -d "$path" ]; then
+                OFFICIAL_EXT="$path"
+                echo "📌 找到官方扩展目录: $OFFICIAL_EXT"
+                break
+              fi
+            done
 
             if [ -n "$OFFICIAL_EXT" ] && [ -d "$OFFICIAL_EXT" ]; then
-              echo "📌 找到官方扩展目录: $OFFICIAL_EXT"
               echo "📌 官方扩展数量: $(ls -la $OFFICIAL_EXT | wc -l)"
 
               # 删除当前扩展
@@ -279,17 +282,21 @@ jobs:
               cp -r "$OFFICIAL_EXT"/* "$BUILD_DIR/extensions/"
 
               # 复制 node_modules（如果存在）
-              OFFICIAL_NODE=$(find /tmp/vscode-official -type d -name "node_modules" -path "*/VSCode-linux-x64/node_modules" 2>/dev/null | head -1)
-              if [ -n "$OFFICIAL_NODE" ] && [ -d "$OFFICIAL_NODE" ]; then
-                echo "📌 复制 node_modules..."
-                rm -rf "$BUILD_DIR/node_modules"
-                cp -r "$OFFICIAL_NODE" "$BUILD_DIR/"
-              fi
+              for node_path in \
+                "/tmp/vscode-official/VSCode-linux-x64/node_modules" \
+                "/tmp/vscode-official/VSCode-linux-x64/resources/app/node_modules"; do
+                if [ -d "$node_path" ]; then
+                  echo "📌 复制 node_modules from: $node_path"
+                  rm -rf "$BUILD_DIR/node_modules"
+                  cp -r "$node_path" "$BUILD_DIR/"
+                  break
+                fi
+              done
 
               echo "✅ 官方扩展已复制"
             else
               echo "❌ 找不到官方扩展目录！"
-              echo "尝试搜索..."
+              echo "📌 搜索所有 extensions 目录:"
               find /tmp/vscode-official -name "extensions" -type d 2>/dev/null | head -10
               exit 1
             fi
@@ -312,6 +319,8 @@ jobs:
 
           if [ ! -d "$BUILD_DIR/extensions/git" ]; then
             echo "❌ Git 扩展不存在！"
+            echo "📌 extensions 目录内容 (前20个):"
+            ls -la "$BUILD_DIR/extensions/" | head -20
             exit 1
           fi
 
