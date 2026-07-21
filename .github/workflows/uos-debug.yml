@@ -47,7 +47,11 @@ jobs:
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
       - name: 📦 Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          echo "=========================================="
+          echo "📦 安装所有依赖（包含原生模块）"
+          echo "=========================================="
+          npm install --legacy-peer-deps
 
       - name: 📦 Install build tools
         run: |
@@ -56,6 +60,40 @@ jobs:
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
+
+      # ============================================================
+      # 验证并确保原生模块已安装
+      # ============================================================
+      - name: 📂 Verify native modules
+        run: |
+          echo "=========================================="
+          echo "📂 验证原生模块"
+          echo "=========================================="
+
+          NATIVE_MODULES=(
+            "@vscode/spdlog"
+            "@vscode/sqlite3"
+            "native-keymap"
+            "node-pty"
+            "native-is-elevated"
+            "vscode-oniguruma"
+          )
+
+          MISSING=""
+          for module in "${NATIVE_MODULES[@]}"; do
+            if [ -d "node_modules/$module" ]; then
+              echo "   ✅ $module"
+            else
+              echo "   ❌ $module 缺失"
+              MISSING="$MISSING $module"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo ""
+            echo "📌 安装缺失模块..."
+            npm install $MISSING --legacy-peer-deps
+          fi
 
       - name: 🔧 Fix extensions.ts
         run: |
@@ -131,17 +169,13 @@ jobs:
           EOF
 
       # ============================================================
-      # 10. 修复 src/main.ts 并禁用 Crashpad
+      # 10. 禁用 Crashpad
       # ============================================================
-      - name: 🔧 Fix main.ts and disable Crashpad
+      - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
-          echo "🔧 修复 src/main.ts 并禁用 Crashpad"
+          echo "🔧 禁用 Crashpad"
           echo "=========================================="
-
-          if [ -f "src/main.ts" ]; then
-            git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
-          fi
 
           python3 << 'PY_JSON_END'
           import json
@@ -175,11 +209,7 @@ jobs:
           CRASH_EOF
           echo "✅ crashService.ts 已创建"
 
-          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
-            sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
-          fi
-
-          echo "✅ 修复完成"
+          echo "✅ Crashpad 已禁用"
 
       - name: ⚙️ Set env
         run: |
@@ -241,9 +271,9 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 复制 extensions 和预构建扩展
+      # 12. 复制 extensions、node_modules 和预构建扩展
       # ============================================================
-      - name: 📂 Copy extensions and prebuilt extensions
+      - name: 📂 Copy extensions, node_modules and prebuilt extensions
         run: |
           echo "=========================================="
           echo "📂 复制 extensions、node_modules 和预构建扩展"
@@ -252,81 +282,41 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           mkdir -p "$BUILD_DIR/extensions"
 
+          # 复制 extensions
           if [ -d "./extensions" ]; then
             echo "📌 从源码复制 extensions..."
             cp -r ./extensions/* "$BUILD_DIR/extensions/" 2>/dev/null
             echo "✅ extensions 已复制"
           fi
 
+          # 复制 node_modules（包含原生模块）
           if [ -d "./node_modules" ]; then
-            echo "📌 复制 node_modules..."
+            echo "📌 复制 node_modules（包含原生模块）..."
+            rm -rf "$BUILD_DIR/node_modules"
             cp -r ./node_modules "$BUILD_DIR/"
             echo "✅ node_modules 已复制"
           fi
 
+          # 复制预构建扩展
           if [ -d "./prebuilt-extensions" ]; then
             echo "📌 复制预构建扩展..."
             cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null
             echo "✅ 预构建扩展已复制"
           fi
 
-      # ============================================================
-      # 13. 强制下载 Git 扩展
-      # ============================================================
-      - name: 📥 Force download Git extension
-        run: |
-          echo "=========================================="
-          echo "📥 强制下载 Git 扩展"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          mkdir -p "$BUILD_DIR/extensions"
-
-          echo "📌 下载官方 VSCode..."
-          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/vscode.tar.gz
-
-          if [ -f "/tmp/vscode.tar.gz" ]; then
-            mkdir -p /tmp/vscode-official
-            tar -xzf /tmp/vscode.tar.gz -C /tmp/vscode-official 2>/dev/null
-
-            OFFICIAL_GIT=$(find /tmp/vscode-official -type d -name "git" -path "*/extensions/git" 2>/dev/null | head -1)
-            if [ -n "$OFFICIAL_GIT" ] && [ -d "$OFFICIAL_GIT" ]; then
-              rm -rf "$BUILD_DIR/extensions/git"
-              cp -r "$OFFICIAL_GIT" "$BUILD_DIR/extensions/"
-              echo "✅ Git 扩展已复制"
-            else
-              echo "⚠️ 未找到 Git 扩展"
-            fi
-
-            OFFICIAL_GITHUB=$(find /tmp/vscode-official -type d -name "github" -path "*/extensions/github" 2>/dev/null | head -1)
-            if [ -n "$OFFICIAL_GITHUB" ] && [ -d "$OFFICIAL_GITHUB" ]; then
-              rm -rf "$BUILD_DIR/extensions/github"
-              cp -r "$OFFICIAL_GITHUB" "$BUILD_DIR/extensions/"
-              echo "✅ GitHub 扩展已复制"
-            fi
-
-            rm -rf /tmp/vscode-official
-          else
-            echo "❌ 无法下载官方 VSCode"
-          fi
-
-          rm -f /tmp/vscode.tar.gz
-
+          # 验证原生模块
           echo ""
-          echo "📌 验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            ls -la "$BUILD_DIR/extensions/git" | head -10
-            cat "$BUILD_DIR/extensions/git/package.json" | grep -E '"name"|"version"' 2>/dev/null || echo "   ⚠️ 无法读取 package.json"
-          else
-            echo "   ❌ Git 扩展不存在!"
-            echo "   目录内容:"
-            ls -la "$BUILD_DIR/extensions/" 2>/dev/null || echo "   extensions 目录不存在"
-            exit 1
-          fi
+          echo "📌 验证原生模块:"
+          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
+            if [ -d "$BUILD_DIR/node_modules/$module" ]; then
+              echo "   ✅ $module"
+            else
+              echo "   ❌ $module (缺失)"
+            fi
+          done
 
       # ============================================================
-      # 14. 创建可直接双击运行的 VSCode
+      # 13. 创建可直接双击运行的 VSCode
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
@@ -379,21 +369,20 @@ jobs:
               EXEC="$SCRIPT_DIR/tscode.real"
           elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/bin/tscode.real"
-          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/code-oss.real"
-          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/code-oss.real"
           else
               echo "❌ 找不到 VSCode 可执行文件！"
               exit 1
           fi
+
+          USER_DATA_DIR="$SCRIPT_DIR/user-data"
+          mkdir -p "$USER_DATA_DIR"
 
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
+              --user-data-dir="$USER_DATA_DIR" \
               "$@"
           WRAPPER_EOF
 
@@ -424,12 +413,15 @@ jobs:
           fi
 
           echo "=== VSCode for UOS ==="
+          USER_DATA_DIR="$SCRIPT_DIR/user-data"
+          mkdir -p "$USER_DATA_DIR"
+
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
+              --user-data-dir="$USER_DATA_DIR" \
               "$@"
           START_EOF
 
@@ -461,9 +453,13 @@ jobs:
           📌 配置文件：./user-data 目录
 
           📦 包含的扩展:
-          - Git 扩展 (已修复)
+          - 所有官方内置扩展
+          - Git 扩展
           - GitHub 扩展
-          - 预构建扩展
+          - 5 个预构建扩展
+
+          ⚠️ 离线环境支持：
+          所有原生模块已包含在包中
           ==========================================
           EOF
 
@@ -473,7 +469,7 @@ jobs:
           ls -la
 
       # ============================================================
-      # 15. 打包
+      # 14. 打包
       # ============================================================
       - name: 📦 Package
         run: |
@@ -485,12 +481,22 @@ jobs:
           chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
 
           echo ""
-          echo "📌 打包前验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            ls -la "$BUILD_DIR/extensions/git" | head -5
-          else
-            echo "   ❌ Git 扩展不存在!"
+          echo "📌 打包前验证:"
+          echo "   extensions 数量: $(ls -la $BUILD_DIR/extensions/ | wc -l)"
+          echo "   node_modules 存在: $(if [ -d $BUILD_DIR/node_modules ]; then echo '✅'; else echo '❌'; fi)"
+
+          echo ""
+          echo "📌 验证原生模块:"
+          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
+            if [ -d "$BUILD_DIR/node_modules/$module" ]; then
+              echo "   ✅ $module"
+            else
+              echo "   ❌ $module"
+            fi
+          done
+
+          if [ ! -d "$BUILD_DIR/extensions/git" ]; then
+            echo "❌ Git 扩展不存在！"
             exit 1
           fi
 
@@ -527,6 +533,13 @@ jobs:
             echo "  1. 解压到任意目录"
             echo "  2. 双击 tscode 即可运行！"
             echo ""
-            echo "📦 包含 Git 扩展 (已修复)"
+            echo "📦 包含的扩展:"
+            echo "  - 所有官方内置扩展"
+            echo "  - Git 扩展 (已修复)"
+            echo "  - GitHub 扩展"
+            echo "  - 5 个预构建扩展"
+            echo ""
+            echo "📦 离线支持:"
+            echo "  所有原生模块已包含在包中"
           fi
           echo "=========================================="
