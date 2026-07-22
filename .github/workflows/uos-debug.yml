@@ -377,132 +377,192 @@ jobs:
           done
 
       # ============================================================
-      # 13. 复制预构建扩展（解压 .vsix 并复制 linux 目录）
+      # 13. 查找并复制预构建扩展（含详细日志）
       # ============================================================
-      - name: 📂 Copy prebuilt extensions
+      - name: 📂 Find and copy prebuilt extensions
         run: |
           echo "=========================================="
-          echo "📂 复制预构建扩展"
+          echo "🔍 查找并复制预构建扩展"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          TARGET_DIR="$BUILD_DIR/resources/app/extensions"
+          mkdir -p "$TARGET_DIR"
 
-          # 确保目标目录存在
-          mkdir -p "$BUILD_DIR/resources/app/extensions"
+          # 1. 搜索所有可能的预构建扩展位置
+          echo ""
+          echo "📌 步骤 1: 搜索所有可能的预构建扩展位置..."
+          find . -type d -name "*prebuilt*" 2>/dev/null | while read -r dir; do
+            echo "   找到: $dir"
+            ls -la "$dir" 2>/dev/null | head -5
+          done
 
-          # 查找预构建扩展目录
-          PREBUILT_DIR=""
-          for dir in "./prebuilt-extensions" "./prebuilt-extensions-linux-x64"; do
-            if [ -d "$dir" ]; then
-              PREBUILT_DIR="$dir"
-              echo "📌 找到预构建扩展目录: $PREBUILT_DIR"
-              break
+          # 2. 查找所有 testagent 相关文件/目录
+          echo ""
+          echo "📌 步骤 2: 搜索所有 testagent 相关文件/目录..."
+          find . -type f -o -type d | grep -i "testagent" 2>/dev/null | while read -r item; do
+            echo "   $item"
+          done
+
+          # 3. 查找所有 .vsix 文件
+          echo ""
+          echo "📌 步骤 3: 搜索所有 .vsix 文件..."
+          find . -name "*.vsix" -type f 2>/dev/null | while read -r vsix; do
+            echo "   $vsix"
+            ls -lh "$vsix" 2>/dev/null | awk '{print "      " $5 " " $9}'
+          done
+
+          # 4. 检查 prebuilt-extensions 目录内容
+          echo ""
+          echo "📌 步骤 4: prebuilt-extensions 目录内容:"
+          if [ -d "./prebuilt-extensions" ]; then
+            echo "   📁 ./prebuilt-extensions 内容:"
+            ls -la ./prebuilt-extensions/
+            if [ -d "./prebuilt-extensions/linux" ]; then
+              echo ""
+              echo "   📁 ./prebuilt-extensions/linux 内容:"
+              ls -la ./prebuilt-extensions/linux/
+            fi
+          else
+            echo "   ❌ ./prebuilt-extensions 不存在"
+          fi
+
+          # 5. 在 prebuilt-extensions 中查找 testagent
+          echo ""
+          echo "📌 步骤 5: 在 prebuilt-extensions 中查找 testagent..."
+
+          PREBUILT_PATHS=(
+            "./prebuilt-extensions"
+            "./prebuilt-extensions-linux-x64"
+            "./prebuilt-extensions/linux"
+            "./prebuilt-extensions/linux-x64"
+            "./out/prebuilt-extensions"
+          )
+
+          TESTAGENT_SRC=""
+          for path in "${PREBUILT_PATHS[@]}"; do
+            if [ -d "$path" ]; then
+              echo "   检查: $path"
+              FOUND=$(find "$path" -maxdepth 2 -type d -name "*test*agent*" 2>/dev/null | head -1)
+              if [ -n "$FOUND" ]; then
+                echo "   ✅ 找到: $FOUND"
+                TESTAGENT_SRC="$FOUND"
+                break
+              fi
             fi
           done
 
-          if [ -z "$PREBUILT_DIR" ] || [ ! -d "$PREBUILT_DIR" ]; then
-            echo "⚠️ 未找到预构建扩展目录"
-            echo "📌 搜索 prebuilt 目录:"
-            find . -name "*prebuilt*" -type d 2>/dev/null | head -10
-            exit 0
-          fi
-
-          echo "📌 从 $PREBUILT_DIR 处理预构建扩展..."
-          echo "📁 预构建扩展列表:"
-          ls -la "$PREBUILT_DIR"
-
-          # 复制 linux 目录下的扩展（TestAgent 可能在这里）
-          if [ -d "$PREBUILT_DIR/linux" ]; then
+          # 6. 如果找到目录，复制到目标位置
+          if [ -n "$TESTAGENT_SRC" ] && [ -d "$TESTAGENT_SRC" ]; then
             echo ""
-            echo "📌 复制 linux 目录下的扩展..."
-            ls -la "$PREBUILT_DIR/linux"
-            # 复制 linux 目录下所有内容到 extensions
-            cp -r "$PREBUILT_DIR/linux"/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
-            echo "   ✅ linux 目录已复制"
+            echo "📌 步骤 6: 复制 testagent 到 $TARGET_DIR/test-tech.TestAgent"
+            mkdir -p "$TARGET_DIR/test-tech.TestAgent"
+            cp -r "$TESTAGENT_SRC"/* "$TARGET_DIR/test-tech.TestAgent/"
+            echo "   ✅ 复制完成"
+
+            echo "   📁 复制的内容:"
+            ls -la "$TARGET_DIR/test-tech.TestAgent/" | head -10
+          else
+            echo ""
+            echo "⚠️ 未找到 testagent 目录，尝试解压 .vsix 文件..."
+
+            # 查找 testagent 的 .vsix 文件
+            VSIX_FILE=""
+            for pattern in "*testagent*.vsix" "*test-agent*.vsix"; do
+              FOUND=$(find ./prebuilt-extensions -name "$pattern" -type f 2>/dev/null | head -1)
+              if [ -n "$FOUND" ]; then
+                VSIX_FILE="$FOUND"
+                break
+              fi
+            done
+
+            if [ -n "$VSIX_FILE" ] && [ -f "$VSIX_FILE" ]; then
+              echo "   ✅ 找到 .vsix 文件: $VSIX_FILE"
+              mkdir -p "$TARGET_DIR/test-tech.TestAgent"
+              unzip -q "$VSIX_FILE" -d "$TARGET_DIR/test-tech.TestAgent"
+              echo "   ✅ 解压完成"
+              ls -la "$TARGET_DIR/test-tech.TestAgent/" | head -10
+            else
+              echo "   ❌ 未找到 testagent 的 .vsix 文件"
+            fi
           fi
 
+          # 7. 解压其他预构建扩展
           echo ""
-          echo "📌 解压 .vsix 文件..."
+          echo "📌 步骤 7: 解压其他预构建扩展..."
 
           # 解压 cweijan.vscode-office
-          if [ -f "$PREBUILT_DIR/cweijan.vscode-office-4.1.5.vsix" ]; then
+          if [ -f "./prebuilt-extensions/cweijan.vscode-office-4.1.5.vsix" ]; then
             echo "   📦 解压 cweijan.vscode-office-4.1.5.vsix..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions/cweijan.vscode-office"
-            unzip -q "$PREBUILT_DIR/cweijan.vscode-office-4.1.5.vsix" -d "$BUILD_DIR/resources/app/extensions/cweijan.vscode-office"
+            mkdir -p "$TARGET_DIR/cweijan.vscode-office"
+            unzip -q "./prebuilt-extensions/cweijan.vscode-office-4.1.5.vsix" -d "$TARGET_DIR/cweijan.vscode-office"
             echo "   ✅ cweijan.vscode-office 已解压"
           else
             echo "   ⚠️ 未找到 cweijan.vscode-office.vsix"
           fi
 
           # 解压 test-tech.beeeyes
-          if [ -f "$PREBUILT_DIR/test-tech.beeeyes-0.0.1.vsix" ]; then
+          if [ -f "./prebuilt-extensions/test-tech.beeeyes-0.0.1.vsix" ]; then
             echo "   📦 解压 test-tech.beeeyes-0.0.1.vsix..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions/test-tech.beeeyes"
-            unzip -q "$PREBUILT_DIR/test-tech.beeeyes-0.0.1.vsix" -d "$BUILD_DIR/resources/app/extensions/test-tech.beeeyes"
+            mkdir -p "$TARGET_DIR/test-tech.beeeyes"
+            unzip -q "./prebuilt-extensions/test-tech.beeeyes-0.0.1.vsix" -d "$TARGET_DIR/test-tech.beeeyes"
             echo "   ✅ test-tech.beeeyes 已解压"
           else
             echo "   ⚠️ 未找到 test-tech.beeeyes.vsix"
           fi
 
           # 解压 test-tech.skillhub
-          if [ -f "$PREBUILT_DIR/test-tech.skillhub-1.0.3-uat.vsix" ]; then
+          if [ -f "./prebuilt-extensions/test-tech.skillhub-1.0.3-uat.vsix" ]; then
             echo "   📦 解压 test-tech.skillhub-1.0.3-uat.vsix..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions/test-tech.skillhub"
-            unzip -q "$PREBUILT_DIR/test-tech.skillhub-1.0.3-uat.vsix" -d "$BUILD_DIR/resources/app/extensions/test-tech.skillhub"
+            mkdir -p "$TARGET_DIR/test-tech.skillhub"
+            unzip -q "./prebuilt-extensions/test-tech.skillhub-1.0.3-uat.vsix" -d "$TARGET_DIR/test-tech.skillhub"
             echo "   ✅ test-tech.skillhub 已解压"
           else
             echo "   ⚠️ 未找到 test-tech.skillhub.vsix"
           fi
 
           # 解压 vscode-language-pack-zh-hans
-          if [ -f "$PREBUILT_DIR/vscode-language-pack-zh-hans-v1.108.0.vsix" ]; then
+          if [ -f "./prebuilt-extensions/vscode-language-pack-zh-hans-v1.108.0.vsix" ]; then
             echo "   📦 解压 vscode-language-pack-zh-hans-v1.108.0.vsix..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions/MS-CEINTL.vscode-language-pack-zh-hans"
-            unzip -q "$PREBUILT_DIR/vscode-language-pack-zh-hans-v1.108.0.vsix" -d "$BUILD_DIR/resources/app/extensions/MS-CEINTL.vscode-language-pack-zh-hans"
+            mkdir -p "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans"
+            unzip -q "./prebuilt-extensions/vscode-language-pack-zh-hans-v1.108.0.vsix" -d "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans"
             echo "   ✅ MS-CEINTL.vscode-language-pack-zh-hans 已解压"
           else
             echo "   ⚠️ 未找到 vscode-language-pack-zh-hans.vsix"
           fi
 
-          # 解压 test-agent（支持多种文件名格式）
-          TEST_AGENT_FILE=""
-          for pattern in "testagent-nodejs-tscode-linux-x64.vsix" "test-agent*.vsix" "testagent*.vsix"; do
-            MATCH=$(ls $PREBUILT_DIR/$pattern 2>/dev/null | head -1)
-            if [ -n "$MATCH" ] && [ -f "$MATCH" ]; then
-              TEST_AGENT_FILE="$MATCH"
-              break
-            fi
-          done
-
-          if [ -n "$TEST_AGENT_FILE" ] && [ -f "$TEST_AGENT_FILE" ]; then
-            echo "   📦 解压 $(basename $TEST_AGENT_FILE)..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent"
-            unzip -q "$TEST_AGENT_FILE" -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent"
-            echo "   ✅ test-tech.TestAgent 已解压"
-
-            # 如果解压后目录名不是 test-tech.TestAgent，重命名
-            cd "$BUILD_DIR/resources/app/extensions"
-            # 查找可能的目录名
-            FOUND_DIR=$(ls -d test*agent* 2>/dev/null | head -1)
-            if [ -n "$FOUND_DIR" ] && [ "$FOUND_DIR" != "test-tech.TestAgent" ]; then
-              echo "   📌 重命名 $FOUND_DIR -> test-tech.TestAgent"
-              rm -rf test-tech.TestAgent 2>/dev/null
-              mv "$FOUND_DIR" test-tech.TestAgent
-            fi
-            cd - > /dev/null
-          else
-            echo "   ⚠️ 未找到 test-agent.vsix"
-          fi
-
-          # 验证
+          # 8. 重命名 testagent 目录（如果名称不同）
           echo ""
-          echo "📌 验证预构建扩展:"
+          echo "📌 步骤 8: 检查并重命名 testagent 目录..."
+          cd "$TARGET_DIR"
+          TEST_DIRS=$(ls -d *test*agent* 2>/dev/null)
+          if [ -n "$TEST_DIRS" ]; then
+            for dir in $TEST_DIRS; do
+              if [ "$dir" != "test-tech.TestAgent" ] && [ -d "$dir" ]; then
+                echo "   📌 重命名 $dir -> test-tech.TestAgent"
+                rm -rf test-tech.TestAgent 2>/dev/null
+                mv "$dir" test-tech.TestAgent
+                echo "   ✅ 重命名完成"
+                break
+              fi
+            done
+          fi
+          cd - > /dev/null
+
+          # 9. 验证
+          echo ""
+          echo "📌 步骤 9: 验证预构建扩展:"
           PREBUILT_EXTS="cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent"
           for ext in $PREBUILT_EXTS; do
-            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ] && [ -f "$BUILD_DIR/resources/app/extensions/$ext/package.json" ]; then
+            if [ -d "$TARGET_DIR/$ext" ] && [ -f "$TARGET_DIR/$ext/package.json" ]; then
               echo "   ✅ $ext"
+              echo "      📄 $(cat $TARGET_DIR/$ext/package.json | grep '"name"' | head -1)"
             else
               echo "   ❌ $ext (未找到或缺少 package.json)"
+              if [ -d "$TARGET_DIR/$ext" ]; then
+                echo "      📁 目录内容:"
+                ls -la "$TARGET_DIR/$ext" | head -5
+              fi
             fi
           done
 
@@ -742,16 +802,4 @@ jobs:
             echo ""
             echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
             echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  1. 解压到任意目录"
-            echo "  2. 双击 tscode 即可运行！"
-            echo ""
-            echo "📦 包含的扩展:"
-            echo "  - 所有官方内置扩展 (已编译)"
-            echo "  - Git 扩展 (已编译)"
-            echo "  - GitHub 扩展 (已编译)"
-            echo "  - 5 个预构建扩展"
-            echo ""
-            echo "📦 离线支持：所有原生模块已包含"
-          fi
-          echo "=========================================="
+            echo "📌 On
