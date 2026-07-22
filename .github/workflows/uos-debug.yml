@@ -274,66 +274,33 @@ jobs:
             exit 1
           fi
 
-          # 1. 复制 resources/app
-          OFFICIAL_APP=$(find /tmp/code-deb -type d -name "app" -path "*/share/code/resources/app" 2>/dev/null | head -1)
-          if [ -n "$OFFICIAL_APP" ] && [ -d "$OFFICIAL_APP" ]; then
-            echo "📌 找到官方 resources/app: $OFFICIAL_APP"
-            mkdir -p "$BUILD_DIR/resources"
-            cp -r "$OFFICIAL_APP" "$BUILD_DIR/resources/"
-            echo "✅ resources/app 已复制"
-          else
-            echo "⚠️ 未找到 resources/app，尝试复制 resources..."
-            OFFICIAL_RESOURCES=$(find /tmp/code-deb -type d -name "resources" -path "*/share/code/resources" 2>/dev/null | head -1)
-            if [ -n "$OFFICIAL_RESOURCES" ] && [ -d "$OFFICIAL_RESOURCES" ]; then
-              mkdir -p "$BUILD_DIR/resources"
-              cp -r "$OFFICIAL_RESOURCES" "$BUILD_DIR/"
-              echo "✅ resources 已复制"
-            fi
-          fi
+          # 查找官方 resources 目录
+          OFFICIAL_RESOURCES=$(find /tmp/code-deb -type d -name "resources" -path "*/share/code/resources" 2>/dev/null | head -1)
 
-          # 2. 查找并复制 extensions（可能在 /usr/share/code/extensions）
-          OFFICIAL_EXT=$(find /tmp/code-deb -type d -name "extensions" -path "*/share/code/extensions" 2>/dev/null | head -1)
-          if [ -n "$OFFICIAL_EXT" ] && [ -d "$OFFICIAL_EXT" ]; then
-            echo "📌 找到官方 extensions: $OFFICIAL_EXT"
-            # 复制到 resources/app/extensions
-            mkdir -p "$BUILD_DIR/resources/app"
-            cp -r "$OFFICIAL_EXT" "$BUILD_DIR/resources/app/extensions"
-            echo "✅ extensions 已复制到 resources/app/extensions"
-          else
-            echo "❌ 找不到官方 extensions 目录！"
-            echo "📌 搜索所有 extensions 目录:"
-            find /tmp/code-deb -name "extensions" -type d 2>/dev/null
+          if [ -z "$OFFICIAL_RESOURCES" ] || [ ! -d "$OFFICIAL_RESOURCES" ]; then
+            echo "❌ 找不到官方 resources 目录！"
+            echo "📌 搜索所有 resources 目录:"
+            find /tmp/code-deb -name "resources" -type d 2>/dev/null
             exit 1
           fi
 
-          # 3. 复制 node_modules
-          OFFICIAL_NODE=$(find /tmp/code-deb -type d -name "node_modules" -path "*/share/code/node_modules" 2>/dev/null | head -1)
-          if [ -n "$OFFICIAL_NODE" ] && [ -d "$OFFICIAL_NODE" ]; then
-            echo "📌 复制 node_modules..."
-            mkdir -p "$BUILD_DIR/resources/app"
-            cp -r "$OFFICIAL_NODE" "$BUILD_DIR/resources/app/node_modules"
-            echo "✅ node_modules 已复制"
-          fi
+          echo "📌 找到官方 resources: $OFFICIAL_RESOURCES"
 
-          # 4. 复制 code 可执行文件（如果不存在）
-          OFFICIAL_CODE=$(find /tmp/code-deb -type f -name "code" -path "*/share/code/code" 2>/dev/null | head -1)
-          if [ -n "$OFFICIAL_CODE" ] && [ -f "$OFFICIAL_CODE" ]; then
-            echo "📌 复制 code 可执行文件..."
-            cp "$OFFICIAL_CODE" "$BUILD_DIR/"
-            echo "✅ code 已复制"
-          fi
+          # 复制整个 resources 目录
+          echo "📌 复制 resources..."
+          mkdir -p "$BUILD_DIR"
+          cp -r "$OFFICIAL_RESOURCES" "$BUILD_DIR/"
+          echo "✅ resources 已复制"
 
-          # 清理
-          cd /
-          rm -rf /tmp/code-deb /tmp/code.deb
-
-          # 验证
+          # 验证 extensions
           echo ""
           echo "📌 验证目录结构:"
           if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
             echo "   ✅ extensions 存在"
           else
             echo "   ❌ extensions 不存在"
+            echo "📌 搜索所有 extensions 目录:"
+            find /tmp/code-deb -name "extensions" -type d 2>/dev/null
             exit 1
           fi
 
@@ -349,6 +316,11 @@ jobs:
             echo "   ⚠️ out 不存在"
           fi
 
+          # 清理
+          cd /
+          rm -rf /tmp/code-deb /tmp/code.deb
+
+          # 验证 Git 扩展
           echo ""
           echo "📌 验证 Git 扩展:"
           if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
