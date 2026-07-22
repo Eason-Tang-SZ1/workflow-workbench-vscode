@@ -358,7 +358,7 @@ jobs:
           done
 
       # ============================================================
-      # 13. 复制预构建扩展
+      # 13. 复制预构建扩展（查找实际位置）
       # ============================================================
       - name: 📂 Copy prebuilt extensions
         run: |
@@ -368,23 +368,57 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          if [ -d "./prebuilt-extensions" ]; then
-            echo "📌 复制预构建扩展..."
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
-            echo "✅ 预构建扩展已复制"
+          # 确保目标目录存在
+          mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-            echo ""
-            echo "📌 验证预构建扩展:"
-            for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
-              if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-                echo "   ✅ $ext"
-              else
-                echo "   ❌ $ext (未找到)"
-              fi
-            done
+          # 查找预构建扩展目录（多个可能的位置）
+          PREBUILT_DIR=""
+          for dir in \
+            "./prebuilt-extensions" \
+            "./prebuilt-extensions-linux-x64" \
+            "./out/prebuilt-extensions" \
+            "./.build/prebuilt-extensions" \
+            "./extensions/prebuilt" \
+            "./build/prebuilt-extensions"; do
+            if [ -d "$dir" ]; then
+              PREBUILT_DIR="$dir"
+              echo "📌 找到预构建扩展目录: $PREBUILT_DIR"
+              break
+            fi
+          done
+
+          if [ -n "$PREBUILT_DIR" ] && [ -d "$PREBUILT_DIR" ]; then
+            echo "📌 从 $PREBUILT_DIR 复制预构建扩展..."
+            echo "📁 预构建扩展列表:"
+            ls -la "$PREBUILT_DIR"
+            cp -r "$PREBUILT_DIR"/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
+            echo "✅ 预构建扩展已复制"
           else
-            echo "⚠️ 没有预构建扩展"
+            echo "⚠️ 未找到预构建扩展目录，尝试搜索..."
+            find . -name "*prebuilt*" -type d 2>/dev/null | head -10
+            echo ""
+            echo "📌 尝试从 extensions 目录查找预构建扩展..."
+            if [ -d "./extensions" ]; then
+              for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
+                if [ -d "./extensions/$ext" ]; then
+                  echo "   ✅ 找到 $ext"
+                  cp -r "./extensions/$ext" "$BUILD_DIR/resources/app/extensions/"
+                fi
+              done
+            fi
           fi
+
+          # 最终验证
+          echo ""
+          echo "📌 验证预构建扩展:"
+          PREBUILT_EXTS="cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent"
+          for ext in $PREBUILT_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+            else
+              echo "   ❌ $ext (未找到)"
+            fi
+          done
 
       # ============================================================
       # 14. 创建可直接双击运行的 VSCode
