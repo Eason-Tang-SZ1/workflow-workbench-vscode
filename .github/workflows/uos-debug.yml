@@ -130,6 +130,9 @@ jobs:
           }
           EOF
 
+      # ============================================================
+      # 10. 禁用 Crashpad
+      # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
@@ -192,6 +195,9 @@ jobs:
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
 
+      # ============================================================
+      # 11. 验证构建产物
+      # ============================================================
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -226,6 +232,9 @@ jobs:
             echo "⚠️ node_modules 不存在"
           fi
 
+      # ============================================================
+      # 12. 从官方 tar.gz 复制所有内容，保留用户二进制文件
+      # ============================================================
       - name: 📥 Extract official tar.gz and merge
         run: |
           echo "=========================================="
@@ -367,6 +376,9 @@ jobs:
             fi
           done
 
+      # ============================================================
+      # 13. 查找并复制预构建扩展（修复版本）
+      # ============================================================
       - name: 📂 Find and copy prebuilt extensions
         run: |
           echo "=========================================="
@@ -619,6 +631,9 @@ jobs:
           echo "📁 最终扩展目录:"
           ls -la "$TARGET_DIR" | head -20
 
+      # ============================================================
+      # 14. 创建可直接双击运行的 VSCode
+      # ============================================================
       - name: 🚀 Create double-click executable
         run: |
           echo "=========================================="
@@ -770,7 +785,90 @@ jobs:
           echo "📁 目录内容:"
           ls -la
 
+      # ============================================================
+      # 15. 打包
+      # ============================================================
       - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          VERSION="${{ github.event.inputs.version
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          chmod +x $BUILD_DIR/tscode 2>/dev/null || true
+          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
+          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+
+          echo ""
+          echo "📌 打包前验证:"
+          echo "   resources/app/extensions 数量: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "   resources/app/node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   resources/app/out 存在: $(if [ -d $BUILD_DIR/resources/app/out ]; then echo '✅'; else echo '❌'; fi)"
+
+          echo ""
+          echo "📌 验证 Git 扩展:"
+          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
+            echo "   ✅ Git 扩展存在"
+            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ] || [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
+              echo "   ✅ 已编译"
+            else
+              echo "   ❌ Git 扩展未编译!"
+              exit 1
+            fi
+          else
+            echo "   ❌ Git 扩展不存在!"
+            exit 1
+          fi
+
+          echo ""
+          echo "📌 验证原生模块:"
+          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
+            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
+              echo "   ✅ $module"
+            else
+              echo "   ❌ $module"
+            fi
+          done
+
+          echo ""
+          echo "📌 验证预构建扩展:"
+          for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+            else
+              echo "   ❌ $ext"
+            fi
+          done
+
+          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
+            --preserve-permissions \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
+
+          echo "✅ 打包完成:"
+          ls -lh vscode-uos-*.tar.gz
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-uos-double-click
+          path: vscode-uos-*.tar.gz
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "🟢 Status: ${{ job.status }}"
+          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "🎉 Build completed!"
+            echo ""
+            echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
+            echo ""
+            echo "📌 On UOS:"
+            echo "   1. tar -xzf vscode-uos-*.tar.gz"
+            echo "   2. cd VSCode-linux-x64"
+            echo "   3. ./tscode"
+          fi
