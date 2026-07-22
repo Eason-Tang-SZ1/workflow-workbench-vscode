@@ -233,20 +233,19 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 【核心】从官方 .deb 包提取已编译扩展
+      # 12. 【核心】从官方 .deb 包提取完整的 resources/app
       # ============================================================
-      - name: 📥 Extract extensions from official .deb
+      - name: 📥 Extract resources/app from official .deb
         run: |
           echo "=========================================="
-          echo "📥 从官方 .deb 包提取已编译扩展"
+          echo "📥 从官方 .deb 包提取 resources/app"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 删除当前未编译的扩展
-          echo "📌 删除当前未编译的扩展..."
-          rm -rf "$BUILD_DIR/extensions"
-          rm -rf "$BUILD_DIR/node_modules"
+          # 删除当前 resources 目录
+          echo "📌 删除当前 resources 目录..."
+          rm -rf "$BUILD_DIR/resources"
 
           # 下载官方 .deb 包
           echo "📌 下载官方 .deb 包..."
@@ -263,7 +262,6 @@ jobs:
           cd /tmp/code-deb
           ar x /tmp/code.deb
 
-          # 解压 data.tar（可能是 .gz, .xz, 或未压缩）
           if [ -f "data.tar.gz" ]; then
             tar -xzf data.tar.gz 2>/dev/null
           elif [ -f "data.tar.xz" ]; then
@@ -275,48 +273,62 @@ jobs:
             exit 1
           fi
 
-          # 查找已编译的扩展
-          OFFICIAL_EXT=$(find /tmp/code-deb -type d -name "extensions" -path "*/share/code/extensions" 2>/dev/null | head -1)
+          # 查找 resources/app 目录
+          OFFICIAL_APP=$(find /tmp/code-deb -type d -name "app" -path "*/share/code/resources/app" 2>/dev/null | head -1)
 
-          if [ -z "$OFFICIAL_EXT" ] || [ ! -d "$OFFICIAL_EXT" ]; then
-            echo "❌ 找不到官方扩展目录！"
-            echo "📌 搜索所有 extensions 目录:"
-            find /tmp/code-deb -name "extensions" -type d 2>/dev/null
+          if [ -z "$OFFICIAL_APP" ] || [ ! -d "$OFFICIAL_APP" ]; then
+            echo "❌ 找不到官方 resources/app 目录！"
+            echo "📌 搜索 resources 目录:"
+            find /tmp/code-deb -name "resources" -type d 2>/dev/null
             exit 1
           fi
 
-          echo "📌 找到官方扩展: $OFFICIAL_EXT"
-          echo "📌 官方扩展数量: $(ls -la $OFFICIAL_EXT | wc -l)"
+          echo "📌 找到官方 resources/app: $OFFICIAL_APP"
 
-          # 复制所有官方扩展（已编译）
-          echo "📌 复制所有扩展..."
-          cp -r "$OFFICIAL_EXT" "$BUILD_DIR/"
-          echo "✅ 扩展已复制"
-
-          # 复制 node_modules
-          OFFICIAL_NODE=$(find /tmp/code-deb -type d -name "node_modules" -path "*/share/code/node_modules" 2>/dev/null | head -1)
-          if [ -n "$OFFICIAL_NODE" ] && [ -d "$OFFICIAL_NODE" ]; then
-            echo "📌 复制 node_modules..."
-            cp -r "$OFFICIAL_NODE" "$BUILD_DIR/"
-            echo "✅ node_modules 已复制"
-          fi
+          # 复制整个 resources/app（包含 extensions、node_modules、out）
+          echo "📌 复制 resources/app..."
+          mkdir -p "$BUILD_DIR/resources"
+          cp -r "$OFFICIAL_APP" "$BUILD_DIR/resources/"
+          echo "✅ resources/app 已完整复制"
 
           # 清理
           cd /
           rm -rf /tmp/code-deb /tmp/code.deb
 
-          # 验证 Git 扩展
+          # 验证
+          echo ""
+          echo "📌 验证目录结构:"
+          if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
+            echo "   ✅ extensions 存在"
+          else
+            echo "   ❌ extensions 不存在"
+            exit 1
+          fi
+
+          if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+            echo "   ✅ node_modules 存在"
+          else
+            echo "   ❌ node_modules 不存在"
+            exit 1
+          fi
+
+          if [ -d "$BUILD_DIR/resources/app/out" ]; then
+            echo "   ✅ out 存在"
+          else
+            echo "   ⚠️ out 不存在"
+          fi
+
           echo ""
           echo "📌 验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
+          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
             echo "   ✅ Git 扩展存在"
-            if [ -d "$BUILD_DIR/extensions/git/out" ]; then
+            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ]; then
               echo "   ✅ 已编译 (out/)"
-            elif [ -d "$BUILD_DIR/extensions/git/dist" ]; then
+            elif [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
               echo "   ✅ 已编译 (dist/)"
             else
               echo "   ❌ 未编译!"
-              echo "   📁 内容: $(ls -la $BUILD_DIR/extensions/git/)"
+              echo "   📁 内容: $(ls -la $BUILD_DIR/resources/app/extensions/git/)"
               exit 1
             fi
           else
@@ -327,8 +339,8 @@ jobs:
           echo ""
           echo "📌 关键扩展验证:"
           for ext in github markdown-language-features typescript-language-features json-language-features; do
-            if [ -d "$BUILD_DIR/extensions/$ext" ]; then
-              if [ -d "$BUILD_DIR/extensions/$ext/out" ] || [ -d "$BUILD_DIR/extensions/$ext/dist" ]; then
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              if [ -d "$BUILD_DIR/resources/app/extensions/$ext/out" ] || [ -d "$BUILD_DIR/resources/app/extensions/$ext/dist" ]; then
                 echo "   ✅ $ext (已编译)"
               else
                 echo "   ⚠️ $ext (存在但未编译)"
@@ -351,13 +363,13 @@ jobs:
 
           if [ -d "./prebuilt-extensions" ]; then
             echo "📌 复制预构建扩展..."
-            cp -r ./prebuilt-extensions/* "$BUILD_DIR/extensions/" 2>/dev/null
+            cp -r ./prebuilt-extensions/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
             echo "✅ 预构建扩展已复制"
 
             echo ""
             echo "📌 验证预构建扩展:"
             for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
-              if [ -d "$BUILD_DIR/extensions/$ext" ]; then
+              if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
                 echo "   ✅ $ext"
               else
                 echo "   ❌ $ext (未找到)"
@@ -379,6 +391,7 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
+          # 查找真正的二进制文件
           REAL_EXEC=""
           for name in tscode code-oss code; do
             if [ -f "./$name" ]; then
@@ -534,16 +547,17 @@ jobs:
 
           echo ""
           echo "📌 打包前验证:"
-          echo "   extensions 数量: $(ls -la $BUILD_DIR/extensions/ | wc -l)"
-          echo "   node_modules 存在: $(if [ -d $BUILD_DIR/node_modules ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   resources/app/extensions 数量: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "   resources/app/node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   resources/app/out 存在: $(if [ -d $BUILD_DIR/resources/app/out ]; then echo '✅'; else echo '❌'; fi)"
 
           echo ""
           echo "📌 验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/extensions/git" ]; then
+          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
             echo "   ✅ Git 扩展存在"
-            if [ -d "$BUILD_DIR/extensions/git/out" ]; then
+            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ]; then
               echo "   ✅ 已编译 (out/)"
-            elif [ -d "$BUILD_DIR/extensions/git/dist" ]; then
+            elif [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
               echo "   ✅ 已编译 (dist/)"
             else
               echo "   ❌ Git 扩展未编译!"
@@ -557,10 +571,21 @@ jobs:
           echo ""
           echo "📌 验证原生模块:"
           for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
-            if [ -d "$BUILD_DIR/node_modules/$module" ]; then
+            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
               echo "   ✅ $module"
             else
               echo "   ❌ $module"
+            fi
+          done
+
+          # 检查预构建扩展
+          echo ""
+          echo "📌 验证预构建扩展:"
+          for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+            else
+              echo "   ❌ $ext"
             fi
           done
 
@@ -597,13 +622,19 @@ jobs:
             echo "  1. 解压到任意目录"
             echo "  2. 双击 tscode 即可运行！"
             echo ""
-            echo "📦 包含的扩展:"
-            echo "  - 所有官方内置扩展 (已编译)"
-            echo "  - Git 扩展 (已编译)"
-            echo "  - GitHub 扩展 (已编译)"
-            echo "  - 5 个预构建扩展"
+            echo "📦 目录结构:"
+            echo "  VSCode-linux-x64/"
+            echo "  ├── tscode              # 双击运行"
+            echo "  ├── tscode.real         # 真实二进制"
+            echo "  ├── resources/"
+            echo "  │   └── app/"
+            echo "  │       ├── extensions/  # ✅ 已编译扩展"
+            echo "  │       ├── node_modules/ # ✅ 核心依赖"
+            echo "  │       └── out/         # ✅ 核心代码"
+            echo "  ├── user-data/          # 配置文件"
+            echo "  └── ..."
             echo ""
-            echo "📦 离线支持:"
-            echo "  所有原生模块已包含在包中"
+            echo "📦 包含 5 个预构建扩展"
+            echo "📦 离线支持：所有原生模块已包含"
           fi
           echo "=========================================="
