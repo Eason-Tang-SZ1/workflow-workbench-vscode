@@ -425,13 +425,32 @@ jobs:
             echo "   ⚠️ 未找到 vscode-language-pack-zh-hans.vsix"
           fi
 
-          # 解压 test-agent
-          TEST_AGENT=$(ls $PREBUILT_DIR/*test*agent*.vsix 2>/dev/null | head -1)
-          if [ -n "$TEST_AGENT" ] && [ -f "$TEST_AGENT" ]; then
-            echo "   📦 解压 $(basename $TEST_AGENT)..."
+          # 解压 test-agent（支持多种文件名格式）
+          TEST_AGENT_FILE=""
+          for pattern in "testagent-nodejs-tscode-linux-x64.vsix" "test-agent*.vsix" "testagent*.vsix"; do
+            MATCH=$(ls $PREBUILT_DIR/$pattern 2>/dev/null | head -1)
+            if [ -n "$MATCH" ] && [ -f "$MATCH" ]; then
+              TEST_AGENT_FILE="$MATCH"
+              break
+            fi
+          done
+
+          if [ -n "$TEST_AGENT_FILE" ] && [ -f "$TEST_AGENT_FILE" ]; then
+            echo "   📦 解压 $(basename $TEST_AGENT_FILE)..."
             mkdir -p "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent"
-            unzip -q "$TEST_AGENT" -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent"
+            unzip -q "$TEST_AGENT_FILE" -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent"
             echo "   ✅ test-tech.TestAgent 已解压"
+
+            # 如果解压后目录名不是 test-tech.TestAgent，重命名
+            cd "$BUILD_DIR/resources/app/extensions"
+            # 查找可能的目录名
+            FOUND_DIR=$(ls -d test*agent* 2>/dev/null | head -1)
+            if [ -n "$FOUND_DIR" ] && [ "$FOUND_DIR" != "test-tech.TestAgent" ]; then
+              echo "   📌 重命名 $FOUND_DIR -> test-tech.TestAgent"
+              rm -rf test-tech.TestAgent 2>/dev/null
+              mv "$FOUND_DIR" test-tech.TestAgent
+            fi
+            cd - > /dev/null
           else
             echo "   ⚠️ 未找到 test-agent.vsix"
           fi
