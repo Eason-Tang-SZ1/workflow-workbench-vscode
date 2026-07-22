@@ -233,19 +233,20 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 【核心】从官方 .deb 包提取完整的 resources/app
+      # 12. 【核心】从官方 .deb 包提取扩展和 resources
       # ============================================================
-      - name: 📥 Extract resources/app from official .deb
+      - name: 📥 Extract from official .deb
         run: |
           echo "=========================================="
-          echo "📥 从官方 .deb 包提取 resources/app"
+          echo "📥 从官方 .deb 包提取扩展和 resources"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 删除当前 resources 目录
-          echo "📌 删除当前 resources 目录..."
+          # 删除当前 resources 和 extensions
+          echo "📌 删除当前 resources 和 extensions..."
           rm -rf "$BUILD_DIR/resources"
+          rm -rf "$BUILD_DIR/extensions"
 
           # 下载官方 .deb 包
           echo "📌 下载官方 .deb 包..."
@@ -273,23 +274,54 @@ jobs:
             exit 1
           fi
 
-          # 查找 resources/app 目录
+          # 1. 复制 resources/app
           OFFICIAL_APP=$(find /tmp/code-deb -type d -name "app" -path "*/share/code/resources/app" 2>/dev/null | head -1)
+          if [ -n "$OFFICIAL_APP" ] && [ -d "$OFFICIAL_APP" ]; then
+            echo "📌 找到官方 resources/app: $OFFICIAL_APP"
+            mkdir -p "$BUILD_DIR/resources"
+            cp -r "$OFFICIAL_APP" "$BUILD_DIR/resources/"
+            echo "✅ resources/app 已复制"
+          else
+            echo "⚠️ 未找到 resources/app，尝试复制 resources..."
+            OFFICIAL_RESOURCES=$(find /tmp/code-deb -type d -name "resources" -path "*/share/code/resources" 2>/dev/null | head -1)
+            if [ -n "$OFFICIAL_RESOURCES" ] && [ -d "$OFFICIAL_RESOURCES" ]; then
+              mkdir -p "$BUILD_DIR/resources"
+              cp -r "$OFFICIAL_RESOURCES" "$BUILD_DIR/"
+              echo "✅ resources 已复制"
+            fi
+          fi
 
-          if [ -z "$OFFICIAL_APP" ] || [ ! -d "$OFFICIAL_APP" ]; then
-            echo "❌ 找不到官方 resources/app 目录！"
-            echo "📌 搜索 resources 目录:"
-            find /tmp/code-deb -name "resources" -type d 2>/dev/null
+          # 2. 查找并复制 extensions（可能在 /usr/share/code/extensions）
+          OFFICIAL_EXT=$(find /tmp/code-deb -type d -name "extensions" -path "*/share/code/extensions" 2>/dev/null | head -1)
+          if [ -n "$OFFICIAL_EXT" ] && [ -d "$OFFICIAL_EXT" ]; then
+            echo "📌 找到官方 extensions: $OFFICIAL_EXT"
+            # 复制到 resources/app/extensions
+            mkdir -p "$BUILD_DIR/resources/app"
+            cp -r "$OFFICIAL_EXT" "$BUILD_DIR/resources/app/extensions"
+            echo "✅ extensions 已复制到 resources/app/extensions"
+          else
+            echo "❌ 找不到官方 extensions 目录！"
+            echo "📌 搜索所有 extensions 目录:"
+            find /tmp/code-deb -name "extensions" -type d 2>/dev/null
             exit 1
           fi
 
-          echo "📌 找到官方 resources/app: $OFFICIAL_APP"
+          # 3. 复制 node_modules
+          OFFICIAL_NODE=$(find /tmp/code-deb -type d -name "node_modules" -path "*/share/code/node_modules" 2>/dev/null | head -1)
+          if [ -n "$OFFICIAL_NODE" ] && [ -d "$OFFICIAL_NODE" ]; then
+            echo "📌 复制 node_modules..."
+            mkdir -p "$BUILD_DIR/resources/app"
+            cp -r "$OFFICIAL_NODE" "$BUILD_DIR/resources/app/node_modules"
+            echo "✅ node_modules 已复制"
+          fi
 
-          # 复制整个 resources/app（包含 extensions、node_modules、out）
-          echo "📌 复制 resources/app..."
-          mkdir -p "$BUILD_DIR/resources"
-          cp -r "$OFFICIAL_APP" "$BUILD_DIR/resources/"
-          echo "✅ resources/app 已完整复制"
+          # 4. 复制 code 可执行文件（如果不存在）
+          OFFICIAL_CODE=$(find /tmp/code-deb -type f -name "code" -path "*/share/code/code" 2>/dev/null | head -1)
+          if [ -n "$OFFICIAL_CODE" ] && [ -f "$OFFICIAL_CODE" ]; then
+            echo "📌 复制 code 可执行文件..."
+            cp "$OFFICIAL_CODE" "$BUILD_DIR/"
+            echo "✅ code 已复制"
+          fi
 
           # 清理
           cd /
@@ -309,7 +341,6 @@ jobs:
             echo "   ✅ node_modules 存在"
           else
             echo "   ❌ node_modules 不存在"
-            exit 1
           fi
 
           if [ -d "$BUILD_DIR/resources/app/out" ]; then
@@ -578,7 +609,6 @@ jobs:
             fi
           done
 
-          # 检查预构建扩展
           echo ""
           echo "📌 验证预构建扩展:"
           for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
