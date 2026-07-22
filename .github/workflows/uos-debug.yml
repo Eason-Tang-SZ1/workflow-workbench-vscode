@@ -130,9 +130,6 @@ jobs:
           }
           EOF
 
-      # ============================================================
-      # 10. 禁用 Crashpad
-      # ============================================================
       - name: 🔧 Disable Crashpad
         run: |
           echo "=========================================="
@@ -195,9 +192,6 @@ jobs:
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
 
-      # ============================================================
-      # 11. 验证构建产物
-      # ============================================================
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -232,9 +226,6 @@ jobs:
             echo "⚠️ node_modules 不存在"
           fi
 
-      # ============================================================
-      # 12. 从官方 tar.gz 复制所有内容，保留用户二进制文件
-      # ============================================================
       - name: 📥 Extract official tar.gz and merge
         run: |
           echo "=========================================="
@@ -376,9 +367,6 @@ jobs:
             fi
           done
 
-      # ============================================================
-      # 13. 查找并复制预构建扩展（含详细日志）
-      # ============================================================
       - name: 📂 Find and copy prebuilt extensions
         run: |
           echo "=========================================="
@@ -423,6 +411,11 @@ jobs:
               echo "   📁 ./prebuilt-extensions/linux 内容:"
               ls -la ./prebuilt-extensions/linux/
             fi
+            if [ -d "./prebuilt-extensions/linux/x64" ]; then
+              echo ""
+              echo "   📁 ./prebuilt-extensions/linux/x64 内容:"
+              ls -la ./prebuilt-extensions/linux/x64/
+            fi
           else
             echo "   ❌ ./prebuilt-extensions 不存在"
           fi
@@ -466,11 +459,11 @@ jobs:
             echo ""
             echo "⚠️ 未找到 testagent 目录，尝试解压 .vsix 文件..."
 
-            # 查找 testagent 的 .vsix 文件
+            # 查找 testagent 的 .vsix 文件（优先 linux/x64）
             VSIX_FILE=""
-            for pattern in "*testagent*.vsix" "*test-agent*.vsix"; do
-              FOUND=$(find ./prebuilt-extensions -name "$pattern" -type f 2>/dev/null | head -1)
-              if [ -n "$FOUND" ]; then
+            for pattern in "./prebuilt-extensions/linux/x64/testagent*.vsix" "./prebuilt-extensions/linux/*/testagent*.vsix" "./prebuilt-extensions/*testagent*.vsix" "./prebuilt-extensions/*test-agent*.vsix"; do
+              FOUND=$(ls -1 $pattern 2>/dev/null | head -1)
+              if [ -n "$FOUND" ] && [ -f "$FOUND" ]; then
                 VSIX_FILE="$FOUND"
                 break
               fi
@@ -478,10 +471,23 @@ jobs:
 
             if [ -n "$VSIX_FILE" ] && [ -f "$VSIX_FILE" ]; then
               echo "   ✅ 找到 .vsix 文件: $VSIX_FILE"
+              rm -rf "$TARGET_DIR/test-tech.TestAgent" 2>/dev/null
               mkdir -p "$TARGET_DIR/test-tech.TestAgent"
               unzip -q "$VSIX_FILE" -d "$TARGET_DIR/test-tech.TestAgent"
               echo "   ✅ 解压完成"
+
+              # 检查解压后的目录结构
+              echo "   📁 解压后的内容:"
               ls -la "$TARGET_DIR/test-tech.TestAgent/" | head -10
+
+              # 如果解压后是 extension 子目录，移动内容到上层
+              if [ -d "$TARGET_DIR/test-tech.TestAgent/extension" ]; then
+                echo "   📌 移动 extension 子目录内容到上层..."
+                mv "$TARGET_DIR/test-tech.TestAgent/extension"/* "$TARGET_DIR/test-tech.TestAgent/"
+                rm -rf "$TARGET_DIR/test-tech.TestAgent/extension"
+                echo "   ✅ 移动完成"
+                ls -la "$TARGET_DIR/test-tech.TestAgent/" | head -10
+              fi
             else
               echo "   ❌ 未找到 testagent 的 .vsix 文件"
             fi
@@ -494,9 +500,14 @@ jobs:
           # 解压 cweijan.vscode-office
           if [ -f "./prebuilt-extensions/cweijan.vscode-office-4.1.5.vsix" ]; then
             echo "   📦 解压 cweijan.vscode-office-4.1.5.vsix..."
+            rm -rf "$TARGET_DIR/cweijan.vscode-office" 2>/dev/null
             mkdir -p "$TARGET_DIR/cweijan.vscode-office"
             unzip -q "./prebuilt-extensions/cweijan.vscode-office-4.1.5.vsix" -d "$TARGET_DIR/cweijan.vscode-office"
             echo "   ✅ cweijan.vscode-office 已解压"
+            if [ -d "$TARGET_DIR/cweijan.vscode-office/extension" ]; then
+              mv "$TARGET_DIR/cweijan.vscode-office/extension"/* "$TARGET_DIR/cweijan.vscode-office/"
+              rm -rf "$TARGET_DIR/cweijan.vscode-office/extension"
+            fi
           else
             echo "   ⚠️ 未找到 cweijan.vscode-office.vsix"
           fi
@@ -504,9 +515,14 @@ jobs:
           # 解压 test-tech.beeeyes
           if [ -f "./prebuilt-extensions/test-tech.beeeyes-0.0.1.vsix" ]; then
             echo "   📦 解压 test-tech.beeeyes-0.0.1.vsix..."
+            rm -rf "$TARGET_DIR/test-tech.beeeyes" 2>/dev/null
             mkdir -p "$TARGET_DIR/test-tech.beeeyes"
             unzip -q "./prebuilt-extensions/test-tech.beeeyes-0.0.1.vsix" -d "$TARGET_DIR/test-tech.beeeyes"
             echo "   ✅ test-tech.beeeyes 已解压"
+            if [ -d "$TARGET_DIR/test-tech.beeeyes/extension" ]; then
+              mv "$TARGET_DIR/test-tech.beeeyes/extension"/* "$TARGET_DIR/test-tech.beeeyes/"
+              rm -rf "$TARGET_DIR/test-tech.beeeyes/extension"
+            fi
           else
             echo "   ⚠️ 未找到 test-tech.beeeyes.vsix"
           fi
@@ -514,9 +530,14 @@ jobs:
           # 解压 test-tech.skillhub
           if [ -f "./prebuilt-extensions/test-tech.skillhub-1.0.3-uat.vsix" ]; then
             echo "   📦 解压 test-tech.skillhub-1.0.3-uat.vsix..."
+            rm -rf "$TARGET_DIR/test-tech.skillhub" 2>/dev/null
             mkdir -p "$TARGET_DIR/test-tech.skillhub"
             unzip -q "./prebuilt-extensions/test-tech.skillhub-1.0.3-uat.vsix" -d "$TARGET_DIR/test-tech.skillhub"
             echo "   ✅ test-tech.skillhub 已解压"
+            if [ -d "$TARGET_DIR/test-tech.skillhub/extension" ]; then
+              mv "$TARGET_DIR/test-tech.skillhub/extension"/* "$TARGET_DIR/test-tech.skillhub/"
+              rm -rf "$TARGET_DIR/test-tech.skillhub/extension"
+            fi
           else
             echo "   ⚠️ 未找到 test-tech.skillhub.vsix"
           fi
@@ -524,51 +545,80 @@ jobs:
           # 解压 vscode-language-pack-zh-hans
           if [ -f "./prebuilt-extensions/vscode-language-pack-zh-hans-v1.108.0.vsix" ]; then
             echo "   📦 解压 vscode-language-pack-zh-hans-v1.108.0.vsix..."
+            rm -rf "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans" 2>/dev/null
             mkdir -p "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans"
             unzip -q "./prebuilt-extensions/vscode-language-pack-zh-hans-v1.108.0.vsix" -d "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans"
             echo "   ✅ MS-CEINTL.vscode-language-pack-zh-hans 已解压"
+            if [ -d "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans/extension" ]; then
+              mv "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans/extension"/* "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans/"
+              rm -rf "$TARGET_DIR/MS-CEINTL.vscode-language-pack-zh-hans/extension"
+            fi
           else
             echo "   ⚠️ 未找到 vscode-language-pack-zh-hans.vsix"
           fi
 
-          # 8. 重命名 testagent 目录（如果名称不同）
+          # 8. 验证所有预构建扩展
           echo ""
-          echo "📌 步骤 8: 检查并重命名 testagent 目录..."
-          cd "$TARGET_DIR"
-          TEST_DIRS=$(ls -d *test*agent* 2>/dev/null)
-          if [ -n "$TEST_DIRS" ]; then
-            for dir in $TEST_DIRS; do
-              if [ "$dir" != "test-tech.TestAgent" ] && [ -d "$dir" ]; then
-                echo "   📌 重命名 $dir -> test-tech.TestAgent"
-                rm -rf test-tech.TestAgent 2>/dev/null
-                mv "$dir" test-tech.TestAgent
-                echo "   ✅ 重命名完成"
-                break
-              fi
-            done
-          fi
-          cd - > /dev/null
+          echo "📌 步骤 8: 验证预构建扩展:"
 
-          # 9. 验证
-          echo ""
-          echo "📌 步骤 9: 验证预构建扩展:"
           PREBUILT_EXTS="cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent"
+
+          ALL_OK=true
           for ext in $PREBUILT_EXTS; do
-            if [ -d "$TARGET_DIR/$ext" ] && [ -f "$TARGET_DIR/$ext/package.json" ]; then
-              echo "   ✅ $ext"
-              echo "      📄 $(cat $TARGET_DIR/$ext/package.json | grep '"name"' | head -1)"
+            EXT_PATH="$TARGET_DIR/$ext"
+            if [ -d "$EXT_PATH" ] && [ -f "$EXT_PATH/package.json" ]; then
+              EXT_NAME=$(cat "$EXT_PATH/package.json" | grep '"name"' | head -1 | sed 's/.*"name": "\(.*\)".*/\1/' || echo "unknown")
+              echo "   ✅ $ext (name: $EXT_NAME)"
             else
               echo "   ❌ $ext (未找到或缺少 package.json)"
-              if [ -d "$TARGET_DIR/$ext" ]; then
+              if [ -d "$EXT_PATH" ]; then
                 echo "      📁 目录内容:"
-                ls -la "$TARGET_DIR/$ext" | head -5
+                ls -la "$EXT_PATH" | head -5
               fi
+              ALL_OK=false
             fi
           done
 
-      # ============================================================
-      # 14. 创建可直接双击运行的 VSCode
-      # ============================================================
+          # 9. 特殊处理 test-tech.TestAgent
+          echo ""
+          echo "📌 步骤 9: 确保 test-tech.TestAgent 正确:"
+
+          if [ -d "$TARGET_DIR/test-tech.TestAgent" ]; then
+            if [ ! -f "$TARGET_DIR/test-tech.TestAgent/package.json" ]; then
+              echo "   ⚠️ test-tech.TestAgent 缺少 package.json，尝试修复..."
+              PKG_FILE=$(find "$TARGET_DIR/test-tech.TestAgent" -name "package.json" -type f | head -1)
+              if [ -n "$PKG_FILE" ] && [ "$PKG_FILE" != "$TARGET_DIR/test-tech.TestAgent/package.json" ]; then
+                PKG_DIR=$(dirname "$PKG_FILE")
+                echo "   找到 package.json 在: $PKG_DIR"
+                find "$PKG_DIR" -maxdepth 1 -mindepth 1 -exec mv {} "$TARGET_DIR/test-tech.TestAgent/" \;
+                echo "   ✅ 修复完成"
+              fi
+            fi
+
+            if [ -f "$TARGET_DIR/test-tech.TestAgent/package.json" ]; then
+              echo "   ✅ test-tech.TestAgent 已就绪"
+              echo "   📄 $(cat $TARGET_DIR/test-tech.TestAgent/package.json | grep '"name"' | head -1)"
+            else
+              echo "   ❌ test-tech.TestAgent 仍然缺少 package.json"
+            fi
+          else
+            echo "   ❌ test-tech.TestAgent 目录不存在"
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "📊 预构建扩展处理完成"
+          echo "=========================================="
+
+          if [ "$ALL_OK" = "true" ]; then
+            echo "✅ 所有预构建扩展已就绪"
+          else
+            echo "⚠️ 部分预构建扩展缺失"
+          fi
+
+          echo "📁 最终扩展目录:"
+          ls -la "$TARGET_DIR" | head -20
+
       - name: 🚀 Create double-click executable
         run: |
           echo "=========================================="
@@ -720,86 +770,7 @@ jobs:
           echo "📁 目录内容:"
           ls -la
 
-      # ============================================================
-      # 15. 打包
-      # ============================================================
       - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
-          chmod +x $BUILD_DIR/tscode 2>/dev/null || true
-          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
-
-          echo ""
-          echo "📌 打包前验证:"
-          echo "   resources/app/extensions 数量: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
-          echo "   resources/app/node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
-          echo "   resources/app/out 存在: $(if [ -d $BUILD_DIR/resources/app/out ]; then echo '✅'; else echo '❌'; fi)"
-
-          echo ""
-          echo "📌 验证 Git 扩展:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ] || [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-              echo "   ✅ 已编译"
-            else
-              echo "   ❌ Git 扩展未编译!"
-              exit 1
-            fi
-          else
-            echo "   ❌ Git 扩展不存在!"
-            exit 1
-          fi
-
-          echo ""
-          echo "📌 验证原生模块:"
-          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
-            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
-              echo "   ✅ $module"
-            else
-              echo "   ❌ $module"
-            fi
-          done
-
-          echo ""
-          echo "📌 验证预构建扩展:"
-          for ext in cweijan.vscode-office test-tech.beeeyes test-tech.skillhub MS-CEINTL.vscode-language-pack-zh-hans test-tech.TestAgent; do
-            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-              echo "   ✅ $ext"
-            else
-              echo "   ❌ $ext"
-            fi
-          done
-
-          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
-            --preserve-permissions \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          echo "✅ 打包完成:"
-          ls -lh vscode-uos-*.tar.gz
-
-      - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: vscode-uos-double-click
-          path: vscode-uos-*.tar.gz
-          retention-days: 30
-
-      - name: 📊 Build summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "📊 BUILD SUMMARY"
-          echo "=========================================="
-          echo "🟢 Status: ${{ job.status }}"
-          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "=========================================="
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "🎉 Build completed!"
-            echo ""
-            echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
-            echo ""
-            echo "📌 On
+          VERSION="${{ github.event.inputs.version
