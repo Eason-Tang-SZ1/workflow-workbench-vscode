@@ -218,12 +218,12 @@ jobs:
           ls -la "$BUILD_DIR"
 
       # ============================================================
-      # 12. 核心修复：保留自定义二进制，从用户构建复制原生模块
+      # 12. 核心修复：保留自定义二进制，从用户构建复制所有内容
       # ============================================================
       - name: 📥 Extract official and copy native modules
         run: |
           echo "=========================================="
-          echo "📥 保留自定义二进制，从用户构建复制原生模块"
+          echo "📥 保留自定义二进制，从用户构建复制原生模块和 snapshot"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -269,7 +269,7 @@ jobs:
           fi
           chmod +x "$BUILD_DIR/tscode.real"
 
-          # 3. 备份自定义二进制和配置文件
+          # 3. 备份自定义文件
           echo ""
           echo "📌 3. 备份自定义文件..."
           mkdir -p /tmp/backup-custom
@@ -291,35 +291,42 @@ jobs:
             echo "   ✅ 备份 product.json"
           fi
 
-          # 4. 下载官方 tar.gz（只为了 snapshot 和 chrome-sandbox）
+          # 4. 【关键】从用户构建目录复制 snapshot 文件（匹配自定义二进制版本）
           echo ""
-          echo "📌 4. 下载官方 tar.gz..."
-          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
+          echo "📌 4. 从用户构建目录复制 snapshot 文件..."
+          echo "   （匹配自定义二进制版本，避免 V8 不匹配）"
 
-          if [ ! -f "/tmp/code.tar.gz" ]; then
-            echo "❌ 下载失败!"
-            exit 1
+          # 查找用户构建目录中的 snapshot
+          USER_SNAPSHOT=""
+          for path in "$BUILD_DIR/../VSCode-linux-x64" "$BUILD_DIR" "./VSCode-linux-x64"; do
+            if [ -f "$path/snapshot_blob.bin" ]; then
+              USER_SNAPSHOT="$path"
+              echo "   ✅ 找到用户构建 snapshot: $USER_SNAPSHOT"
+              break
+            fi
+          done
+
+          if [ -n "$USER_SNAPSHOT" ]; then
+            cp "$USER_SNAPSHOT/snapshot_blob.bin" "$BUILD_DIR/"
+            cp "$USER_SNAPSHOT/v8_context_snapshot.bin" "$BUILD_DIR/"
+            echo "   ✅ 复制用户构建的 snapshot 文件"
+          else
+            echo "   ⚠️ 找不到用户构建 snapshot，从官方下载..."
+            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
+            tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
+            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+            if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
+              cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
+              cp "$OFFICIAL_DIR/v8_context_snapshot.bin" "$BUILD_DIR/"
+              echo "   ✅ 复制官方 snapshot（可能版本不匹配）"
+            fi
+            rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
           fi
 
-          mkdir -p /tmp/code-tar
-          echo "📌 解压官方 tar.gz..."
-          tar -xzf /tmp/code.tar.gz -C /tmp/code-tar 2>/dev/null
-
-          OFFICIAL_DIR=$(find /tmp/code-tar -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
-            echo "❌ 找不到官方 VSCode 目录！"
-            exit 1
-          fi
-
-          echo "✅ 找到官方目录: $OFFICIAL_DIR"
-
-          # 5. 【关键】从用户构建目录复制原生模块（官方 tar.gz 不包含这些）
+          # 5. 【关键】从用户构建目录复制原生模块
           echo ""
           echo "📌 5. 从用户构建目录复制原生模块..."
-          echo "   （官方 tar.gz 不包含这些模块，必须从用户构建目录复制）"
 
-          # 查找用户构建的 node_modules
           USER_NODE_MODULES=""
           for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules" "/home/runner/work/vscode/vscode/node_modules"; do
             if [ -d "$path" ]; then
@@ -330,11 +337,7 @@ jobs:
           done
 
           if [ -z "$USER_NODE_MODULES" ]; then
-            echo "   ❌ 找不到用户 node_modules，尝试搜索..."
-            USER_NODE_MODULES=$(find . -maxdepth 3 -type d -name "node_modules" -path "*/node_modules" 2>/dev/null | grep -v "node_modules/" | head -1)
-            if [ -n "$USER_NODE_MODULES" ]; then
-              echo "   ✅ 找到: $USER_NODE_MODULES"
-            fi
+            echo "   ❌ 找不到用户 node_modules"
           fi
 
           NATIVE_MODULES=(
@@ -368,33 +371,25 @@ jobs:
               fi
             done
           else
-            echo "   ❌ 找不到用户 node_modules，无法复制原生模块！"
+            echo "   ❌ 找不到用户 node_modules"
           fi
 
-          # 6. 从官方复制 snapshot 文件
+          # 6. 从官方复制 chrome-sandbox
           echo ""
-          echo "📌 6. 从官方复制 snapshot 文件..."
-          if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
-            cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
-            echo "   ✅ 复制 snapshot_blob.bin"
-          fi
-          if [ -f "$OFFICIAL_DIR/v8_context_snapshot.bin" ]; then
-            cp "$OFFICIAL_DIR/v8_context_snapshot.bin" "$BUILD_DIR/"
-            echo "   ✅ 复制 v8_context_snapshot.bin"
-          fi
-
-          # 7. 从官方复制 chrome-sandbox
-          echo ""
-          echo "📌 7. 从官方复制 chrome-sandbox..."
+          echo "📌 6. 从官方复制 chrome-sandbox..."
+          wget -q https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
+          tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
+          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
           if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
             cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
             chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
             echo "   ✅ 复制 chrome-sandbox"
           fi
+          rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
 
-          # 8. 恢复自定义二进制
+          # 7. 恢复自定义二进制
           echo ""
-          echo "📌 8. 恢复自定义二进制..."
+          echo "📌 7. 恢复自定义二进制..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/"
             chmod +x "$BUILD_DIR/tscode.real"
@@ -406,9 +401,9 @@ jobs:
             echo "   ✅ 恢复 tscode"
           fi
 
-          # 9. 恢复配置文件
+          # 8. 恢复配置文件
           echo ""
-          echo "📌 9. 恢复配置文件..."
+          echo "📌 8. 恢复配置文件..."
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
             echo "   ✅ 恢复 package.json"
@@ -418,12 +413,12 @@ jobs:
             echo "   ✅ 恢复 product.json"
           fi
 
-          # 10. 清理
-          rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup-custom
+          # 9. 清理
+          rm -rf /tmp/backup-custom
 
-          # 11. 最终验证
+          # 10. 最终验证
           echo ""
-          echo "📌 10. 最终验证:"
+          echo "📌 9. 最终验证:"
 
           echo "   自定义二进制:"
           ls -la "$BUILD_DIR" | grep -E "tscode" || echo "   ❌ 找不到 tscode 文件"
@@ -654,6 +649,10 @@ jobs:
           done
 
           echo ""
+          echo "📌 Snapshot 版本验证:"
+          strings $BUILD_DIR/snapshot_blob.bin 2>/dev/null | grep -E "electron|Chrome" | head -3 || echo "   ⚠️ 无法读取版本"
+
+          echo ""
           echo "📌 自定义二进制:"
           ls -la $BUILD_DIR | grep tscode
 
@@ -686,7 +685,7 @@ jobs:
             echo ""
             echo "✅ 保留了自定义二进制（包含所有二次开发修改）"
             echo "✅ 从用户构建目录复制了原生模块"
-            echo "✅ 从官方复制了 snapshot 和 chrome-sandbox"
+            echo "✅ 从用户构建目录复制了 snapshot（版本匹配）"
             echo ""
             echo "📌 On UOS:"
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
