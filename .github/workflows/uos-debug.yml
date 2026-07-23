@@ -178,7 +178,7 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
-      - name: 🔨 Build VSCode (with custom modifications)
+      - name: 🔨 Build VSCode
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
@@ -213,6 +213,10 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
+          echo ""
+          echo "📌 构建目录内容:"
+          ls -la "$BUILD_DIR"
+
       # ============================================================
       # 12. 核心修复：保留自定义二进制，从官方复制原生模块
       # ============================================================
@@ -224,22 +228,38 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 1. 备份自定义二进制和自定义配置
+          # 1. 先确认自定义二进制存在
           echo ""
-          echo "📌 1. 备份自定义文件..."
+          echo "📌 1. 检查自定义二进制..."
+          if [ -f "$BUILD_DIR/code" ]; then
+            echo "   ✅ 找到 code 文件"
+            mv "$BUILD_DIR/code" "$BUILD_DIR/tscode.real"
+            echo "   ✅ 重命名为 tscode.real"
+          elif [ -f "$BUILD_DIR/tscode.real" ]; then
+            echo "   ✅ 找到 tscode.real"
+          else
+            echo "   ❌ 找不到任何可执行文件！"
+            echo "   搜索所有可执行文件..."
+            find "$BUILD_DIR" -maxdepth 1 -type f -executable 2>/dev/null | head -10
+            exit 1
+          fi
+
+          # 2. 备份自定义文件
+          echo ""
+          echo "📌 2. 备份自定义文件..."
           mkdir -p /tmp/backup-custom
 
           # 备份自定义二进制
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
-            echo "   ✅ 备份自定义 tscode.real"
+            echo "   ✅ 备份 tscode.real"
           fi
           if [ -f "$BUILD_DIR/tscode" ]; then
             cp "$BUILD_DIR/tscode" /tmp/backup-custom/
-            echo "   ✅ 备份自定义 tscode"
+            echo "   ✅ 备份 tscode"
           fi
 
-          # 备份自定义配置文件
+          # 备份配置文件
           if [ -f "$BUILD_DIR/package.json" ]; then
             cp "$BUILD_DIR/package.json" /tmp/backup-custom/
             echo "   ✅ 备份 package.json"
@@ -249,9 +269,9 @@ jobs:
             echo "   ✅ 备份 product.json"
           fi
 
-          # 2. 下载官方 tar.gz（只为了获取原生模块）
+          # 3. 下载官方 tar.gz
           echo ""
-          echo "📌 2. 下载官方 tar.gz..."
+          echo "📌 3. 下载官方 tar.gz..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
 
           if [ ! -f "/tmp/code.tar.gz" ]; then
@@ -272,11 +292,11 @@ jobs:
 
           echo "✅ 找到官方目录: $OFFICIAL_DIR"
 
-          # 3. 从官方复制原生模块到自定义构建
+          # 4. 从官方复制原生模块
           echo ""
-          echo "📌 3. 从官方复制原生模块..."
+          echo "📌 4. 从官方复制原生模块..."
 
-          # 找到官方 node_modules 位置
+          # 找到官方 node_modules
           OFFICIAL_NODE_MODULES=""
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
             OFFICIAL_NODE_MODULES="$OFFICIAL_DIR/resources/app/node_modules"
@@ -291,7 +311,6 @@ jobs:
 
           echo "   ✅ 找到官方 node_modules: $OFFICIAL_NODE_MODULES"
 
-          # 需要复制的原生模块
           NATIVE_MODULES=(
             "node-pty"
             "@vscode/spdlog"
@@ -311,8 +330,7 @@ jobs:
               NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
               echo "   ✅ $module 复制成功 ($NODE_FILES 个 .node 文件)"
             else
-              echo "   ❌ 找不到 $module，尝试从用户构建目录复制..."
-              # 从用户构建目录复制
+              echo "   ❌ 找不到 $module，从用户构建目录尝试..."
               USER_NODE_MODULES=""
               for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules"; do
                 if [ -d "$path" ]; then
@@ -332,9 +350,9 @@ jobs:
             fi
           done
 
-          # 4. 从官方复制 snapshot 文件（但保留自定义二进制）
+          # 5. 从官方复制 snapshot 文件
           echo ""
-          echo "📌 4. 从官方复制 snapshot 文件..."
+          echo "📌 5. 从官方复制 snapshot 文件..."
           if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
             cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
             echo "   ✅ 复制 snapshot_blob.bin"
@@ -344,30 +362,32 @@ jobs:
             echo "   ✅ 复制 v8_context_snapshot.bin"
           fi
 
-          # 5. 从官方复制 chrome-sandbox
+          # 6. 从官方复制 chrome-sandbox
           echo ""
-          echo "📌 5. 从官方复制 chrome-sandbox..."
+          echo "📌 6. 从官方复制 chrome-sandbox..."
           if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
             cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
-            chmod 4755 "$BUILD_DIR/chrome-sandbox"
+            chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
             echo "   ✅ 复制 chrome-sandbox"
           fi
 
-          # 6. 恢复自定义二进制
+          # 7. 恢复自定义二进制
           echo ""
-          echo "📌 6. 恢复自定义二进制..."
+          echo "📌 7. 恢复自定义二进制..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/"
-            echo "   ✅ 恢复自定义 tscode.real"
+            chmod +x "$BUILD_DIR/tscode.real"
+            echo "   ✅ 恢复 tscode.real"
           fi
           if [ -f "/tmp/backup-custom/tscode" ]; then
             cp "/tmp/backup-custom/tscode" "$BUILD_DIR/"
-            echo "   ✅ 恢复自定义 tscode"
+            chmod +x "$BUILD_DIR/tscode"
+            echo "   ✅ 恢复 tscode"
           fi
 
-          # 7. 恢复自定义配置文件
+          # 8. 恢复配置文件
           echo ""
-          echo "📌 7. 恢复自定义配置文件..."
+          echo "📌 8. 恢复配置文件..."
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
             echo "   ✅ 恢复 package.json"
@@ -377,15 +397,15 @@ jobs:
             echo "   ✅ 恢复 product.json"
           fi
 
-          # 8. 清理
+          # 9. 清理
           rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup-custom
 
-          # 9. 最终验证
+          # 10. 最终验证
           echo ""
-          echo "📌 8. 最终验证:"
+          echo "📌 9. 最终验证:"
 
           echo "   自定义二进制:"
-          ls -la "$BUILD_DIR" | grep -E "tscode"
+          ls -la "$BUILD_DIR" | grep -E "tscode" || echo "   ❌ 找不到 tscode 文件"
 
           echo ""
           echo "   原生模块:"
@@ -400,7 +420,10 @@ jobs:
 
           echo ""
           echo "   Snapshot 文件:"
-          ls -la "$BUILD_DIR" | grep -E "snapshot"
+          ls -la "$BUILD_DIR" | grep -E "snapshot" || echo "   ❌ 找不到 snapshot 文件"
+
+          # 确保 tscode.real 可执行
+          chmod +x "$BUILD_DIR/tscode.real" 2>/dev/null || true
 
       # ============================================================
       # 13. 查找并复制预构建扩展
@@ -469,11 +492,27 @@ jobs:
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
+          echo "=========================================="
+          echo "🚀 创建双击运行版本"
+          echo "=========================================="
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
-          # 确保 tscode 包装脚本正确
-          cat > tscode << 'WRAPPER_EOF'
+          # 检查 tscode.real 是否存在
+          if [ ! -f "./tscode.real" ]; then
+            echo "❌ tscode.real 不存在！"
+            echo "当前目录内容:"
+            ls -la
+            exit 1
+          fi
+
+          # 确保可执行
+          chmod +x tscode.real
+
+          # 创建 tscode 包装脚本（如果不存在）
+          if [ ! -f "./tscode" ]; then
+            cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -506,10 +545,11 @@ jobs:
               --user-data-dir="$USER_DATA_DIR" \
               "$@"
           WRAPPER_EOF
+            chmod +x tscode
+            echo "✅ 创建 tscode 包装脚本"
+          fi
 
-          chmod +x tscode
-          chmod +x tscode.real
-
+          # 创建 start-vscode.sh
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -547,6 +587,7 @@ jobs:
 
           chmod +x start-vscode.sh
 
+          # 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -563,6 +604,9 @@ jobs:
           EOF
 
           echo "✅ 双击运行版本创建完成"
+          echo ""
+          echo "📁 目录内容:"
+          ls -la | head -20
 
       # ============================================================
       # 15. 打包
@@ -575,9 +619,12 @@ jobs:
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
+          chmod +x $BUILD_DIR/tscode.real 2>/dev/null || true
 
           echo ""
           echo "📌 打包前验证:"
+          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo '✅'; else echo '❌'; fi)"
+          echo "   tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo '✅'; else echo '❌'; fi)"
           echo "   extensions 数量: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
           echo "   node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
 
@@ -605,7 +652,8 @@ jobs:
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          echo "✅ 打包完成"
+          echo "✅ 打包完成:"
+          ls -lh vscode-uos-*.tar.gz
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
