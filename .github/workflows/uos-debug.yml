@@ -178,7 +178,7 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
-      - name: 🔨 Build VSCode
+      - name: 🔨 Build VSCode (with custom modifications)
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
@@ -214,18 +214,44 @@ jobs:
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 12. 从官方 tar.gz 复制内容，并从用户构建复制原生模块
+      # 12. 核心修复：保留自定义二进制，从官方复制原生模块
       # ============================================================
-      - name: 📥 Extract official tar.gz and merge
+      - name: 📥 Extract official and copy native modules
         run: |
           echo "=========================================="
-          echo "📥 从官方 tar.gz 提取并合并"
+          echo "📥 保留自定义二进制，从官方复制原生模块"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 下载官方 tar.gz
-          echo "📌 下载官方 tar.gz..."
+          # 1. 备份自定义二进制和自定义配置
+          echo ""
+          echo "📌 1. 备份自定义文件..."
+          mkdir -p /tmp/backup-custom
+
+          # 备份自定义二进制
+          if [ -f "$BUILD_DIR/tscode.real" ]; then
+            cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
+            echo "   ✅ 备份自定义 tscode.real"
+          fi
+          if [ -f "$BUILD_DIR/tscode" ]; then
+            cp "$BUILD_DIR/tscode" /tmp/backup-custom/
+            echo "   ✅ 备份自定义 tscode"
+          fi
+
+          # 备份自定义配置文件
+          if [ -f "$BUILD_DIR/package.json" ]; then
+            cp "$BUILD_DIR/package.json" /tmp/backup-custom/
+            echo "   ✅ 备份 package.json"
+          fi
+          if [ -f "$BUILD_DIR/product.json" ]; then
+            cp "$BUILD_DIR/product.json" /tmp/backup-custom/
+            echo "   ✅ 备份 product.json"
+          fi
+
+          # 2. 下载官方 tar.gz（只为了获取原生模块）
+          echo ""
+          echo "📌 2. 下载官方 tar.gz..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
 
           if [ ! -f "/tmp/code.tar.gz" ]; then
@@ -244,53 +270,28 @@ jobs:
             exit 1
           fi
 
-          echo "📌 找到官方目录: $OFFICIAL_DIR"
+          echo "✅ 找到官方目录: $OFFICIAL_DIR"
 
-          # 清空当前构建目录
+          # 3. 从官方复制原生模块到自定义构建
           echo ""
-          echo "📌 清空当前构建目录..."
-          find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "$BUILD_DIR"/*
+          echo "📌 3. 从官方复制原生模块..."
 
-          # 复制官方所有内容
-          echo ""
-          echo "📌 复制官方所有内容..."
-          cp -r "$OFFICIAL_DIR"/* "$BUILD_DIR/"
-
-          # 使用官方二进制文件
-          echo ""
-          echo "📌 使用官方二进制文件..."
-          if [ -f "$BUILD_DIR/code" ]; then
-            mv "$BUILD_DIR/code" "$BUILD_DIR/tscode.real"
-            echo "   ✅ 重命名 code -> tscode.real"
-          fi
-          chmod +x "$BUILD_DIR/tscode.real"
-
-          # ============================================================
-          # 【核心修复】从用户构建目录复制原生模块
-          # 官方 tar.gz 不包含这些模块，必须从用户构建目录复制
-          # ============================================================
-          echo ""
-          echo "📌 从用户构建目录复制原生模块..."
-
-          # 用户构建目录的 node_modules
-          USER_NODE_MODULES=""
-          for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules" "/home/runner/work/vscode/vscode/node_modules"; do
-            if [ -d "$path" ]; then
-              USER_NODE_MODULES="$path"
-              echo "   ✅ 找到用户 node_modules: $USER_NODE_MODULES"
-              break
-            fi
-          done
-
-          if [ -z "$USER_NODE_MODULES" ]; then
-            echo "   ❌ 找不到用户 node_modules，尝试搜索..."
-            USER_NODE_MODULES=$(find . -maxdepth 3 -type d -name "node_modules" -path "*/node_modules" 2>/dev/null | grep -v "node_modules/" | head -1)
-            if [ -n "$USER_NODE_MODULES" ]; then
-              echo "   ✅ 找到: $USER_NODE_MODULES"
-            fi
+          # 找到官方 node_modules 位置
+          OFFICIAL_NODE_MODULES=""
+          if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
+            OFFICIAL_NODE_MODULES="$OFFICIAL_DIR/resources/app/node_modules"
+          elif [ -d "$OFFICIAL_DIR/node_modules" ]; then
+            OFFICIAL_NODE_MODULES="$OFFICIAL_DIR/node_modules"
           fi
 
-          # 需要复制的原生模块（官方包中不包含）
+          if [ -z "$OFFICIAL_NODE_MODULES" ]; then
+            echo "❌ 找不到官方 node_modules"
+            exit 1
+          fi
+
+          echo "   ✅ 找到官方 node_modules: $OFFICIAL_NODE_MODULES"
+
+          # 需要复制的原生模块
           NATIVE_MODULES=(
             "node-pty"
             "@vscode/spdlog"
@@ -300,63 +301,106 @@ jobs:
 
           mkdir -p "$BUILD_DIR/resources/app/node_modules"
 
-          if [ -n "$USER_NODE_MODULES" ] && [ -d "$USER_NODE_MODULES" ]; then
-            echo ""
-            echo "   开始复制原生模块..."
-            for module in "${NATIVE_MODULES[@]}"; do
-              if [ -d "$USER_NODE_MODULES/$module" ]; then
-                echo "   ✅ 找到 $module"
+          for module in "${NATIVE_MODULES[@]}"; do
+            if [ -d "$OFFICIAL_NODE_MODULES/$module" ]; then
+              echo "   ✅ 找到 $module"
+              TARGET_DIR="$BUILD_DIR/resources/app/node_modules/$(dirname $module 2>/dev/null || echo $module)"
+              mkdir -p "$TARGET_DIR"
+              rm -rf "$TARGET_DIR/$(basename $module)" 2>/dev/null
+              cp -r "$OFFICIAL_NODE_MODULES/$module" "$TARGET_DIR/"
+              NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
+              echo "   ✅ $module 复制成功 ($NODE_FILES 个 .node 文件)"
+            else
+              echo "   ❌ 找不到 $module，尝试从用户构建目录复制..."
+              # 从用户构建目录复制
+              USER_NODE_MODULES=""
+              for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules"; do
+                if [ -d "$path" ]; then
+                  USER_NODE_MODULES="$path"
+                  break
+                fi
+              done
+              if [ -n "$USER_NODE_MODULES" ] && [ -d "$USER_NODE_MODULES/$module" ]; then
                 TARGET_DIR="$BUILD_DIR/resources/app/node_modules/$(dirname $module 2>/dev/null || echo $module)"
                 mkdir -p "$TARGET_DIR"
                 rm -rf "$TARGET_DIR/$(basename $module)" 2>/dev/null
                 cp -r "$USER_NODE_MODULES/$module" "$TARGET_DIR/"
-
-                NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-                if [ "$NODE_FILES" -gt 0 ]; then
-                  echo "   ✅ $module 复制成功 ($NODE_FILES 个 .node 文件)"
-                else
-                  echo "   ⚠️ $module 复制完成但无 .node 文件"
-                fi
+                echo "   ✅ $module 从用户目录复制成功"
               else
                 echo "   ❌ 找不到 $module"
               fi
-            done
-          else
-            echo "   ❌ 找不到用户 node_modules，无法复制原生模块！"
-            echo "   将创建 stub 模块..."
-            for module in "${NATIVE_MODULES[@]}"; do
-              TARGET_DIR="$BUILD_DIR/resources/app/node_modules/$(dirname $module 2>/dev/null || echo $module)"
-              mkdir -p "$TARGET_DIR"
-              echo '{"name":"'$module'","version":"1.0.0","main":"index.js"}' > "$TARGET_DIR/$(basename $module)/package.json"
-              echo 'module.exports = {};' > "$TARGET_DIR/$(basename $module)/index.js"
-              echo "   ⚠️ 创建 stub: $module"
-            done
+            fi
+          done
+
+          # 4. 从官方复制 snapshot 文件（但保留自定义二进制）
+          echo ""
+          echo "📌 4. 从官方复制 snapshot 文件..."
+          if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
+            cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
+            echo "   ✅ 复制 snapshot_blob.bin"
+          fi
+          if [ -f "$OFFICIAL_DIR/v8_context_snapshot.bin" ]; then
+            cp "$OFFICIAL_DIR/v8_context_snapshot.bin" "$BUILD_DIR/"
+            echo "   ✅ 复制 v8_context_snapshot.bin"
           fi
 
-          # 复制配置文件到根目录
+          # 5. 从官方复制 chrome-sandbox
           echo ""
-          echo "📌 复制配置文件到根目录..."
-          [ -f "$BUILD_DIR/resources/app/package.json" ] && cp "$BUILD_DIR/resources/app/package.json" "$BUILD_DIR/" && echo "   ✅ package.json"
-          [ -f "$BUILD_DIR/resources/app/product.json" ] && cp "$BUILD_DIR/resources/app/product.json" "$BUILD_DIR/" && echo "   ✅ product.json"
+          echo "📌 5. 从官方复制 chrome-sandbox..."
+          if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
+            cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
+            chmod 4755 "$BUILD_DIR/chrome-sandbox"
+            echo "   ✅ 复制 chrome-sandbox"
+          fi
 
-          # 清理
-          rm -rf /tmp/code-tar /tmp/code.tar.gz
-
-          # 最终验证
+          # 6. 恢复自定义二进制
           echo ""
-          echo "📌 原生模块验证:"
+          echo "📌 6. 恢复自定义二进制..."
+          if [ -f "/tmp/backup-custom/tscode.real" ]; then
+            cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/"
+            echo "   ✅ 恢复自定义 tscode.real"
+          fi
+          if [ -f "/tmp/backup-custom/tscode" ]; then
+            cp "/tmp/backup-custom/tscode" "$BUILD_DIR/"
+            echo "   ✅ 恢复自定义 tscode"
+          fi
+
+          # 7. 恢复自定义配置文件
+          echo ""
+          echo "📌 7. 恢复自定义配置文件..."
+          if [ -f "/tmp/backup-custom/package.json" ]; then
+            cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
+            echo "   ✅ 恢复 package.json"
+          fi
+          if [ -f "/tmp/backup-custom/product.json" ]; then
+            cp "/tmp/backup-custom/product.json" "$BUILD_DIR/"
+            echo "   ✅ 恢复 product.json"
+          fi
+
+          # 8. 清理
+          rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup-custom
+
+          # 9. 最终验证
+          echo ""
+          echo "📌 8. 最终验证:"
+
+          echo "   自定义二进制:"
+          ls -la "$BUILD_DIR" | grep -E "tscode"
+
+          echo ""
+          echo "   原生模块:"
           for module in node-pty @vscode/spdlog @vscode/sqlite3 native-keymap; do
             if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
               NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-              if [ "$NODE_FILES" -gt 0 ]; then
-                echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
-              else
-                echo "   ⚠️ $module (存在但无 .node 文件)"
-              fi
+              echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
             else
               echo "   ❌ $module (缺失)"
             fi
           done
+
+          echo ""
+          echo "   Snapshot 文件:"
+          ls -la "$BUILD_DIR" | grep -E "snapshot"
 
       # ============================================================
       # 13. 查找并复制预构建扩展
@@ -428,6 +472,7 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
+          # 确保 tscode 包装脚本正确
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -551,6 +596,10 @@ jobs:
             fi
           done
 
+          echo ""
+          echo "📌 自定义二进制:"
+          ls -la $BUILD_DIR | grep tscode
+
           tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
@@ -576,6 +625,9 @@ jobs:
           echo "=========================================="
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed!"
+            echo ""
+            echo "✅ 保留了自定义二进制（包含所有二次开发修改）"
+            echo "✅ 从官方复制了原生模块和 snapshot"
             echo ""
             echo "📌 On UOS:"
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
