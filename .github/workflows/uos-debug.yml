@@ -228,24 +228,38 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 1. 查找真正的二进制文件
+          # 1. 查找真正的二进制文件（排除 chrome_crashpad_handler）
           echo ""
           echo "📌 1. 查找真正的二进制文件..."
 
-          EXEC_NAMES=("code" "code-oss" "tscode.real")
+          # 先检查已知名称
           REAL_EXEC=""
-
-          for name in "${EXEC_NAMES[@]}"; do
+          for name in "tscode.real" "code" "code-oss"; do
             if [ -f "$BUILD_DIR/$name" ] && [ -x "$BUILD_DIR/$name" ]; then
-              REAL_EXEC="$BUILD_DIR/$name"
-              echo "   ✅ 找到可执行文件: $name"
-              break
+              # 排除 chrome_crashpad_handler（它也是可执行的，但不是 VSCode）
+              if [ "$name" != "chrome_crashpad_handler" ]; then
+                REAL_EXEC="$BUILD_DIR/$name"
+                echo "   ✅ 找到可执行文件: $name"
+                break
+              fi
             fi
           done
 
+          # 如果没找到，搜索所有可执行文件（排除 chrome_crashpad_handler）
           if [ -z "$REAL_EXEC" ]; then
             echo "   ⚠️ 未找到已知名称，搜索所有可执行文件..."
-            REAL_EXEC=$(find "$BUILD_DIR" -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
+            # 排除: *.so, *.sh, chrome_crashpad_handler, chrome-sandbox
+            REAL_EXEC=$(find "$BUILD_DIR" -maxdepth 1 -type f -executable \
+              ! -name "*.so" \
+              ! -name "*.sh" \
+              ! -name "chrome_crashpad_handler" \
+              ! -name "chrome-sandbox" \
+              ! -name "libEGL.so" \
+              ! -name "libGLESv2.so" \
+              ! -name "libffmpeg.so" \
+              ! -name "libvk_swiftshader.so" \
+              ! -name "libvulkan.so.1" \
+              2>/dev/null | head -1)
             if [ -n "$REAL_EXEC" ]; then
               echo "   ✅ 找到: $(basename $REAL_EXEC)"
             fi
@@ -291,36 +305,33 @@ jobs:
             echo "   ✅ 备份 product.json"
           fi
 
-          # 4. 【关键】从用户构建目录复制 snapshot 文件（匹配自定义二进制版本）
+          # 4. 【关键】从用户构建目录复制 snapshot 文件
           echo ""
           echo "📌 4. 从用户构建目录复制 snapshot 文件..."
           echo "   （匹配自定义二进制版本，避免 V8 不匹配）"
 
-          # 查找用户构建目录中的 snapshot
-          USER_SNAPSHOT=""
-          for path in "$BUILD_DIR/../VSCode-linux-x64" "$BUILD_DIR" "./VSCode-linux-x64"; do
-            if [ -f "$path/snapshot_blob.bin" ]; then
-              USER_SNAPSHOT="$path"
-              echo "   ✅ 找到用户构建 snapshot: $USER_SNAPSHOT"
-              break
-            fi
-          done
-
-          if [ -n "$USER_SNAPSHOT" ]; then
-            cp "$USER_SNAPSHOT/snapshot_blob.bin" "$BUILD_DIR/"
-            cp "$USER_SNAPSHOT/v8_context_snapshot.bin" "$BUILD_DIR/"
-            echo "   ✅ 复制用户构建的 snapshot 文件"
+          # 查找用户构建目录中的 snapshot（在构建目录本身）
+          if [ -f "$BUILD_DIR/snapshot_blob.bin" ]; then
+            echo "   ✅ snapshot_blob.bin 已存在，保留"
+            # 不需要复制，已经是用户构建的
           else
-            echo "   ⚠️ 找不到用户构建 snapshot，从官方下载..."
-            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
-            tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
-            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-            if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
-              cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
-              cp "$OFFICIAL_DIR/v8_context_snapshot.bin" "$BUILD_DIR/"
-              echo "   ✅ 复制官方 snapshot（可能版本不匹配）"
+            echo "   ⚠️ snapshot_blob.bin 不存在，尝试从其他位置查找..."
+            # 查找父目录中的 snapshot
+            FOUND_SNAPSHOT=""
+            for path in "../VSCode-linux-x64" "../../VSCode-linux-x64" "../vscode/VSCode-linux-x64"; do
+              if [ -f "$path/snapshot_blob.bin" ]; then
+                FOUND_SNAPSHOT="$path"
+                echo "   ✅ 找到 snapshot: $FOUND_SNAPSHOT"
+                break
+              fi
+            done
+            if [ -n "$FOUND_SNAPSHOT" ]; then
+              cp "$FOUND_SNAPSHOT/snapshot_blob.bin" "$BUILD_DIR/"
+              cp "$FOUND_SNAPSHOT/v8_context_snapshot.bin" "$BUILD_DIR/"
+              echo "   ✅ 复制 snapshot 文件"
+            else
+              echo "   ❌ 找不到 snapshot 文件"
             fi
-            rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
           fi
 
           # 5. 【关键】从用户构建目录复制原生模块
@@ -374,18 +385,23 @@ jobs:
             echo "   ❌ 找不到用户 node_modules"
           fi
 
-          # 6. 从官方复制 chrome-sandbox
+          # 6. 从官方复制 chrome-sandbox（如果需要）
           echo ""
-          echo "📌 6. 从官方复制 chrome-sandbox..."
-          wget -q https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
-          tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
-          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-          if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
-            cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
-            chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
-            echo "   ✅ 复制 chrome-sandbox"
+          echo "📌 6. 确保 chrome-sandbox 存在..."
+          if [ ! -f "$BUILD_DIR/chrome-sandbox" ]; then
+            echo "   ⚠️ chrome-sandbox 不存在，从官方下载..."
+            wget -q https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
+            tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
+            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+            if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
+              cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
+              chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
+              echo "   ✅ 复制 chrome-sandbox"
+            fi
+            rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
+          else
+            echo "   ✅ chrome-sandbox 已存在"
           fi
-          rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
 
           # 7. 恢复自定义二进制
           echo ""
@@ -649,10 +665,6 @@ jobs:
           done
 
           echo ""
-          echo "📌 Snapshot 版本验证:"
-          strings $BUILD_DIR/snapshot_blob.bin 2>/dev/null | grep -E "electron|Chrome" | head -3 || echo "   ⚠️ 无法读取版本"
-
-          echo ""
           echo "📌 自定义二进制:"
           ls -la $BUILD_DIR | grep tscode
 
@@ -685,7 +697,7 @@ jobs:
             echo ""
             echo "✅ 保留了自定义二进制（包含所有二次开发修改）"
             echo "✅ 从用户构建目录复制了原生模块"
-            echo "✅ 从用户构建目录复制了 snapshot（版本匹配）"
+            echo "✅ 保留用户构建的 snapshot（版本匹配）"
             echo ""
             echo "📌 On UOS:"
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
