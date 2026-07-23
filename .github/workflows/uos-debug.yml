@@ -228,25 +228,52 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 1. 检查自定义二进制
+          # 1. 查找真正的二进制文件
           echo ""
-          echo "📌 1. 检查自定义二进制..."
-          if [ -f "$BUILD_DIR/code" ]; then
-            echo "   ✅ 找到 code 文件"
-            mv "$BUILD_DIR/code" "$BUILD_DIR/tscode.real"
-            echo "   ✅ 重命名为 tscode.real"
-          elif [ -f "$BUILD_DIR/tscode.real" ]; then
-            echo "   ✅ 找到 tscode.real"
-          else
+          echo "📌 1. 查找真正的二进制文件..."
+
+          # 可能的名字
+          EXEC_NAMES=("code" "code-oss" "tscode.real")
+          REAL_EXEC=""
+
+          for name in "${EXEC_NAMES[@]}"; do
+            if [ -f "$BUILD_DIR/$name" ] && [ -x "$BUILD_DIR/$name" ]; then
+              REAL_EXEC="$BUILD_DIR/$name"
+              echo "   ✅ 找到可执行文件: $name"
+              break
+            fi
+          done
+
+          # 如果没找到，查找所有可执行文件
+          if [ -z "$REAL_EXEC" ]; then
+            echo "   ⚠️ 未找到已知名称，搜索所有可执行文件..."
+            REAL_EXEC=$(find "$BUILD_DIR" -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
+            if [ -n "$REAL_EXEC" ]; then
+              echo "   ✅ 找到: $(basename $REAL_EXEC)"
+            fi
+          fi
+
+          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "   ❌ 找不到任何可执行文件！"
-            echo "   搜索所有可执行文件..."
-            find "$BUILD_DIR" -maxdepth 1 -type f -executable 2>/dev/null | head -10
+            echo "   当前目录内容:"
+            ls -la "$BUILD_DIR"
             exit 1
           fi
 
-          # 2. 备份自定义二进制和配置文件
+          # 2. 重命名为 tscode.real
           echo ""
-          echo "📌 2. 备份自定义文件..."
+          echo "📌 2. 重命名为 tscode.real..."
+          if [ "$(basename $REAL_EXEC)" != "tscode.real" ]; then
+            mv "$REAL_EXEC" "$BUILD_DIR/tscode.real"
+            echo "   ✅ 重命名 $(basename $REAL_EXEC) -> tscode.real"
+          else
+            echo "   ✅ 已经是 tscode.real"
+          fi
+          chmod +x "$BUILD_DIR/tscode.real"
+
+          # 3. 备份自定义二进制和配置文件
+          echo ""
+          echo "📌 3. 备份自定义文件..."
           mkdir -p /tmp/backup-custom
 
           if [ -f "$BUILD_DIR/tscode.real" ]; then
@@ -266,9 +293,9 @@ jobs:
             echo "   ✅ 备份 product.json"
           fi
 
-          # 3. 下载官方 tar.gz
+          # 4. 下载官方 tar.gz
           echo ""
-          echo "📌 3. 下载官方 tar.gz..."
+          echo "📌 4. 下载官方 tar.gz..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
 
           if [ ! -f "/tmp/code.tar.gz" ]; then
@@ -289,9 +316,9 @@ jobs:
 
           echo "✅ 找到官方目录: $OFFICIAL_DIR"
 
-          # 4. 从官方复制原生模块到构建目录
+          # 5. 从官方复制原生模块
           echo ""
-          echo "📌 4. 从官方复制原生模块..."
+          echo "📌 5. 从官方复制原生模块..."
 
           OFFICIAL_NODE_MODULES=""
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
@@ -330,9 +357,9 @@ jobs:
             fi
           done
 
-          # 5. 从官方复制 snapshot 文件
+          # 6. 从官方复制 snapshot 文件
           echo ""
-          echo "📌 5. 从官方复制 snapshot 文件..."
+          echo "📌 6. 从官方复制 snapshot 文件..."
           if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
             cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
             echo "   ✅ 复制 snapshot_blob.bin"
@@ -342,18 +369,18 @@ jobs:
             echo "   ✅ 复制 v8_context_snapshot.bin"
           fi
 
-          # 6. 从官方复制 chrome-sandbox
+          # 7. 从官方复制 chrome-sandbox
           echo ""
-          echo "📌 6. 从官方复制 chrome-sandbox..."
+          echo "📌 7. 从官方复制 chrome-sandbox..."
           if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
             cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
             chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
             echo "   ✅ 复制 chrome-sandbox"
           fi
 
-          # 7. 恢复自定义二进制
+          # 8. 恢复自定义二进制
           echo ""
-          echo "📌 7. 恢复自定义二进制..."
+          echo "📌 8. 恢复自定义二进制..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/"
             chmod +x "$BUILD_DIR/tscode.real"
@@ -365,9 +392,9 @@ jobs:
             echo "   ✅ 恢复 tscode"
           fi
 
-          # 8. 恢复配置文件
+          # 9. 恢复配置文件
           echo ""
-          echo "📌 8. 恢复配置文件..."
+          echo "📌 9. 恢复配置文件..."
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
             echo "   ✅ 恢复 package.json"
@@ -377,12 +404,12 @@ jobs:
             echo "   ✅ 恢复 product.json"
           fi
 
-          # 9. 清理
+          # 10. 清理
           rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup-custom
 
-          # 10. 最终验证
+          # 11. 最终验证
           echo ""
-          echo "📌 9. 最终验证:"
+          echo "📌 10. 最终验证:"
 
           echo "   自定义二进制:"
           ls -la "$BUILD_DIR" | grep -E "tscode" || echo "   ❌ 找不到 tscode 文件"
@@ -418,7 +445,6 @@ jobs:
           if [ -d "./prebuilt-extensions" ]; then
             echo "✅ 找到 prebuilt-extensions 目录"
 
-            # 查找 testagent
             VSIX_FILE=""
             for pattern in "./prebuilt-extensions/linux/x64/testagent*.vsix" "./prebuilt-extensions/*testagent*.vsix"; do
               FOUND=$(ls -1 $pattern 2>/dev/null | head -1)
@@ -440,7 +466,6 @@ jobs:
               echo "   ✅ test-tech.TestAgent 已安装"
             fi
 
-            # 解压其他扩展
             declare -A EXTS=(
               ["cweijan.vscode-office"]="cweijan.vscode-office-4.1.5.vsix"
               ["test-tech.beeeyes"]="test-tech.beeeyes-0.0.1.vsix"
@@ -476,7 +501,6 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
-          # 检查 tscode.real 是否存在
           if [ ! -f "./tscode.real" ]; then
             echo "❌ tscode.real 不存在！"
             echo "当前目录内容:"
@@ -484,10 +508,8 @@ jobs:
             exit 1
           fi
 
-          # 确保可执行
           chmod +x tscode.real
 
-          # 创建 tscode 包装脚本
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -524,7 +546,6 @@ jobs:
 
           chmod +x tscode
 
-          # 创建 start-vscode.sh
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -562,7 +583,6 @@ jobs:
 
           chmod +x start-vscode.sh
 
-          # 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -579,9 +599,6 @@ jobs:
           EOF
 
           echo "✅ 双击运行版本创建完成"
-          echo ""
-          echo "📁 目录内容:"
-          ls -la | head -20
 
       # ============================================================
       # 15. 打包
