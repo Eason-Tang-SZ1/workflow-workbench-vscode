@@ -228,7 +228,7 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 1. 先确认自定义二进制存在
+          # 1. 检查自定义二进制
           echo ""
           echo "📌 1. 检查自定义二进制..."
           if [ -f "$BUILD_DIR/code" ]; then
@@ -244,12 +244,11 @@ jobs:
             exit 1
           fi
 
-          # 2. 备份自定义文件
+          # 2. 备份自定义二进制和配置文件
           echo ""
           echo "📌 2. 备份自定义文件..."
           mkdir -p /tmp/backup-custom
 
-          # 备份自定义二进制
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
             echo "   ✅ 备份 tscode.real"
@@ -258,8 +257,6 @@ jobs:
             cp "$BUILD_DIR/tscode" /tmp/backup-custom/
             echo "   ✅ 备份 tscode"
           fi
-
-          # 备份配置文件
           if [ -f "$BUILD_DIR/package.json" ]; then
             cp "$BUILD_DIR/package.json" /tmp/backup-custom/
             echo "   ✅ 备份 package.json"
@@ -292,11 +289,10 @@ jobs:
 
           echo "✅ 找到官方目录: $OFFICIAL_DIR"
 
-          # 4. 从官方复制原生模块
+          # 4. 从官方复制原生模块到构建目录
           echo ""
           echo "📌 4. 从官方复制原生模块..."
 
-          # 找到官方 node_modules
           OFFICIAL_NODE_MODULES=""
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
             OFFICIAL_NODE_MODULES="$OFFICIAL_DIR/resources/app/node_modules"
@@ -330,23 +326,7 @@ jobs:
               NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
               echo "   ✅ $module 复制成功 ($NODE_FILES 个 .node 文件)"
             else
-              echo "   ❌ 找不到 $module，从用户构建目录尝试..."
-              USER_NODE_MODULES=""
-              for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules"; do
-                if [ -d "$path" ]; then
-                  USER_NODE_MODULES="$path"
-                  break
-                fi
-              done
-              if [ -n "$USER_NODE_MODULES" ] && [ -d "$USER_NODE_MODULES/$module" ]; then
-                TARGET_DIR="$BUILD_DIR/resources/app/node_modules/$(dirname $module 2>/dev/null || echo $module)"
-                mkdir -p "$TARGET_DIR"
-                rm -rf "$TARGET_DIR/$(basename $module)" 2>/dev/null
-                cp -r "$USER_NODE_MODULES/$module" "$TARGET_DIR/"
-                echo "   ✅ $module 从用户目录复制成功"
-              else
-                echo "   ❌ 找不到 $module"
-              fi
+              echo "   ❌ 找不到 $module"
             fi
           done
 
@@ -421,9 +401,6 @@ jobs:
           echo ""
           echo "   Snapshot 文件:"
           ls -la "$BUILD_DIR" | grep -E "snapshot" || echo "   ❌ 找不到 snapshot 文件"
-
-          # 确保 tscode.real 可执行
-          chmod +x "$BUILD_DIR/tscode.real" 2>/dev/null || true
 
       # ============================================================
       # 13. 查找并复制预构建扩展
@@ -510,9 +487,8 @@ jobs:
           # 确保可执行
           chmod +x tscode.real
 
-          # 创建 tscode 包装脚本（如果不存在）
-          if [ ! -f "./tscode" ]; then
-            cat > tscode << 'WRAPPER_EOF'
+          # 创建 tscode 包装脚本
+          cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -545,9 +521,8 @@ jobs:
               --user-data-dir="$USER_DATA_DIR" \
               "$@"
           WRAPPER_EOF
-            chmod +x tscode
-            echo "✅ 创建 tscode 包装脚本"
-          fi
+
+          chmod +x tscode
 
           # 创建 start-vscode.sh
           cat > start-vscode.sh << 'START_EOF'
