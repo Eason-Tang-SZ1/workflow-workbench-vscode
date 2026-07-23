@@ -233,7 +233,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 从官方 tar.gz 复制内容，保留自定义二进制
+      # 12. 从官方 tar.gz 复制所有内容，使用官方二进制
       # ============================================================
       - name: 📥 Extract official tar.gz and merge
         run: |
@@ -270,101 +270,63 @@ jobs:
           echo "📌 官方目录内容:"
           ls -la "$OFFICIAL_DIR"
 
-          # 保存用户构建的二进制文件和关键文件
-          echo ""
-          echo "📌 保存用户构建的文件..."
-          mkdir -p /tmp/backup
-
-          # 保存二进制文件
-          if [ -f "$BUILD_DIR/tscode" ]; then
-            cp "$BUILD_DIR/tscode" /tmp/backup/
-            echo "   ✅ 备份 tscode"
-          fi
-          if [ -f "$BUILD_DIR/tscode.real" ]; then
-            cp "$BUILD_DIR/tscode.real" /tmp/backup/
-            echo "   ✅ 备份 tscode.real"
-          fi
-
-          # 保存 package.json 和 product.json（如果有修改）
-          if [ -f "$BUILD_DIR/package.json" ]; then
-            cp "$BUILD_DIR/package.json" /tmp/backup/
-            echo "   ✅ 备份 package.json"
-          fi
-          if [ -f "$BUILD_DIR/product.json" ]; then
-            cp "$BUILD_DIR/product.json" /tmp/backup/
-            echo "   ✅ 备份 product.json"
-          fi
-
           # 清空当前构建目录（保留目录本身）
           echo ""
           echo "📌 清空当前构建目录..."
           find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "$BUILD_DIR"/*
 
-          # 复制官方所有内容
+          # 复制官方所有内容（包括二进制文件）
           echo ""
           echo "📌 复制官方所有内容..."
           cp -r "$OFFICIAL_DIR"/* "$BUILD_DIR/"
 
           # ============================================================
-          # 【关键】恢复用户构建的二进制文件，但使用官方的 snapshot
+          # 【关键】使用官方二进制文件
           # ============================================================
           echo ""
-          echo "📌 恢复用户构建的文件..."
+          echo "📌 使用官方二进制文件..."
 
-          # 恢复二进制文件
-          if [ -f "/tmp/backup/tscode.real" ]; then
-            cp /tmp/backup/tscode.real "$BUILD_DIR/"
-            echo "   ✅ 恢复 tscode.real (自定义构建)"
-          fi
-          if [ -f "/tmp/backup/tscode" ]; then
-            cp /tmp/backup/tscode "$BUILD_DIR/"
-            echo "   ✅ 恢复 tscode (包装脚本)"
-          fi
-
-          # 恢复 product.json（如果有自定义）
-          if [ -f "/tmp/backup/product.json" ]; then
-            cp /tmp/backup/product.json "$BUILD_DIR/"
-            echo "   ✅ 恢复 product.json (自定义)"
+          # 官方二进制文件是 code，重命名为 tscode.real
+          if [ -f "$BUILD_DIR/code" ]; then
+            mv "$BUILD_DIR/code" "$BUILD_DIR/tscode.real"
+            echo "   ✅ 重命名 code -> tscode.real"
+          elif [ -f "$BUILD_DIR/code-oss" ]; then
+            mv "$BUILD_DIR/code-oss" "$BUILD_DIR/tscode.real"
+            echo "   ✅ 重命名 code-oss -> tscode.real"
+          else
+            echo "   ❌ 找不到官方二进制文件"
+            exit 1
           fi
 
-          # 恢复 package.json（如果有自定义）
-          if [ -f "/tmp/backup/package.json" ]; then
-            cp /tmp/backup/package.json "$BUILD_DIR/"
-            echo "   ✅ 恢复 package.json (自定义)"
-          fi
+          # 确保 tscode.real 可执行
+          chmod +x "$BUILD_DIR/tscode.real"
 
           # ============================================================
-          # 【关键修复1】使用官方的 snapshot 文件（解决 V8 版本不匹配）
+          # 【关键】复制 package.json 和 product.json 到根目录
           # ============================================================
           echo ""
-          echo "📌 使用官方的 snapshot 文件（修复 V8 版本不匹配）..."
+          echo "📌 复制 package.json 和 product.json 到根目录..."
 
-          # 从官方目录复制 snapshot 文件
-          if [ -f "$OFFICIAL_DIR/snapshot_blob.bin" ]; then
-            cp "$OFFICIAL_DIR/snapshot_blob.bin" "$BUILD_DIR/"
-            echo "   ✅ 使用官方 snapshot_blob.bin"
+          if [ -f "$BUILD_DIR/resources/app/package.json" ]; then
+            cp "$BUILD_DIR/resources/app/package.json" "$BUILD_DIR/"
+            echo "   ✅ 复制 package.json 到根目录"
           else
-            echo "   ⚠️ 官方 snapshot_blob.bin 不存在"
+            echo "   ⚠️ resources/app/package.json 不存在"
           fi
 
-          if [ -f "$OFFICIAL_DIR/v8_context_snapshot.bin" ]; then
-            cp "$OFFICIAL_DIR/v8_context_snapshot.bin" "$BUILD_DIR/"
-            echo "   ✅ 使用官方 v8_context_snapshot.bin"
+          if [ -f "$BUILD_DIR/resources/app/product.json" ]; then
+            cp "$BUILD_DIR/resources/app/product.json" "$BUILD_DIR/"
+            echo "   ✅ 复制 product.json 到根目录"
           else
-            echo "   ⚠️ 官方 v8_context_snapshot.bin 不存在"
+            echo "   ⚠️ resources/app/product.json 不存在"
           fi
 
-          # 从官方目录复制其他必要的二进制文件（如果用户构建的缺失）
-          if [ ! -f "/tmp/backup/tscode.real" ]; then
-            if [ -f "$OFFICIAL_DIR/code" ]; then
-              cp "$OFFICIAL_DIR/code" "$BUILD_DIR/tscode.real"
-              echo "   ⚠️ 使用官方 code 作为 tscode.real (用户构建不存在)"
-            fi
-          fi
-
-          # 确保 node_modules 在正确位置
+          # ============================================================
+          # 【关键】确保 node_modules 在正确位置
+          # ============================================================
           echo ""
           echo "📌 处理 node_modules..."
+
           if [ -d "$BUILD_DIR/node_modules" ]; then
             echo "📌 移动 node_modules 到 resources/app/..."
             mkdir -p "$BUILD_DIR/resources/app"
@@ -387,69 +349,33 @@ jobs:
           fi
 
           # ============================================================
-          # 【关键修复2】将 package.json 和 product.json 复制到根目录
+          # 【关键】确认官方原生模块已复制
           # ============================================================
           echo ""
-          echo "📌 复制 package.json 和 product.json 到根目录（修复启动问题）..."
-
-          # 从 resources/app 复制到根目录
-          if [ -f "$BUILD_DIR/resources/app/package.json" ]; then
-            cp "$BUILD_DIR/resources/app/package.json" "$BUILD_DIR/"
-            echo "   ✅ 复制 package.json 到根目录"
-          else
-            echo "   ⚠️ resources/app/package.json 不存在"
-          fi
-
-          if [ -f "$BUILD_DIR/resources/app/product.json" ]; then
-            cp "$BUILD_DIR/resources/app/product.json" "$BUILD_DIR/"
-            echo "   ✅ 复制 product.json 到根目录"
-          else
-            echo "   ⚠️ resources/app/product.json 不存在"
-          fi
-
-          # 验证根目录文件
-          echo ""
-          echo "📌 验证根目录文件:"
-          ls -la "$BUILD_DIR" | grep -E "package.json|product.json" || echo "   ⚠️ 根目录没有 package.json/product.json"
-
-          # ============================================================
-          # 【关键修复3】复制原生模块
-          # ============================================================
-          echo ""
-          echo "📌 复制原生模块..."
+          echo "📌 验证官方原生模块:"
 
           NATIVE_MODULES=(
+            "node-pty"
             "@vscode/spdlog"
             "@vscode/sqlite3"
             "native-keymap"
-            "node-pty"
           )
 
-          TARGET_NODE_MODULES="$BUILD_DIR/resources/app/node_modules"
-          mkdir -p "$TARGET_NODE_MODULES"
-
           for module in "${NATIVE_MODULES[@]}"; do
-            # 从用户构建目录复制
-            if [ -d "$BUILD_DIR/../node_modules/$module" ]; then
-              mkdir -p "$TARGET_NODE_MODULES/$(dirname $module)"
-              cp -r "$BUILD_DIR/../node_modules/$module" "$TARGET_NODE_MODULES/$(dirname $module)/"
-              echo "   ✅ 复制 $module"
-            # 从官方目录复制
-            elif [ -d "$OFFICIAL_DIR/resources/app/node_modules/$module" ]; then
-              mkdir -p "$TARGET_NODE_MODULES/$(dirname $module)"
-              cp -r "$OFFICIAL_DIR/resources/app/node_modules/$module" "$TARGET_NODE_MODULES/$(dirname $module)/"
-              echo "   ✅ 从官方复制 $module"
-            elif [ -d "$OFFICIAL_DIR/node_modules/$module" ]; then
-              mkdir -p "$TARGET_NODE_MODULES/$(dirname $module)"
-              cp -r "$OFFICIAL_DIR/node_modules/$module" "$TARGET_NODE_MODULES/$(dirname $module)/"
-              echo "   ✅ 从官方复制 $module"
+            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
+              NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
+              if [ "$NODE_FILES" -gt 0 ]; then
+                echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
+              else
+                echo "   ⚠️ $module (存在但无 .node 文件)"
+              fi
             else
-              echo "   ⚠️ 未找到 $module"
+              echo "   ❌ $module (缺失)"
             fi
           done
 
           # 清理
-          rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup
+          rm -rf /tmp/code-tar /tmp/code.tar.gz
 
           # ============================================================
           # 最终验证
@@ -458,18 +384,18 @@ jobs:
           echo "📌 最终验证:"
 
           echo "   根目录文件:"
-          ls -la "$BUILD_DIR" | grep -E "tscode|package.json|product.json|snapshot" || echo "   ⚠️ 文件缺失"
+          ls -la "$BUILD_DIR" | grep -E "tscode|package.json|product.json|snapshot"
 
           echo ""
           echo "   resources/app 文件:"
-          ls -la "$BUILD_DIR/resources/app" | grep -E "package.json|product.json" || echo "   ⚠️ 文件缺失"
+          ls -la "$BUILD_DIR/resources/app" | grep -E "package.json|product.json"
 
           echo ""
           echo "   extensions 数量:"
           ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l
 
           echo ""
-          echo "   node-pty:"
+          echo "   node-pty 原生模块:"
           ls -la "$BUILD_DIR/resources/app/node_modules/node-pty" 2>/dev/null | head -5 || echo "   ⚠️ node-pty 不存在"
 
           echo ""
@@ -504,6 +430,9 @@ jobs:
 
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             echo "   ✅ tscode.real 存在"
+            # 检查版本
+            echo "   版本信息:"
+            strings "$BUILD_DIR/tscode.real" | grep -E "Electron|Chrome" | head -3 || echo "   ⚠️ 无法读取版本"
           fi
 
           if [ -f "$BUILD_DIR/snapshot_blob.bin" ]; then
@@ -638,6 +567,8 @@ jobs:
             fi
           fi
 
+          chmod +x tscode.real
+
           # 创建 tscode 包装脚本
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
@@ -674,9 +605,8 @@ jobs:
           WRAPPER_EOF
 
           chmod +x tscode
-          chmod +x tscode.real 2>/dev/null || true
 
-          # 创建启动脚本
+          # 创建 start-vscode.sh
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -752,7 +682,7 @@ jobs:
             * MS-CEINTL.vscode-language-pack-zh-hans
             * test-tech.TestAgent
 
-          ⚠️ 离线环境支持：
+          ⚠️ 使用官方 VSCode 二进制，兼容性最佳
           所有原生模块已包含在包中
           ==========================================
           EOF
@@ -773,6 +703,7 @@ jobs:
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+          chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
 
           echo ""
           echo "📌 打包前验证:"
@@ -857,4 +788,7 @@ jobs:
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
             echo "   2. cd VSCode-linux-x64"
             echo "   3. ./tscode"
+            echo ""
+            echo "✅ 使用官方二进制 + 官方原生模块"
+            echo "   兼容性最佳，开箱即用"
           fi
