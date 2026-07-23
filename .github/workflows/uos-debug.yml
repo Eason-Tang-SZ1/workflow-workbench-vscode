@@ -286,7 +286,6 @@ jobs:
           echo ""
           echo "📌 使用官方二进制文件..."
 
-          # 官方二进制文件是 code，重命名为 tscode.real
           if [ -f "$BUILD_DIR/code" ]; then
             mv "$BUILD_DIR/code" "$BUILD_DIR/tscode.real"
             echo "   ✅ 重命名 code -> tscode.real"
@@ -298,47 +297,27 @@ jobs:
             exit 1
           fi
 
-          # 确保 tscode.real 可执行
           chmod +x "$BUILD_DIR/tscode.real"
 
           # ============================================================
-          # 【关键】复制 package.json 和 product.json 到根目录
+          # 【关键】确保 node_modules 在 resources/app/ 下
           # ============================================================
           echo ""
-          echo "📌 复制 package.json 和 product.json 到根目录..."
+          echo "📌 确保 node_modules 在正确位置..."
 
-          if [ -f "$BUILD_DIR/resources/app/package.json" ]; then
-            cp "$BUILD_DIR/resources/app/package.json" "$BUILD_DIR/"
-            echo "   ✅ 复制 package.json 到根目录"
-          else
-            echo "   ⚠️ resources/app/package.json 不存在"
-          fi
-
-          if [ -f "$BUILD_DIR/resources/app/product.json" ]; then
-            cp "$BUILD_DIR/resources/app/product.json" "$BUILD_DIR/"
-            echo "   ✅ 复制 product.json 到根目录"
-          else
-            echo "   ⚠️ resources/app/product.json 不存在"
-          fi
-
-          # ============================================================
-          # 【关键】确保 node_modules 在正确位置
-          # ============================================================
-          echo ""
-          echo "📌 处理 node_modules..."
-
+          # 检查 node_modules 位置
           if [ -d "$BUILD_DIR/node_modules" ]; then
-            echo "📌 移动 node_modules 到 resources/app/..."
+            echo "   📌 移动 node_modules 到 resources/app/..."
             mkdir -p "$BUILD_DIR/resources/app"
             mv "$BUILD_DIR/node_modules" "$BUILD_DIR/resources/app/"
             echo "   ✅ node_modules 已移动到 resources/app/"
           fi
 
-          if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
-            echo "   ✅ resources/app/node_modules 存在"
-          else
+          # 如果 resources/app/node_modules 不存在，从官方复制
+          if [ ! -d "$BUILD_DIR/resources/app/node_modules" ]; then
             echo "   ⚠️ resources/app/node_modules 不存在，尝试从官方复制..."
             if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
+              mkdir -p "$BUILD_DIR/resources/app"
               cp -r "$OFFICIAL_DIR/resources/app/node_modules" "$BUILD_DIR/resources/app/"
               echo "   ✅ 从官方复制 node_modules"
             elif [ -d "$OFFICIAL_DIR/node_modules" ]; then
@@ -349,10 +328,10 @@ jobs:
           fi
 
           # ============================================================
-          # 【关键】确认官方原生模块已复制
+          # 【关键】验证原生模块是否存在
           # ============================================================
           echo ""
-          echo "📌 验证官方原生模块:"
+          echo "📌 验证原生模块..."
 
           NATIVE_MODULES=(
             "node-pty"
@@ -373,6 +352,26 @@ jobs:
               echo "   ❌ $module (缺失)"
             fi
           done
+
+          # ============================================================
+          # 【关键】复制 package.json 和 product.json 到根目录
+          # ============================================================
+          echo ""
+          echo "📌 复制 package.json 和 product.json 到根目录..."
+
+          if [ -f "$BUILD_DIR/resources/app/package.json" ]; then
+            cp "$BUILD_DIR/resources/app/package.json" "$BUILD_DIR/"
+            echo "   ✅ 复制 package.json 到根目录"
+          else
+            echo "   ⚠️ resources/app/package.json 不存在"
+          fi
+
+          if [ -f "$BUILD_DIR/resources/app/product.json" ]; then
+            cp "$BUILD_DIR/resources/app/product.json" "$BUILD_DIR/"
+            echo "   ✅ 复制 product.json 到根目录"
+          else
+            echo "   ⚠️ resources/app/product.json 不存在"
+          fi
 
           # 清理
           rm -rf /tmp/code-tar /tmp/code.tar.gz
@@ -430,9 +429,6 @@ jobs:
 
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             echo "   ✅ tscode.real 存在"
-            # 检查版本
-            echo "   版本信息:"
-            strings "$BUILD_DIR/tscode.real" | grep -E "Electron|Chrome" | head -3 || echo "   ⚠️ 无法读取版本"
           fi
 
           if [ -f "$BUILD_DIR/snapshot_blob.bin" ]; then
@@ -492,7 +488,6 @@ jobs:
             unzip -q "$VSIX_FILE" -d "$TARGET_DIR/test-tech.TestAgent"
             echo "   ✅ 解压完成"
 
-            # 处理 extension 子目录
             if [ -d "$TARGET_DIR/test-tech.TestAgent/extension" ]; then
               mv "$TARGET_DIR/test-tech.TestAgent/extension"/* "$TARGET_DIR/test-tech.TestAgent/"
               rm -rf "$TARGET_DIR/test-tech.TestAgent/extension"
@@ -506,7 +501,6 @@ jobs:
           echo ""
           echo "📌 解压其他预构建扩展..."
 
-          # 定义扩展列表
           declare -A EXTS=(
             ["cweijan.vscode-office"]="cweijan.vscode-office-4.1.5.vsix"
             ["test-tech.beeeyes"]="test-tech.beeeyes-0.0.1.vsix"
@@ -787,7 +781,8 @@ jobs:
             echo "📌 On UOS:"
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
             echo "   2. cd VSCode-linux-x64"
-            echo "   3. ./tscode"
+            echo "   3. sudo chown root chrome-sandbox && sudo chmod 4755 chrome-sandbox  # if needed"
+            echo "   4. ./tscode"
             echo ""
             echo "✅ 使用官方二进制 + 官方原生模块"
             echo "   兼容性最佳，开箱即用"
