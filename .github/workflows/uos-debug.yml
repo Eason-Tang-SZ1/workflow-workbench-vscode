@@ -739,4 +739,4 @@ jobs:
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
             echo "   2. cd VSCode-linux-x64"
             echo "   3. ./tscode"
-          fi
+          fis
