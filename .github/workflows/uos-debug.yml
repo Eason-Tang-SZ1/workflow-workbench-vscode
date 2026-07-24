@@ -41,9 +41,9 @@ jobs:
 
       - name: 🔧 Fix TypeScript scripts
         run: |
-          echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
+          echo 'console.log("Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-          echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
+          echo 'console.log("Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
       - name: 📦 Install dependencies
@@ -80,7 +80,7 @@ jobs:
           export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
           export function fromMarketplace(): any[] { return empty; }
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
+            console.log("fetchUrls: disabled");
             return Promise.resolve();
           }
           export function buildExtensionMedia(): void {}
@@ -97,7 +97,7 @@ jobs:
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
           echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
+            console.log("fetchUrls: disabled");
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
@@ -112,18 +112,18 @@ jobs:
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
           with open('build/gulpfile.vscode.ts', 'w') as f:
               f.write(content)
-          print("✅ spawn calls fixed")
+          print("spawn calls fixed")
           PY_END
 
       - name: 🔧 Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
-              console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
+              console.log('Copilot extension shims preparation skipped for UOS build');
               return;
           }
           export function copyCopilotNativeDeps(productRoot: string): void {
-              console.log('⚠️ Copilot native deps copy skipped for UOS build');
+              console.log('Copilot native deps copy skipped for UOS build');
           }
           export function getCopilotExcludeFilter(): any {
               return function() { return false; };
@@ -132,10 +132,7 @@ jobs:
 
       - name: 🔧 Disable Crashpad
         run: |
-          echo "=========================================="
-          echo "🔧 禁用 Crashpad"
-          echo "=========================================="
-
+          echo "Disabling Crashpad"
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -148,7 +145,7 @@ jobs:
               data['crashReporter']['disabled'] = True
               with open('product.json', 'w') as f:
                   json.dump(data, f, indent=2)
-              print("✅ product.json 已修改")
+              print("product.json modified")
           PY_JSON_END
 
           mkdir -p src/vs/platform/crash/common
@@ -157,17 +154,15 @@ jobs:
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
            *--------------------------------------------------------------------------------------------*/
-          // DISABLED: Crash service for UOS build
           import { createDecorator } from '../../../base/common/instantiation.js';
           export const ICrashService = createDecorator<ICrashService>('crashService');
           export interface ICrashService { _serviceBrand: undefined; }
           export class CrashService implements ICrashService {
               declare readonly _serviceBrand: undefined;
-              constructor() { console.log('⚠️ Crash service disabled for UOS build'); }
+              constructor() { console.log('Crash service disabled for UOS build'); }
           }
           CRASH_EOF
-          echo "✅ crashService.ts 已创建"
-          echo "✅ Crashpad 已禁用"
+          echo "crashService.ts created"
 
       - name: ⚙️ Set env
         run: |
@@ -193,282 +188,168 @@ jobs:
 
       - name: 🔍 Verify build contents
         run: |
-          echo "=========================================="
-          echo "🔍 验证构建产物"
-          echo "=========================================="
-
+          echo "Verifying build contents"
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
-              echo "✅ 找到构建目录: $BUILD_DIR"
+              echo "Found build directory: $BUILD_DIR"
               break
             fi
           done
-
           if [ -z "$BUILD_DIR" ]; then
-            echo "❌ 找不到构建目录!"
+            echo "Build directory not found!"
             exit 1
           fi
-
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-
-          echo ""
-          echo "📌 构建目录内容:"
           ls -la "$BUILD_DIR"
 
-          echo ""
-          echo "📌 extensions 数量:"
-          ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l || echo "0"
-
-          echo ""
-          echo "📌 out/vs 是否存在:"
-          if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
-            echo "   ✅ out/vs 存在"
-          else
-            echo "   ❌ out/vs 不存在"
-          fi
-
       # ============================================================
-      # 12. 完整备份
+      # 12. Full backup
       # ============================================================
       - name: 📥 Full backup
         run: |
-          echo "=========================================="
-          echo "📥 完整备份用户构建"
-          echo "=========================================="
-
+          echo "Full backup"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo ""
-          echo "📌 备份用户构建..."
           mkdir -p /tmp/backup-custom
-
-          # 备份二进制文件 (code 或 tscode.real)
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
-            echo "   ✅ 备份 tscode.real"
+            echo "Backed up tscode.real"
           elif [ -f "$BUILD_DIR/code" ]; then
             cp "$BUILD_DIR/code" /tmp/backup-custom/tscode.real
-            echo "   ✅ 备份 code -> tscode.real"
+            echo "Backed up code -> tscode.real"
           fi
-
-          # 备份 tscode 包装脚本
           if [ -f "$BUILD_DIR/tscode" ]; then
             cp "$BUILD_DIR/tscode" /tmp/backup-custom/
-            echo "   ✅ 备份 tscode"
+            echo "Backed up tscode"
           fi
-
-          # 备份配置文件
           if [ -f "$BUILD_DIR/package.json" ]; then
             cp "$BUILD_DIR/package.json" /tmp/backup-custom/
-            echo "   ✅ 备份 package.json"
+            echo "Backed up package.json"
           fi
           if [ -f "$BUILD_DIR/product.json" ]; then
             cp "$BUILD_DIR/product.json" /tmp/backup-custom/
-            echo "   ✅ 备份 product.json"
+            echo "Backed up product.json"
           fi
-
-          # 备份 extensions
           if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
-            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
             cp -r "$BUILD_DIR/resources/app/extensions" /tmp/backup-custom/
-            echo "   ✅ 备份 extensions ($EXT_COUNT 个文件)"
+            echo "Backed up extensions"
           fi
-
-          # 备份 out/vs
           if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
             cp -r "$BUILD_DIR/resources/app/out/vs" /tmp/backup-custom/
-            echo "   ✅ 备份 out/vs"
+            echo "Backed up out/vs"
           elif [ -d "$BUILD_DIR/resources/app/out" ]; then
             cp -r "$BUILD_DIR/resources/app/out" /tmp/backup-custom/
-            echo "   ✅ 备份 out"
+            echo "Backed up out"
           fi
-
-          # 备份 node_modules
           if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
             cp -r "$BUILD_DIR/resources/app/node_modules" /tmp/backup-custom/
-            echo "   ✅ 备份 node_modules"
+            echo "Backed up node_modules"
           fi
-
-          # 备份 snapshot
           if [ -f "$BUILD_DIR/snapshot_blob.bin" ]; then
             cp "$BUILD_DIR/snapshot_blob.bin" /tmp/backup-custom/
-            echo "   ✅ 备份 snapshot_blob.bin"
+            echo "Backed up snapshot_blob.bin"
           fi
           if [ -f "$BUILD_DIR/v8_context_snapshot.bin" ]; then
             cp "$BUILD_DIR/v8_context_snapshot.bin" /tmp/backup-custom/
-            echo "   ✅ 备份 v8_context_snapshot.bin"
+            echo "Backed up v8_context_snapshot.bin"
           fi
-
-          echo ""
-          echo "📌 备份完成"
           ls -la /tmp/backup-custom/
 
       # ============================================================
-      # 13. 下载官方并替换
+      # 13. Download official
       # ============================================================
-      - name: 📥 Download official and replace
+      - name: 📥 Download official
         run: |
-          echo "=========================================="
-          echo "📥 下载官方并替换"
-          echo "=========================================="
-
+          echo "Downloading official"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          # 下载官方 tar.gz
-          echo ""
-          echo "📌 下载官方 tar.gz..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
-
           if [ ! -f "/tmp/code.tar.gz" ]; then
-            echo "❌ 下载失败!"
+            echo "Download failed!"
             exit 1
           fi
-
           mkdir -p /tmp/code-tar
-          echo "📌 解压官方 tar.gz..."
           tar -xzf /tmp/code.tar.gz -C /tmp/code-tar 2>/dev/null
-
           OFFICIAL_DIR=$(find /tmp/code-tar -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
           if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
-            echo "❌ 找不到官方 VSCode 目录！"
+            echo "Official VSCode directory not found!"
             exit 1
           fi
-
-          echo "✅ 找到官方目录: $OFFICIAL_DIR"
-
-          # 清空构建目录
-          echo ""
-          echo "📌 清空构建目录..."
+          echo "Found official directory: $OFFICIAL_DIR"
           find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "$BUILD_DIR"/*
-
-          # 复制官方内容
-          echo ""
-          echo "📌 复制官方内容..."
           cp -r "$OFFICIAL_DIR"/* "$BUILD_DIR/"
-          echo "   ✅ 复制完成"
-
-          # 清理
+          echo "Official content copied"
           rm -rf /tmp/code-tar /tmp/code.tar.gz
 
       # ============================================================
-      # 14. 恢复用户构建
+      # 14. Restore user build
       # ============================================================
       - name: 📥 Restore user build
         run: |
-          echo "=========================================="
-          echo "📥 恢复用户构建"
-          echo "=========================================="
-
+          echo "Restoring user build"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo ""
-          echo "📌 恢复用户构建..."
-
-          # 恢复 extensions
           if [ -d "/tmp/backup-custom/extensions" ]; then
             rm -rf "$BUILD_DIR/resources/app/extensions"
             cp -r "/tmp/backup-custom/extensions" "$BUILD_DIR/resources/app/"
-            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
-            echo "   ✅ 恢复 extensions ($EXT_COUNT 个文件)"
+            echo "Restored extensions"
           fi
-
-          # 恢复 out/vs
           if [ -d "/tmp/backup-custom/vs" ]; then
             rm -rf "$BUILD_DIR/resources/app/out/vs"
             mkdir -p "$BUILD_DIR/resources/app/out"
             cp -r "/tmp/backup-custom/vs" "$BUILD_DIR/resources/app/out/"
-            echo "   ✅ 恢复 out/vs"
+            echo "Restored out/vs"
           elif [ -d "/tmp/backup-custom/out" ]; then
             rm -rf "$BUILD_DIR/resources/app/out"
             cp -r "/tmp/backup-custom/out" "$BUILD_DIR/resources/app/"
-            echo "   ✅ 恢复 out"
+            echo "Restored out"
           fi
-
-          # 恢复 node_modules
           if [ -d "/tmp/backup-custom/node_modules" ]; then
             rm -rf "$BUILD_DIR/resources/app/node_modules"
             cp -r "/tmp/backup-custom/node_modules" "$BUILD_DIR/resources/app/"
-            echo "   ✅ 恢复 node_modules"
+            echo "Restored node_modules"
           fi
-
-          # 恢复配置文件
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
-            echo "   ✅ 恢复 package.json"
+            echo "Restored package.json"
           fi
           if [ -f "/tmp/backup-custom/product.json" ]; then
             cp "/tmp/backup-custom/product.json" "$BUILD_DIR/"
-            echo "   ✅ 恢复 product.json"
+            echo "Restored product.json"
           fi
-
-          # 恢复 snapshot
           if [ -f "/tmp/backup-custom/snapshot_blob.bin" ]; then
             cp "/tmp/backup-custom/snapshot_blob.bin" "$BUILD_DIR/"
-            echo "   ✅ 恢复 snapshot_blob.bin"
+            echo "Restored snapshot_blob.bin"
           fi
           if [ -f "/tmp/backup-custom/v8_context_snapshot.bin" ]; then
             cp "/tmp/backup-custom/v8_context_snapshot.bin" "$BUILD_DIR/"
-            echo "   ✅ 恢复 v8_context_snapshot.bin"
+            echo "Restored v8_context_snapshot.bin"
           fi
-
-          # 恢复自定义二进制 (重命名为 tscode.real)
-          echo ""
-          echo "📌 恢复自定义二进制..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
-            # 删除官方的 code
             rm -f "$BUILD_DIR/code"
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/tscode.real"
             chmod +x "$BUILD_DIR/tscode.real"
-            echo "   ✅ 恢复 tscode.real"
+            echo "Restored tscode.real"
           fi
-
-          # 恢复 tscode 包装脚本
           if [ -f "/tmp/backup-custom/tscode" ]; then
             cp "/tmp/backup-custom/tscode" "$BUILD_DIR/"
             chmod +x "$BUILD_DIR/tscode"
-            echo "   ✅ 恢复 tscode"
+            echo "Restored tscode"
           fi
-
-          # 清理
           rm -rf /tmp/backup-custom
-
-          # 最终验证
-          echo ""
-          echo "📌 最终验证:"
-          echo "   关键文件:"
+          echo "Final verification:"
           ls -la "$BUILD_DIR" | grep -E "tscode|code|snapshot" | head -10
 
-          echo ""
-          echo "   extensions 数量:"
-          ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l || echo "0"
-
-          echo ""
-          echo "   out/vs 是否存在:"
-          if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
-            echo "   ✅ out/vs 存在"
-          else
-            echo "   ❌ out/vs 不存在"
-          fi
-
       # ============================================================
-      # 15. 查找并复制预构建扩展
+      # 15. Prebuilt extensions
       # ============================================================
       - name: 📂 Find and copy prebuilt extensions
         run: |
-          echo "=========================================="
-          echo "🔍 查找并复制预构建扩展"
-          echo "=========================================="
-
+          echo "Copying prebuilt extensions"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           TARGET_DIR="$BUILD_DIR/resources/app/extensions"
           mkdir -p "$TARGET_DIR"
-
           if [ -d "./prebuilt-extensions" ]; then
-            echo "✅ 找到 prebuilt-extensions 目录"
-
+            echo "Found prebuilt-extensions"
             VSIX_FILE=""
             for pattern in "./prebuilt-extensions/linux/x64/testagent*.vsix" "./prebuilt-extensions/*testagent*.vsix"; do
               FOUND=$(ls -1 $pattern 2>/dev/null | head -1)
@@ -477,9 +358,8 @@ jobs:
                 break
               fi
             done
-
             if [ -n "$VSIX_FILE" ]; then
-              echo "   ✅ 找到 testagent: $VSIX_FILE"
+              echo "Found testagent: $VSIX_FILE"
               rm -rf "$TARGET_DIR/test-tech.TestAgent" 2>/dev/null
               mkdir -p "$TARGET_DIR/test-tech.TestAgent"
               unzip -q "$VSIX_FILE" -d "$TARGET_DIR/test-tech.TestAgent"
@@ -487,67 +367,50 @@ jobs:
                 mv "$TARGET_DIR/test-tech.TestAgent/extension"/* "$TARGET_DIR/test-tech.TestAgent/"
                 rm -rf "$TARGET_DIR/test-tech.TestAgent/extension"
               fi
-              echo "   ✅ test-tech.TestAgent 已安装"
+              echo "test-tech.TestAgent installed"
             fi
-
-            declare -A EXTS=(
-              ["cweijan.vscode-office"]="cweijan.vscode-office-4.1.5.vsix"
-              ["test-tech.beeeyes"]="test-tech.beeeyes-0.0.1.vsix"
-              ["test-tech.skillhub"]="test-tech.skillhub-1.0.3-uat.vsix"
-              ["MS-CEINTL.vscode-language-pack-zh-hans"]="vscode-language-pack-zh-hans-v1.108.0.vsix"
-            )
-
-            for ext in "${!EXTS[@]}"; do
-              vsix_file="./prebuilt-extensions/${EXTS[$ext]}"
+            for vsix_file in ./prebuilt-extensions/*.vsix; do
               if [ -f "$vsix_file" ]; then
-                echo "   📦 解压 $ext..."
-                rm -rf "$TARGET_DIR/$ext" 2>/dev/null
-                mkdir -p "$TARGET_DIR/$ext"
-                unzip -q "$vsix_file" -d "$TARGET_DIR/$ext"
-                if [ -d "$TARGET_DIR/$ext/extension" ]; then
-                  mv "$TARGET_DIR/$ext/extension"/* "$TARGET_DIR/$ext/"
-                  rm -rf "$TARGET_DIR/$ext/extension"
+                ext_name=$(basename "$vsix_file" .vsix)
+                if [[ "$ext_name" != *"testagent"* ]]; then
+                  echo "Extracting $ext_name"
+                  rm -rf "$TARGET_DIR/$ext_name" 2>/dev/null
+                  mkdir -p "$TARGET_DIR/$ext_name"
+                  unzip -q "$vsix_file" -d "$TARGET_DIR/$ext_name"
+                  if [ -d "$TARGET_DIR/$ext_name/extension" ]; then
+                    mv "$TARGET_DIR/$ext_name/extension"/* "$TARGET_DIR/$ext_name/"
+                    rm -rf "$TARGET_DIR/$ext_name/extension"
+                  fi
                 fi
-                echo "   ✅ $ext 已安装"
               fi
             done
           fi
 
       # ============================================================
-      # 16. 创建启动脚本
+      # 16. Create startup scripts
       # ============================================================
       - name: 🚀 Create double-click executable
         run: |
-          echo "=========================================="
-          echo "🚀 创建双击运行版本"
-          echo "=========================================="
-
+          echo "Creating startup scripts"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
-
-          # 如果 tscode.real 不存在，从 code 重命名
           if [ ! -f "./tscode.real" ]; then
             if [ -f "./code" ]; then
-              echo "📌 重命名 code -> tscode.real"
+              echo "Renaming code -> tscode.real"
               mv "./code" "./tscode.real"
             elif [ -f "./code-oss" ]; then
-              echo "📌 重命名 code-oss -> tscode.real"
+              echo "Renaming code-oss -> tscode.real"
               mv "./code-oss" "./tscode.real"
             else
-              echo "❌ 找不到可执行文件!"
-              echo "当前目录内容:"
+              echo "No executable found!"
               ls -la
               exit 1
             fi
           fi
-
           chmod +x tscode.real
-
-          # 创建 tscode 包装脚本
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -558,33 +421,20 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
-
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
           else
-              echo "❌ 找不到 VSCode 可执行文件！"
+              echo "VSCode executable not found!"
               exit 1
           fi
-
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
-
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$USER_DATA_DIR" \
-              "$@"
+          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" "$@"
           WRAPPER_EOF
-
           chmod +x tscode
-
-          # 创建 start-vscode.sh
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -595,30 +445,18 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
-
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
           else
-              echo "❌ 找不到 VSCode 可执行文件！"
+              echo "VSCode executable not found!"
               exit 1
           fi
-
           echo "=== VSCode for UOS ==="
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
-
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$USER_DATA_DIR" \
-              "$@"
+          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" "$@"
           START_EOF
-
           chmod +x start-vscode.sh
-
-          # 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -628,86 +466,33 @@ jobs:
           Exec=./tscode %F
           Icon=./resources/app/resources/linux/code.png
           Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
+          Categories=Development;IDE
+          MimeType=text/plain;inode/directory
           StartupNotify=true
           StartupWMClass=Code
           EOF
-
-          echo "✅ 双击运行版本创建完成"
-          echo ""
-          echo "📁 目录内容:"
-          ls -la | head -20
+          echo "Startup scripts created"
+          ls -la | head -15
 
       # ============================================================
-      # 17. 打包
+      # 17. Package
       # ============================================================
       - name: 📦 Package
         run: |
+          echo "Packaging"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
           chmod +x $BUILD_DIR/tscode.real 2>/dev/null || true
-
-          echo ""
-          echo "📌 打包前验证:"
-          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo '✅'; else echo '❌'; fi)"
-          echo "   tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo '✅'; else echo '❌'; fi)"
-
-          EXT_COUNT=$(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)
-          echo "   extensions 数量: $EXT_COUNT"
-
-          echo "   out/vs 存在: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo '✅'; else echo '❌'; fi)"
-          echo "   node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
-
-          echo ""
-          echo "📌 原生模块验证:"
-          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
-            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
-              NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-              if [ "$NODE_FILES" -gt 0 ]; then
-                echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
-              else
-                echo "   ⚠️ $module (存在但无 .node 文件)"
-              fi
-            else
-              echo "   ❌ $module"
-            fi
-          done
-
-          echo ""
-          echo "📌 Git 扩展检查:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
-            echo "   ✅ Git 扩展存在"
-            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ] || [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-              echo "   ✅ Git 扩展已编译"
-            else
-              echo "   ⚠️ Git 扩展未编译"
-            fi
-          else
-            echo "   ❌ Git 扩展不存在"
-          fi
-
-          echo ""
-          echo "📌 test-tech.TestAgent 检查:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent" ]; then
-            echo "   ✅ test-tech.TestAgent 存在"
-            if [ -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent/dist" ]; then
-              echo "   ✅ 已编译"
-            fi
-          else
-            echo "   ❌ test-tech.TestAgent 不存在"
-          fi
-
-          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
-            --preserve-permissions \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          echo "✅ 打包完成:"
+          echo "Pre-package validation:"
+          echo "  tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "  tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "  extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "  out/vs: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" --preserve-permissions -C "$(dirname "$BUILD_DIR")" "$(basename "$BUILD_DIR")"
+          echo "Package created:"
           ls -lh vscode-uos-*.tar.gz
 
       - name: 📤 Upload artifacts
@@ -721,22 +506,19 @@ jobs:
         if: always()
         run: |
           echo "=========================================="
-          echo "📊 BUILD SUMMARY"
+          echo "BUILD SUMMARY"
           echo "=========================================="
-          echo "🟢 Status: ${{ job.status }}"
-          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "=========================================="
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "🎉 Build completed!"
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Build completed successfully!"
             echo ""
-            echo "✅ 保留了自定义二进制 (tscode.real)"
-            echo "✅ 保留了 out/vs (@builtin 插件)"
-            echo "✅ 保留了 extensions"
-            echo "✅ 保留了 node_modules"
-            echo "✅ 保留了 snapshot"
-            echo ""
-            echo "📌 On UOS:"
-            echo "   1. tar -xzf vscode-uos-*.tar.gz"
-            echo "   2. cd VSCode-linux-x64"
-            echo "   3. ./tscode"
-          fis
+            echo "On UOS:"
+            echo "  1. tar -xzf vscode-uos-*.tar.gz"
+            echo "  2. cd VSCode-linux-x64"
+            echo "  3. ./tscode"
+          else
+            echo "Build failed. Check logs for details."
+          fi
+          echo "=========================================="
