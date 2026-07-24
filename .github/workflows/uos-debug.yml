@@ -217,85 +217,52 @@ jobs:
           echo "📌 构建目录内容:"
           ls -la "$BUILD_DIR"
 
+          echo ""
+          echo "📌 extensions 数量:"
+          ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l || echo "0"
+
+          echo ""
+          echo "📌 out/vs 是否存在:"
+          if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
+            echo "   ✅ out/vs 存在"
+            ls -la "$BUILD_DIR/resources/app/out/vs" | head -10
+          else
+            echo "   ❌ out/vs 不存在"
+          fi
+
       # ============================================================
-      # 12. 核心修复：保留自定义二进制，从用户构建复制所有内容
+      # 12. 核心修复：完整备份和恢复
       # ============================================================
-      - name: 📥 Extract official and copy native modules
+      - name: 📥 Complete backup and restore
         run: |
           echo "=========================================="
-          echo "📥 保留自定义二进制，从用户构建复制原生模块和 snapshot"
+          echo "📥 完整备份和恢复（保留所有自定义内容）"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 1. 查找真正的二进制文件（排除 chrome_crashpad_handler）
+          # 1. 创建备份目录
           echo ""
-          echo "📌 1. 查找真正的二进制文件..."
-
-          # 先检查已知名称
-          REAL_EXEC=""
-          for name in "tscode.real" "code" "code-oss"; do
-            if [ -f "$BUILD_DIR/$name" ] && [ -x "$BUILD_DIR/$name" ]; then
-              # 排除 chrome_crashpad_handler（它也是可执行的，但不是 VSCode）
-              if [ "$name" != "chrome_crashpad_handler" ]; then
-                REAL_EXEC="$BUILD_DIR/$name"
-                echo "   ✅ 找到可执行文件: $name"
-                break
-              fi
-            fi
-          done
-
-          # 如果没找到，搜索所有可执行文件（排除 chrome_crashpad_handler）
-          if [ -z "$REAL_EXEC" ]; then
-            echo "   ⚠️ 未找到已知名称，搜索所有可执行文件..."
-            # 排除: *.so, *.sh, chrome_crashpad_handler, chrome-sandbox
-            REAL_EXEC=$(find "$BUILD_DIR" -maxdepth 1 -type f -executable \
-              ! -name "*.so" \
-              ! -name "*.sh" \
-              ! -name "chrome_crashpad_handler" \
-              ! -name "chrome-sandbox" \
-              ! -name "libEGL.so" \
-              ! -name "libGLESv2.so" \
-              ! -name "libffmpeg.so" \
-              ! -name "libvk_swiftshader.so" \
-              ! -name "libvulkan.so.1" \
-              2>/dev/null | head -1)
-            if [ -n "$REAL_EXEC" ]; then
-              echo "   ✅ 找到: $(basename $REAL_EXEC)"
-            fi
-          fi
-
-          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
-            echo "   ❌ 找不到任何可执行文件！"
-            echo "   当前目录内容:"
-            ls -la "$BUILD_DIR"
-            exit 1
-          fi
-
-          # 2. 重命名为 tscode.real
-          echo ""
-          echo "📌 2. 重命名为 tscode.real..."
-          if [ "$(basename $REAL_EXEC)" != "tscode.real" ]; then
-            mv "$REAL_EXEC" "$BUILD_DIR/tscode.real"
-            echo "   ✅ 重命名 $(basename $REAL_EXEC) -> tscode.real"
-          else
-            echo "   ✅ 已经是 tscode.real"
-          fi
-          chmod +x "$BUILD_DIR/tscode.real"
-
-          # 3. 备份自定义文件
-          echo ""
-          echo "📌 3. 备份自定义文件..."
+          echo "📌 1. 备份用户构建的所有内容..."
           mkdir -p /tmp/backup-custom
 
+          # 备份二进制
+          echo "   备份二进制文件..."
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
             echo "   ✅ 备份 tscode.real"
+          elif [ -f "$BUILD_DIR/code" ]; then
+            cp "$BUILD_DIR/code" /tmp/backup-custom/tscode.real
+            echo "   ✅ 备份 code -> tscode.real"
           fi
+
           if [ -f "$BUILD_DIR/tscode" ]; then
             cp "$BUILD_DIR/tscode" /tmp/backup-custom/
             echo "   ✅ 备份 tscode"
           fi
+
+          # 备份配置文件
+          echo "   备份配置文件..."
           if [ -f "$BUILD_DIR/package.json" ]; then
             cp "$BUILD_DIR/package.json" /tmp/backup-custom/
             echo "   ✅ 备份 package.json"
@@ -305,107 +272,132 @@ jobs:
             echo "   ✅ 备份 product.json"
           fi
 
-          # 4. 【关键】从用户构建目录复制 snapshot 文件
-          echo ""
-          echo "📌 4. 从用户构建目录复制 snapshot 文件..."
-          echo "   （匹配自定义二进制版本，避免 V8 不匹配）"
+          # 【关键】备份 extensions 目录
+          echo "   备份 extensions 目录..."
+          if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
+            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
+            echo "   ✅ 备份 extensions ($EXT_COUNT 个文件)"
+            cp -r "$BUILD_DIR/resources/app/extensions" /tmp/backup-custom/
+          else
+            echo "   ⚠️ extensions 不存在"
+          fi
 
-          # 查找用户构建目录中的 snapshot（在构建目录本身）
+          # 【关键】备份 out/vs 目录（包含 @builtin 插件）
+          echo "   备份 out/vs 目录..."
+          if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
+            OUT_SIZE=$(du -sh "$BUILD_DIR/resources/app/out/vs" 2>/dev/null | awk '{print $1}')
+            echo "   ✅ 备份 out/vs ($OUT_SIZE)"
+            cp -r "$BUILD_DIR/resources/app/out/vs" /tmp/backup-custom/
+          else
+            echo "   ⚠️ out/vs 不存在"
+          fi
+
+          # 备份整个 out 目录（如果 vs 不存在但 out 存在）
+          if [ -d "$BUILD_DIR/resources/app/out" ] && [ ! -d "/tmp/backup-custom/vs" ]; then
+            echo "   备份整个 out 目录..."
+            cp -r "$BUILD_DIR/resources/app/out" /tmp/backup-custom/
+            echo "   ✅ 备份 out"
+          fi
+
+          # 备份 snapshot
+          echo "   备份 snapshot..."
           if [ -f "$BUILD_DIR/snapshot_blob.bin" ]; then
-            echo "   ✅ snapshot_blob.bin 已存在，保留"
-            # 不需要复制，已经是用户构建的
-          else
-            echo "   ⚠️ snapshot_blob.bin 不存在，尝试从其他位置查找..."
-            # 查找父目录中的 snapshot
-            FOUND_SNAPSHOT=""
-            for path in "../VSCode-linux-x64" "../../VSCode-linux-x64" "../vscode/VSCode-linux-x64"; do
-              if [ -f "$path/snapshot_blob.bin" ]; then
-                FOUND_SNAPSHOT="$path"
-                echo "   ✅ 找到 snapshot: $FOUND_SNAPSHOT"
-                break
-              fi
-            done
-            if [ -n "$FOUND_SNAPSHOT" ]; then
-              cp "$FOUND_SNAPSHOT/snapshot_blob.bin" "$BUILD_DIR/"
-              cp "$FOUND_SNAPSHOT/v8_context_snapshot.bin" "$BUILD_DIR/"
-              echo "   ✅ 复制 snapshot 文件"
-            else
-              echo "   ❌ 找不到 snapshot 文件"
-            fi
+            cp "$BUILD_DIR/snapshot_blob.bin" /tmp/backup-custom/
+            echo "   ✅ 备份 snapshot_blob.bin"
+          fi
+          if [ -f "$BUILD_DIR/v8_context_snapshot.bin" ]; then
+            cp "$BUILD_DIR/v8_context_snapshot.bin" /tmp/backup-custom/
+            echo "   ✅ 备份 v8_context_snapshot.bin"
           fi
 
-          # 5. 【关键】从用户构建目录复制原生模块
+          # 备份 node_modules
+          echo "   备份 node_modules..."
+          if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+            cp -r "$BUILD_DIR/resources/app/node_modules" /tmp/backup-custom/
+            echo "   ✅ 备份 node_modules"
+          fi
+
+          # 2. 下载官方 tar.gz
           echo ""
-          echo "📌 5. 从用户构建目录复制原生模块..."
+          echo "📌 2. 下载官方 tar.gz..."
+          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
 
-          USER_NODE_MODULES=""
-          for path in "./node_modules" "../node_modules" "$BUILD_DIR/../node_modules" "/home/runner/work/vscode/vscode/node_modules"; do
-            if [ -d "$path" ]; then
-              USER_NODE_MODULES="$path"
-              echo "   ✅ 找到用户 node_modules: $USER_NODE_MODULES"
-              break
-            fi
-          done
-
-          if [ -z "$USER_NODE_MODULES" ]; then
-            echo "   ❌ 找不到用户 node_modules"
+          if [ ! -f "/tmp/code.tar.gz" ]; then
+            echo "❌ 下载失败!"
+            exit 1
           fi
 
-          NATIVE_MODULES=(
-            "node-pty"
-            "@vscode/spdlog"
-            "@vscode/sqlite3"
-            "native-keymap"
-          )
+          mkdir -p /tmp/code-tar
+          echo "📌 解压官方 tar.gz..."
+          tar -xzf /tmp/code.tar.gz -C /tmp/code-tar 2>/dev/null
 
-          mkdir -p "$BUILD_DIR/resources/app/node_modules"
+          OFFICIAL_DIR=$(find /tmp/code-tar -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
-          if [ -n "$USER_NODE_MODULES" ] && [ -d "$USER_NODE_MODULES" ]; then
-            echo ""
-            echo "   开始复制原生模块..."
-            for module in "${NATIVE_MODULES[@]}"; do
-              if [ -d "$USER_NODE_MODULES/$module" ]; then
-                echo "   ✅ 找到 $module"
-                TARGET_DIR="$BUILD_DIR/resources/app/node_modules/$(dirname $module 2>/dev/null || echo $module)"
-                mkdir -p "$TARGET_DIR"
-                rm -rf "$TARGET_DIR/$(basename $module)" 2>/dev/null
-                cp -r "$USER_NODE_MODULES/$module" "$TARGET_DIR/"
-
-                NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-                if [ "$NODE_FILES" -gt 0 ]; then
-                  echo "   ✅ $module 复制成功 ($NODE_FILES 个 .node 文件)"
-                else
-                  echo "   ⚠️ $module 复制完成但无 .node 文件"
-                fi
-              else
-                echo "   ❌ 找不到 $module"
-              fi
-            done
-          else
-            echo "   ❌ 找不到用户 node_modules"
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
+            echo "❌ 找不到官方 VSCode 目录！"
+            exit 1
           fi
 
-          # 6. 从官方复制 chrome-sandbox（如果需要）
+          echo "✅ 找到官方目录: $OFFICIAL_DIR"
+
+          # 3. 清空构建目录
           echo ""
-          echo "📌 6. 确保 chrome-sandbox 存在..."
-          if [ ! -f "$BUILD_DIR/chrome-sandbox" ]; then
-            echo "   ⚠️ chrome-sandbox 不存在，从官方下载..."
-            wget -q https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/code.tar.gz
-            tar -xzf /tmp/code.tar.gz -C /tmp/ 2>/dev/null
-            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-            if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
-              cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
-              chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
-              echo "   ✅ 复制 chrome-sandbox"
-            fi
-            rm -rf /tmp/code.tar.gz /tmp/VSCode-linux-x64
+          echo "📌 3. 清空构建目录..."
+          find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "$BUILD_DIR"/*
+
+          # 4. 复制官方内容
+          echo ""
+          echo "📌 4. 复制官方内容..."
+          cp -r "$OFFICIAL_DIR"/* "$BUILD_DIR/"
+          echo "   ✅ 复制完成"
+
+          # 5. 恢复用户构建的 out/vs 目录（包含 @builtin 插件）
+          echo ""
+          echo "📌 5. 恢复用户构建的 out/vs 目录..."
+          if [ -d "/tmp/backup-custom/vs" ]; then
+            rm -rf "$BUILD_DIR/resources/app/out/vs"
+            mkdir -p "$BUILD_DIR/resources/app/out"
+            cp -r "/tmp/backup-custom/vs" "$BUILD_DIR/resources/app/out/"
+            echo "   ✅ 恢复 out/vs"
+          elif [ -d "/tmp/backup-custom/out/vs" ]; then
+            rm -rf "$BUILD_DIR/resources/app/out/vs"
+            mkdir -p "$BUILD_DIR/resources/app/out"
+            cp -r "/tmp/backup-custom/out/vs" "$BUILD_DIR/resources/app/out/"
+            echo "   ✅ 恢复 out/vs (从 out 子目录)"
+          elif [ -d "/tmp/backup-custom/out" ]; then
+            rm -rf "$BUILD_DIR/resources/app/out"
+            cp -r "/tmp/backup-custom/out" "$BUILD_DIR/resources/app/"
+            echo "   ✅ 恢复整个 out"
           else
-            echo "   ✅ chrome-sandbox 已存在"
+            echo "   ⚠️ 没有备份的 out/vs"
           fi
 
-          # 7. 恢复自定义二进制
+          # 6. 恢复用户构建的 extensions
           echo ""
-          echo "📌 7. 恢复自定义二进制..."
+          echo "📌 6. 恢复用户构建的 extensions..."
+          if [ -d "/tmp/backup-custom/extensions" ]; then
+            rm -rf "$BUILD_DIR/resources/app/extensions"
+            cp -r "/tmp/backup-custom/extensions" "$BUILD_DIR/resources/app/"
+            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
+            echo "   ✅ 恢复 extensions ($EXT_COUNT 个文件)"
+          else
+            echo "   ⚠️ 没有备份的 extensions"
+          fi
+
+          # 7. 恢复用户构建的 node_modules
+          echo ""
+          echo "📌 7. 恢复用户构建的 node_modules..."
+          if [ -d "/tmp/backup-custom/node_modules" ]; then
+            rm -rf "$BUILD_DIR/resources/app/node_modules"
+            cp -r "/tmp/backup-custom/node_modules" "$BUILD_DIR/resources/app/"
+            echo "   ✅ 恢复 node_modules"
+          else
+            echo "   ⚠️ 没有备份的 node_modules"
+          fi
+
+          # 8. 恢复自定义二进制
+          echo ""
+          echo "📌 8. 恢复自定义二进制..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/"
             chmod +x "$BUILD_DIR/tscode.real"
@@ -417,9 +409,9 @@ jobs:
             echo "   ✅ 恢复 tscode"
           fi
 
-          # 8. 恢复配置文件
+          # 9. 恢复配置文件
           echo ""
-          echo "📌 8. 恢复配置文件..."
+          echo "📌 9. 恢复配置文件..."
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
             echo "   ✅ 恢复 package.json"
@@ -429,34 +421,72 @@ jobs:
             echo "   ✅ 恢复 product.json"
           fi
 
-          # 9. 清理
-          rm -rf /tmp/backup-custom
-
-          # 10. 最终验证
+          # 10. 恢复 snapshot
           echo ""
-          echo "📌 9. 最终验证:"
+          echo "📌 10. 恢复 snapshot..."
+          if [ -f "/tmp/backup-custom/snapshot_blob.bin" ]; then
+            cp "/tmp/backup-custom/snapshot_blob.bin" "$BUILD_DIR/"
+            echo "   ✅ 恢复 snapshot_blob.bin"
+          fi
+          if [ -f "/tmp/backup-custom/v8_context_snapshot.bin" ]; then
+            cp "/tmp/backup-custom/v8_context_snapshot.bin" "$BUILD_DIR/"
+            echo "   ✅ 恢复 v8_context_snapshot.bin"
+          fi
+
+          # 11. 从官方复制 chrome-sandbox
+          echo ""
+          echo "📌 11. 确保 chrome-sandbox 存在..."
+          if [ -f "$OFFICIAL_DIR/chrome-sandbox" ]; then
+            cp "$OFFICIAL_DIR/chrome-sandbox" "$BUILD_DIR/"
+            chmod 4755 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
+            echo "   ✅ 复制 chrome-sandbox"
+          fi
+
+          # 12. 清理
+          rm -rf /tmp/code-tar /tmp/code.tar.gz /tmp/backup-custom
+
+          # 13. 最终验证
+          echo ""
+          echo "📌 12. 最终验证:"
 
           echo "   自定义二进制:"
-          ls -la "$BUILD_DIR" | grep -E "tscode" || echo "   ❌ 找不到 tscode 文件"
+          ls -la "$BUILD_DIR" | grep -E "tscode" || echo "   ❌ 找不到 tscode"
+
+          echo ""
+          echo "   extensions 数量:"
+          ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l || echo "0"
+
+          echo ""
+          echo "   out/vs 是否存在:"
+          if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
+            echo "   ✅ out/vs 存在"
+            echo "   内容:"
+            ls -la "$BUILD_DIR/resources/app/out/vs" | head -10
+          else
+            echo "   ❌ out/vs 不存在"
+          fi
+
+          echo ""
+          echo "   @builtin 检查:"
+          if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/builtin" ]; then
+            echo "   ✅ builtin 存在"
+          elif [ -d "$BUILD_DIR/resources/app/out/vs/builtin" ]; then
+            echo "   ✅ builtin 存在"
+          else
+            echo "   ⚠️ builtin 可能在其他位置"
+            find "$BUILD_DIR/resources/app/out" -name "*builtin*" -type d 2>/dev/null | head -5
+          fi
 
           echo ""
           echo "   原生模块:"
           for module in node-pty @vscode/spdlog @vscode/sqlite3 native-keymap; do
             if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
               NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-              if [ "$NODE_FILES" -gt 0 ]; then
-                echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
-              else
-                echo "   ⚠️ $module (存在但无 .node 文件)"
-              fi
+              echo "   ✅ $module ($NODE_FILES 个 .node 文件)"
             else
               echo "   ❌ $module (缺失)"
             fi
           done
-
-          echo ""
-          echo "   Snapshot 文件:"
-          ls -la "$BUILD_DIR" | grep -E "snapshot" || echo "   ❌ 找不到 snapshot 文件"
 
       # ============================================================
       # 13. 查找并复制预构建扩展
@@ -646,7 +676,11 @@ jobs:
           echo "📌 打包前验证:"
           echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo '✅'; else echo '❌'; fi)"
           echo "   tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo '✅'; else echo '❌'; fi)"
-          echo "   extensions 数量: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+
+          EXT_COUNT=$(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)
+          echo "   extensions 数量: $EXT_COUNT"
+
+          echo "   out/vs 存在: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo '✅'; else echo '❌'; fi)"
           echo "   node_modules 存在: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅'; else echo '❌'; fi)"
 
           echo ""
@@ -665,8 +699,28 @@ jobs:
           done
 
           echo ""
-          echo "📌 自定义二进制:"
-          ls -la $BUILD_DIR | grep tscode
+          echo "📌 Git 扩展检查:"
+          if [ -d "$BUILD_DIR/resources/app/extensions/git" ]; then
+            echo "   ✅ Git 扩展存在"
+            if [ -d "$BUILD_DIR/resources/app/extensions/git/out" ] || [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
+              echo "   ✅ Git 扩展已编译"
+            else
+              echo "   ⚠️ Git 扩展未编译"
+            fi
+          else
+            echo "   ❌ Git 扩展不存在"
+          fi
+
+          echo ""
+          echo "📌 test-tech.TestAgent 检查:"
+          if [ -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent" ]; then
+            echo "   ✅ test-tech.TestAgent 存在"
+            if [ -d "$BUILD_DIR/resources/app/extensions/test-tech.TestAgent/dist" ]; then
+              echo "   ✅ 已编译"
+            fi
+          else
+            echo "   ❌ test-tech.TestAgent 不存在"
+          fi
 
           tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
             --preserve-permissions \
@@ -695,9 +749,11 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed!"
             echo ""
-            echo "✅ 保留了自定义二进制（包含所有二次开发修改）"
-            echo "✅ 从用户构建目录复制了原生模块"
-            echo "✅ 保留用户构建的 snapshot（版本匹配）"
+            echo "✅ 保留了自定义二进制"
+            echo "✅ 保留了 out/vs (@builtin 插件)"
+            echo "✅ 保留了 extensions"
+            echo "✅ 保留了 node_modules"
+            echo "✅ 保留了 snapshot"
             echo ""
             echo "📌 On UOS:"
             echo "   1. tar -xzf vscode-uos-*.tar.gz"
