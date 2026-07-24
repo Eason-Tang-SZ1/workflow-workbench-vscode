@@ -280,34 +280,74 @@ jobs:
           cp -r "$OFFICIAL_DIR"/* "$BUILD_DIR/"
           echo "Official content copied"
           rm -rf /tmp/code-tar /tmp/code.tar.gz
-
       # ============================================================
-      # 14. Restore user build
+      # 14. Restore user build + ensure builtin
       # ============================================================
       - name: 📥 Restore user build
         run: |
           echo "Restoring user build"
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          # 1. 恢复 out 目录
+          if [ -d "/tmp/backup-custom/out" ]; then
+            rm -rf "$BUILD_DIR/resources/app/out"
+            mkdir -p "$BUILD_DIR/resources/app"
+            cp -r "/tmp/backup-custom/out" "$BUILD_DIR/resources/app/"
+            echo "Restored out directory"
+          fi
+
+          # 2. 【关键】确保 builtin 目录存在
+          BUILTIN_PATH="$BUILD_DIR/resources/app/out/vs/workbench/contrib/builtin"
+          if [ ! -d "$BUILTIN_PATH" ]; then
+            echo "builtin directory missing! Searching official..."
+            OFFICIAL_BUILTIN=""
+            # 在 /tmp/code-tar 中搜索（官方已解压）
+            if [ -d "/tmp/code-tar" ]; then
+              OFFICIAL_BUILTIN=$(find /tmp/code-tar -type d -path "*/workbench/contrib/builtin" 2>/dev/null | head -1)
+              if [ -z "$OFFICIAL_BUILTIN" ]; then
+                OFFICIAL_BUILTIN=$(find /tmp/code-tar -type d -path "*/vs/builtin" 2>/dev/null | head -1)
+              fi
+            fi
+            if [ -n "$OFFICIAL_BUILTIN" ] && [ -d "$OFFICIAL_BUILTIN" ]; then
+              mkdir -p "$(dirname $BUILTIN_PATH)"
+              cp -r "$OFFICIAL_BUILTIN" "$BUILTIN_PATH"
+              echo "✅ builtin copied from official"
+            else
+              echo "WARNING: Cannot find builtin in official, creating stub..."
+              mkdir -p "$BUILTIN_PATH"
+              echo '{"builtin": true}' > "$BUILTIN_PATH/package.json"
+            fi
+          else
+            echo "✅ builtin exists"
+          fi
+
+          # 3. 验证 builtin
+          if [ -d "$BUILTIN_PATH" ]; then
+            echo "builtin contents:"
+            ls -la "$BUILTIN_PATH"
+            # 检查 Git 是否存在
+            if [ -d "$BUILTIN_PATH/git" ] || [ -d "$BUILTIN_PATH/../git" ]; then
+              echo "✅ Git builtin found"
+            else
+              echo "WARNING: Git builtin not found"
+            fi
+          fi
+
+          # 4. 恢复 extensions
           if [ -d "/tmp/backup-custom/extensions" ]; then
             rm -rf "$BUILD_DIR/resources/app/extensions"
             cp -r "/tmp/backup-custom/extensions" "$BUILD_DIR/resources/app/"
             echo "Restored extensions"
           fi
-          if [ -d "/tmp/backup-custom/vs" ]; then
-            rm -rf "$BUILD_DIR/resources/app/out/vs"
-            mkdir -p "$BUILD_DIR/resources/app/out"
-            cp -r "/tmp/backup-custom/vs" "$BUILD_DIR/resources/app/out/"
-            echo "Restored out/vs"
-          elif [ -d "/tmp/backup-custom/out" ]; then
-            rm -rf "$BUILD_DIR/resources/app/out"
-            cp -r "/tmp/backup-custom/out" "$BUILD_DIR/resources/app/"
-            echo "Restored out"
-          fi
+
+          # 5. 恢复 node_modules
           if [ -d "/tmp/backup-custom/node_modules" ]; then
             rm -rf "$BUILD_DIR/resources/app/node_modules"
             cp -r "/tmp/backup-custom/node_modules" "$BUILD_DIR/resources/app/"
             echo "Restored node_modules"
           fi
+
+          # 6. 恢复配置文件
           if [ -f "/tmp/backup-custom/package.json" ]; then
             cp "/tmp/backup-custom/package.json" "$BUILD_DIR/"
             echo "Restored package.json"
@@ -316,6 +356,8 @@ jobs:
             cp "/tmp/backup-custom/product.json" "$BUILD_DIR/"
             echo "Restored product.json"
           fi
+
+          # 7. 恢复 snapshot
           if [ -f "/tmp/backup-custom/snapshot_blob.bin" ]; then
             cp "/tmp/backup-custom/snapshot_blob.bin" "$BUILD_DIR/"
             echo "Restored snapshot_blob.bin"
@@ -324,6 +366,8 @@ jobs:
             cp "/tmp/backup-custom/v8_context_snapshot.bin" "$BUILD_DIR/"
             echo "Restored v8_context_snapshot.bin"
           fi
+
+          # 8. 恢复自定义二进制
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             rm -f "$BUILD_DIR/code"
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/tscode.real"
@@ -335,9 +379,16 @@ jobs:
             chmod +x "$BUILD_DIR/tscode"
             echo "Restored tscode"
           fi
+
           rm -rf /tmp/backup-custom
-          echo "Final verification:"
-          ls -la "$BUILD_DIR" | grep -E "tscode|code|snapshot" | head -10
+
+          # 最终验证
+          echo ""
+          echo "FINAL VERIFICATION:"
+          echo "tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "out/vs: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "builtin: $(if [ -d $BUILD_DIR/resources/app/out/vs/workbench/contrib/builtin ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "extensions count: $(ls -la $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l)"
 
       # ============================================================
       # 15. Prebuilt extensions
