@@ -300,19 +300,33 @@ jobs:
 
       - name: 🔍 Verify build
         run: |
+          # 首先检查当前目录
+          echo "📁 当前目录内容:"
+          ls -la
+
+          # 查找构建产物
           BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64" "./out/VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
               echo "✅ Build found at: $BUILD_DIR"
+              echo "📁 目录内容:"
+              ls -la "$BUILD_DIR"
               break
             fi
           done
+
           if [ -z "$BUILD_DIR" ]; then
             echo "❌ Build not found!"
+            echo "🔍 搜索整个工作目录:"
+            find . -type d -name "VSCode-linux-x64" 2>/dev/null
             exit 1
           fi
+
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+
+          # 保存构建目录的绝对路径
+          echo "BUILD_DIR_ABS=$(realpath $BUILD_DIR)" >> $GITHUB_ENV
 
       # ============================================================
       # 创建可直接双击运行的 VSCode（无 root 权限）
@@ -320,6 +334,13 @@ jobs:
       - name: 🚀 Create double-click executable (No Root)
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          # 如果 BUILD_DIR 是相对路径，转换为绝对路径
+          if [[ ! "$BUILD_DIR" = /* ]]; then
+            BUILD_DIR="$(pwd)/$BUILD_DIR"
+          fi
+
+          echo "📁 工作目录: $BUILD_DIR"
           cd "$BUILD_DIR"
 
           # 获取产品名称
@@ -331,21 +352,32 @@ jobs:
           for name in tscode code-oss code "$PRODUCT_NAME"; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
+              echo "找到可执行文件: $REAL_EXEC"
               break
             elif [ -f "./bin/$name" ]; then
               REAL_EXEC="./bin/$name"
+              echo "找到可执行文件: $REAL_EXEC"
               break
             fi
           done
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
-            REAL_EXEC=$(find . -maxdepth 2 -type f -executable ! -name "*.sh" 2>/dev/null | grep -v "node_modules" | head -1)
+            # 尝试查找所有可执行文件
+            echo "🔍 查找所有可执行文件:"
+            find . -maxdepth 2 -type f -executable ! -name "*.sh" 2>/dev/null | grep -v "node_modules" | while read f; do
+              echo "  - $f"
+              if [ -z "$REAL_EXEC" ]; then
+                REAL_EXEC="$f"
+              fi
+            done
           fi
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件！"
             echo "当前目录内容:"
             ls -la
+            echo "查找可执行文件:"
+            find . -maxdepth 2 -type f -executable 2>/dev/null
             exit 1
           fi
 
@@ -353,7 +385,7 @@ jobs:
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
           # 创建启动包装器（无 root 权限运行）
-          cat > "$REAL_EXEC" << 'WRAPPER_EOF'
+          cat > "tscode" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -400,7 +432,7 @@ jobs:
               "$@"
           WRAPPER_EOF
 
-          chmod +x "$REAL_EXEC"
+          chmod +x "tscode"
 
           # 创建启动脚本
           cat > start-vscode.sh << 'START_EOF'
@@ -504,9 +536,20 @@ jobs:
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
+          # 如果 BUILD_DIR 是相对路径，转换为绝对路径
+          if [[ ! "$BUILD_DIR" = /* ]]; then
+            BUILD_DIR="$(pwd)/$BUILD_DIR"
+          fi
+
           echo "=========================================="
           echo "✅ 校验打包产物"
           echo "=========================================="
+          echo "📁 校验目录: $BUILD_DIR"
+
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "❌ 目录不存在: $BUILD_DIR"
+            exit 1
+          fi
 
           cd "$BUILD_DIR"
 
@@ -585,6 +628,9 @@ jobs:
 
           if [ $errors -gt 0 ]; then
             echo "❌ 校验失败！存在 $errors 个错误"
+            echo ""
+            echo "📁 当前目录所有文件:"
+            ls -la
             exit 1
           else
             echo "✅ 校验通过！"
@@ -601,28 +647,41 @@ jobs:
       - name: 📦 Package
         run: |
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          # 如果 BUILD_DIR 是相对路径，转换为绝对路径
+          if [[ ! "$BUILD_DIR" = /* ]]; then
+            BUILD_DIR="$(pwd)/$BUILD_DIR"
+          fi
+
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
+          echo "📁 打包目录: $BUILD_DIR"
+          cd "$BUILD_DIR"
+
           # 获取产品名称
-          PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' "$BUILD_DIR/resources/app/product.json" 2>/dev/null | cut -d'"' -f4 || echo "mycode")
+          PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' "resources/app/product.json" 2>/dev/null | cut -d'"' -f4 || echo "mycode")
 
           # 确保所有文件可执行权限正确
-          chmod +x $BUILD_DIR/tscode 2>/dev/null || true
-          chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+          chmod +x tscode 2>/dev/null || true
+          chmod +x start-vscode.sh 2>/dev/null || true
+          chmod +x *.desktop 2>/dev/null || true
 
           # 创建校验文件
-          cd "$BUILD_DIR"
           find . -type f -name "*.so*" -o -name "tscode*" -o -name "*.sh" -o -name "*.desktop" | sort > filelist.txt
           find . -type f -not -path "./user-data/*" -exec md5sum {} \; 2>/dev/null | sort > checksums.txt
           cd -
 
-          # 打包
+          # 打包（使用目录名）
+          DIR_NAME=$(basename "$BUILD_DIR")
           PACKAGE_NAME="custom-ide-uos-${VERSION}-双击运行"
+
+          echo "📦 打包目录: $DIR_NAME"
+          echo "📦 包名: $PACKAGE_NAME"
+
           tar -czf "${PACKAGE_NAME}.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
+            "$DIR_NAME"
 
           # 生成校验文件
           md5sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.md5"
