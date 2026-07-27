@@ -75,9 +75,6 @@ jobs:
           data['win32x64UserAppId'] = '{{E8B2F5B2-8A9F-4E9A-8B3C-4F5D6E7F8A9B}}'
           data['win32arm64UserAppId'] = '{{E8B2F5B2-8A9F-4E9A-8B3C-4F5D6E7F8A9B}}'
 
-          # 启用内置插件
-          data['builtInExtensions'] = data.get('builtInExtensions', [])
-
           # 禁用 Crash 报告
           data['enableCrashReport'] = False
           if 'crashReporter' not in data:
@@ -111,22 +108,22 @@ jobs:
             gulp-rename gulp-sort 2>/dev/null || true
 
       # ============================================================
-      # 保留内置插件和自研插件
+      # 修复 builtInExtensions 导出问题
       # ============================================================
-      - name: 🔌 Configure built-in extensions
+      - name: 🔧 Fix builtInExtensions export
         run: |
           echo "=========================================="
-          echo "🔌 配置内置插件"
+          echo "🔧 修复 builtInExtensions 导出"
           echo "=========================================="
 
-          # 创建扩展配置
+          # 创建正确的 builtInExtensions.ts
           cat > build/lib/builtInExtensions.ts << 'EXT_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
            *--------------------------------------------------------------------------------------------*/
 
-          // 官方内置插件列表（保留）
+          // 官方内置插件列表
           export const builtInExtensions: any[] = [
               {
                   name: 'ms-vscode.js-debug',
@@ -148,34 +145,25 @@ jobs:
               }
           ];
 
-          // 自研插件（保留）
-          export const customExtensions: any[] = [
-              // 在此添加你的自研插件
-              // 示例：
-              // {
-              //     name: 'my-company.custom-plugin',
-              //     version: '1.0.0',
-              //     repo: 'https://github.com/my-company/custom-plugin',
-              //     metadata: { id: 'my-company.custom-plugin', publisherId: 'my-company' }
-              // }
-          ];
-
-          // 合并所有内置插件
-          export const allBuiltInExtensions = [...builtInExtensions, ...customExtensions];
+          // 自研插件（从 prebuilt-extensions 加载）
+          export const customExtensions: any[] = [];
 
           export const shouldDownloadBuiltInExtensions = true;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
           EXT_EOF
 
-          echo "✅ 内置插件配置已创建"
-          echo "  官方插件: $(grep -c "name:" build/lib/builtInExtensions.ts | head -1)"
+          # 创建 extensions.ts
+          cat > build/lib/extensions.ts << 'EXTENSIONS_EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
 
-      - name: 🔧 Fix extensions.ts
-        run: |
-          cat > build/lib/extensions.ts << 'EOF'
-          import { Stream } from "stream";
-          import { allBuiltInExtensions, shouldDownloadBuiltInExtensions, webBuiltInExtensions, shouldDownloadWebBuiltInExtensions } from './builtInExtensions.js';
+          import { Stream } from 'stream';
+
+          // 直接从 builtInExtensions 导入
+          export { builtInExtensions, shouldDownloadBuiltInExtensions, webBuiltInExtensions, shouldDownloadWebBuiltInExtensions } from './builtInExtensions.js';
 
           const empty: any[] = [];
 
@@ -207,19 +195,19 @@ jobs:
           export function buildExtensionMedia(): void {}
           export function compileExtensionMedia(): void {}
           export function buildExtensionMediaTask(done: any): void { done(); }
+          EXTENSIONS_EOF
 
-          // 导出内置插件配置
-          export { allBuiltInExtensions as builtInExtensions, shouldDownloadBuiltInExtensions, webBuiltInExtensions, shouldDownloadWebBuiltInExtensions };
-          EOF
+          # 创建 fetch.ts
+          cat > build/lib/fetch.ts << 'FETCH_EOF'
+          import { Stream } from 'stream';
 
-          echo 'import { allBuiltInExtensions, shouldDownloadBuiltInExtensions, webBuiltInExtensions, shouldDownloadWebBuiltInExtensions } from "./builtInExtensions";
-          export { allBuiltInExtensions as builtInExtensions, shouldDownloadBuiltInExtensions, webBuiltInExtensions, shouldDownloadWebBuiltInExtensions };' > build/lib/builtInExtensions.ts
-
-          echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
             console.log("⚠️ fetchUrls: disabled");
             return Promise.resolve();
-          }' > build/lib/fetch.ts
+          }
+          FETCH_EOF
+
+          echo "✅ builtInExtensions 修复完成"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -295,6 +283,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+          echo "NODE_OPTIONS=--max-old-space-size=8192" >> $GITHUB_ENV
 
       - name: 🔨 Build VSCode
         run: |
@@ -334,7 +323,7 @@ jobs:
           cd "$BUILD_DIR"
 
           # 获取产品名称
-          PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' ../product.json | cut -d'"' -f4 || echo "mycode")
+          PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' ../product.json 2>/dev/null | cut -d'"' -f4 || echo "mycode")
           echo "📌 产品名称: $PRODUCT_NAME"
 
           # 查找真实二进制文件
@@ -625,7 +614,7 @@ jobs:
           # 创建校验文件
           cd "$BUILD_DIR"
           find . -type f -name "*.so*" -o -name "tscode*" -o -name "*.sh" -o -name "*.desktop" | sort > filelist.txt
-          md5sum $(find . -type f -not -path "./user-data/*" 2>/dev/null | sort) > checksums.txt 2>/dev/null || echo "创建校验和失败"
+          find . -type f -not -path "./user-data/*" -exec md5sum {} \; 2>/dev/null | sort > checksums.txt
           cd -
 
           # 打包
