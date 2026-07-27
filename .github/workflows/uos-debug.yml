@@ -208,20 +208,8 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          echo ""
-          echo "Build directory contents:"
-          ls -la "$BUILD_DIR"
-
-          echo ""
-          echo "resources/app contents:"
-          ls -la "$BUILD_DIR/resources/app"
-
-          echo ""
-          echo "out directory:"
-          ls -la "$BUILD_DIR/resources/app/out" 2>/dev/null || echo "out directory not found!"
-
       # ============================================================
-      # 12. Full backup (MUST include out, snapshot, etc.)
+      # 12. Full backup
       # ============================================================
       - name: 📥 Full backup
         run: |
@@ -233,7 +221,7 @@ jobs:
           mkdir -p /tmp/backup-custom
 
           echo ""
-          echo "1. Backup binary files..."
+          echo "Backup binary files..."
           if [ -f "$BUILD_DIR/tscode.real" ]; then
             cp "$BUILD_DIR/tscode.real" /tmp/backup-custom/
             echo "   [OK] tscode.real"
@@ -247,76 +235,46 @@ jobs:
           fi
 
           echo ""
-          echo "2. Backup config files..."
+          echo "Backup config files..."
           [ -f "$BUILD_DIR/package.json" ] && cp "$BUILD_DIR/package.json" /tmp/backup-custom/ && echo "   [OK] package.json"
           [ -f "$BUILD_DIR/product.json" ] && cp "$BUILD_DIR/product.json" /tmp/backup-custom/ && echo "   [OK] product.json"
 
           echo ""
-          echo "3. Backup out directory (CRITICAL - contains @builtin plugins)..."
-          if [ -d "$BUILD_DIR/resources/app/out" ]; then
-            cp -r "$BUILD_DIR/resources/app/out" /tmp/backup-custom/
-            OUT_SIZE=$(du -sh "$BUILD_DIR/resources/app/out" 2>/dev/null | awk '{print $1}')
-            echo "   [OK] out directory ($OUT_SIZE)"
-            # Verify out/vs exists
-            if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
-              echo "   [OK] out/vs exists"
-            else
-              echo "   [WARN] out/vs missing in backup!"
-            fi
-          else
-            echo "   [FAIL] out directory not found!"
-          fi
-
-          echo ""
-          echo "4. Backup extensions..."
+          echo "Backup extensions..."
           if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
             cp -r "$BUILD_DIR/resources/app/extensions" /tmp/backup-custom/
-            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
-            echo "   [OK] extensions ($EXT_COUNT files)"
+            echo "   [OK] extensions"
           fi
 
           echo ""
-          echo "5. Backup node_modules..."
-          NODE_SRC=""
+          echo "Backup node_modules..."
           if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
-            NODE_SRC="$BUILD_DIR/resources/app/node_modules"
+            cp -r "$BUILD_DIR/resources/app/node_modules" /tmp/backup-custom/
+            echo "   [OK] node_modules"
           elif [ -d "$BUILD_DIR/node_modules" ]; then
-            NODE_SRC="$BUILD_DIR/node_modules"
-          elif [ -d "./node_modules" ]; then
-            NODE_SRC="./node_modules"
-          fi
-
-          if [ -n "$NODE_SRC" ] && [ -d "$NODE_SRC" ]; then
-            cp -r "$NODE_SRC" /tmp/backup-custom/node_modules
-            echo "   [OK] node_modules from $NODE_SRC"
-            # Check native modules
-            for module in node-pty @vscode/spdlog @vscode/sqlite3 native-keymap; do
-              if [ -d "$NODE_SRC/$module" ]; then
-                echo "   [OK] $module found"
-              else
-                echo "   [WARN] $module not found in node_modules"
-              fi
-            done
-          else
-            echo "   [FAIL] node_modules not found!"
+            cp -r "$BUILD_DIR/node_modules" /tmp/backup-custom/
+            echo "   [OK] node_modules from root"
           fi
 
           echo ""
-          echo "6. Backup snapshot files..."
+          echo "Backup snapshot..."
           [ -f "$BUILD_DIR/snapshot_blob.bin" ] && cp "$BUILD_DIR/snapshot_blob.bin" /tmp/backup-custom/ && echo "   [OK] snapshot_blob.bin"
           [ -f "$BUILD_DIR/v8_context_snapshot.bin" ] && cp "$BUILD_DIR/v8_context_snapshot.bin" /tmp/backup-custom/ && echo "   [OK] v8_context_snapshot.bin"
 
           echo ""
-          echo "Backup contents:"
-          ls -la /tmp/backup-custom/
-          if [ -d "/tmp/backup-custom/out" ]; then
-            echo ""
-            echo "out directory contents:"
-            ls -la /tmp/backup-custom/out/
+          echo "Backup out directory (contains @builtin plugins)..."
+          if [ -d "$BUILD_DIR/resources/app/out" ]; then
+            cp -r "$BUILD_DIR/resources/app/out" /tmp/backup-custom/
+            OUT_SIZE=$(du -sh "$BUILD_DIR/resources/app/out" 2>/dev/null | awk '{print $1}')
+            echo "   [OK] out ($OUT_SIZE)"
           fi
 
+          echo ""
+          echo "Backup contents:"
+          ls -la /tmp/backup-custom/
+
       # ============================================================
-      # 13. Download official tar.gz
+      # 13. Download official VSCode
       # ============================================================
       - name: 📥 Download official
         run: |
@@ -358,7 +316,7 @@ jobs:
           echo "   [OK] Official content copied"
 
       # ============================================================
-      # 14. Restore user build (CRITICAL - restore out, snapshot, etc.)
+      # 14. Restore user build + copy @builtin from official
       # ============================================================
       - name: 📥 Restore user build
         run: |
@@ -369,62 +327,79 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
           echo ""
-          echo "1. Restore out directory (CRITICAL - @builtin plugins)..."
+          echo "1. Restore out directory from backup..."
           if [ -d "/tmp/backup-custom/out" ]; then
             rm -rf "$BUILD_DIR/resources/app/out"
             mkdir -p "$BUILD_DIR/resources/app"
             cp -r "/tmp/backup-custom/out" "$BUILD_DIR/resources/app/"
             echo "   [OK] out directory restored"
-            if [ -d "$BUILD_DIR/resources/app/out/vs" ]; then
-              echo "   [OK] out/vs exists after restore"
-            else
-              echo "   [FAIL] out/vs missing after restore!"
-              exit 1
-            fi
           else
-            echo "   [FAIL] out directory not in backup!"
-            exit 1
+            echo "   [WARN] out not in backup"
           fi
 
           echo ""
-          echo "2. Restore extensions..."
+          echo "2. Copy @builtin plugins from official to out/vs..."
+          OFFICIAL_OUT="$OFFICIAL_DIR/resources/app/out/vs"
+          TARGET_OUT="$BUILD_DIR/resources/app/out/vs"
+
+          if [ -d "$OFFICIAL_OUT" ]; then
+            # 确保目标目录存在
+            mkdir -p "$TARGET_OUT"
+
+            # 复制 workbench/contrib 下的所有 @builtin 插件
+            if [ -d "$OFFICIAL_OUT/workbench/contrib" ]; then
+              mkdir -p "$TARGET_OUT/workbench"
+              cp -r "$OFFICIAL_OUT/workbench/contrib" "$TARGET_OUT/workbench/"
+              echo "   [OK] Copied workbench/contrib (@builtin plugins)"
+
+              # 验证 Git 是否存在
+              if [ -d "$TARGET_OUT/workbench/contrib/git" ]; then
+                echo "   [OK] Git exists in workbench/contrib/git"
+              else
+                echo "   [WARN] Git not found in official workbench/contrib"
+              fi
+            fi
+
+            # 复制其他必要的目录
+            for dir in base code editor platform; do
+              if [ -d "$OFFICIAL_OUT/$dir" ] && [ ! -d "$TARGET_OUT/$dir" ]; then
+                cp -r "$OFFICIAL_OUT/$dir" "$TARGET_OUT/"
+                echo "   [OK] Copied $dir"
+              fi
+            done
+          else
+            echo "   [FAIL] Official out/vs not found"
+          fi
+
+          echo ""
+          echo "3. Restore extensions..."
           if [ -d "/tmp/backup-custom/extensions" ]; then
             rm -rf "$BUILD_DIR/resources/app/extensions"
             cp -r "/tmp/backup-custom/extensions" "$BUILD_DIR/resources/app/"
-            EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
-            echo "   [OK] extensions restored ($EXT_COUNT files)"
+            echo "   [OK] extensions restored"
           fi
 
           echo ""
-          echo "3. Restore node_modules..."
+          echo "4. Restore node_modules..."
           if [ -d "/tmp/backup-custom/node_modules" ]; then
             rm -rf "$BUILD_DIR/resources/app/node_modules"
             mkdir -p "$BUILD_DIR/resources/app"
             cp -r "/tmp/backup-custom/node_modules" "$BUILD_DIR/resources/app/node_modules"
             echo "   [OK] node_modules restored"
-            for module in node-pty @vscode/spdlog @vscode/sqlite3 native-keymap; do
-              if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
-                echo "   [OK] $module found"
-              else
-                echo "   [WARN] $module missing"
-              fi
-            done
-          else
-            echo "   [WARN] node_modules not in backup"
           fi
 
           echo ""
-          echo "4. Restore config files..."
+          echo "5. Restore config files..."
           [ -f "/tmp/backup-custom/package.json" ] && cp "/tmp/backup-custom/package.json" "$BUILD_DIR/" && echo "   [OK] package.json"
           [ -f "/tmp/backup-custom/product.json" ] && cp "/tmp/backup-custom/product.json" "$BUILD_DIR/" && echo "   [OK] product.json"
 
           echo ""
-          echo "5. Restore snapshot files..."
+          echo "6. Restore snapshot..."
           [ -f "/tmp/backup-custom/snapshot_blob.bin" ] && cp "/tmp/backup-custom/snapshot_blob.bin" "$BUILD_DIR/" && echo "   [OK] snapshot_blob.bin"
           [ -f "/tmp/backup-custom/v8_context_snapshot.bin" ] && cp "/tmp/backup-custom/v8_context_snapshot.bin" "$BUILD_DIR/" && echo "   [OK] v8_context_snapshot.bin"
 
           echo ""
-          echo "6. Restore custom binary..."
+          echo "7. Restore custom binary..."
           if [ -f "/tmp/backup-custom/tscode.real" ]; then
             rm -f "$BUILD_DIR/code"
             cp "/tmp/backup-custom/tscode.real" "$BUILD_DIR/tscode.real"
@@ -438,19 +413,8 @@ jobs:
           fi
 
           echo ""
-          echo "7. Final verification..."
-          echo "   out/vs: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   snapshot_blob.bin: $(if [ -f $BUILD_DIR/snapshot_blob.bin ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   product.json: $(if [ -f $BUILD_DIR/product.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   package.json: $(if [ -f $BUILD_DIR/package.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   extensions count: $(ls -la $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l)"
-
-          # Final check - exit if critical files missing
+          echo "8. Create tscode wrapper if missing..."
           if [ ! -f "$BUILD_DIR/tscode" ]; then
-            echo ""
-            echo "Creating tscode wrapper script..."
             cat > "$BUILD_DIR/tscode" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -477,6 +441,15 @@ jobs:
             chmod +x "$BUILD_DIR/tscode"
             echo "   [OK] tscode wrapper created"
           fi
+
+          echo ""
+          echo "9. Final verification..."
+          echo "   out/vs: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   workbench/contrib: $(if [ -d $BUILD_DIR/resources/app/out/vs/workbench/contrib ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   git: $(if [ -d $BUILD_DIR/resources/app/out/vs/workbench/contrib/git ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   snapshot_blob.bin: $(if [ -f $BUILD_DIR/snapshot_blob.bin ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   tscode: $(if [ -f $BUILD_DIR/tscode ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
 
           # Clean up
           rm -rf /tmp/backup-custom /tmp/code-tar /tmp/code.tar.gz
@@ -666,6 +639,7 @@ jobs:
           echo "   product.json: $(if [ -f $BUILD_DIR/product.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
           echo "   snapshot_blob.bin: $(if [ -f $BUILD_DIR/snapshot_blob.bin ]; then echo 'OK'; else echo 'MISSING'; fi)"
           echo "   out/vs: $(if [ -d $BUILD_DIR/resources/app/out/vs ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   git: $(if [ -d $BUILD_DIR/resources/app/out/vs/workbench/contrib/git ]; then echo 'OK'; else echo 'MISSING'; fi)"
           echo "   extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
           echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING'; fi)"
 
