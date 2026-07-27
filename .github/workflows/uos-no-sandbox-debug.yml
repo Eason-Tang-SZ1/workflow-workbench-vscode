@@ -62,12 +62,12 @@ jobs:
           # 自定义产品信息
           data['nameShort'] = 'MyCode'
           data['nameLong'] = 'MyCode - Custom IDE'
-          data['applicationName'] = 'mycode'
-          data['dataFolderName'] = '.mycode'
-          data['win32MutexName'] = 'mycode'
-          data['win32DirName'] = 'MyCode'
-          data['win32NameVersion'] = 'MyCode'
-          data['win32RegValueName'] = 'MyCode'
+          data['applicationName'] = 'tscode'  # 改为 tscode
+          data['dataFolderName'] = '.tscode'
+          data['win32MutexName'] = 'tscode'
+          data['win32DirName'] = 'TSCode'
+          data['win32NameVersion'] = 'TSCode'
+          data['win32RegValueName'] = 'TSCode'
           data['win32AppId'] = '{{E8B2F5B2-8A9F-4E9A-8B3C-4F5D6E7F8A9B}}'
           data['win32x64AppId'] = '{{E8B2F5B2-8A9F-4E9A-8B3C-4F5D6E7F8A9B}}'
           data['win32arm64AppId'] = '{{E8B2F5B2-8A9F-4E9A-8B3C-4F5D6E7F8A9B}}'
@@ -343,8 +343,14 @@ jobs:
           echo "📁 工作目录: $BUILD_DIR"
           cd "$BUILD_DIR"
 
-          # 获取产品名称
-          PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' ../product.json 2>/dev/null | cut -d'"' -f4 || echo "mycode")
+          # 从 resources/app/product.json 获取产品名称
+          PRODUCT_NAME="tscode"  # 默认值改为 tscode
+          if [ -f "resources/app/product.json" ]; then
+            PRODUCT_NAME=$(grep -o '"applicationName"[[:space:]]*:[[:space:]]*"[^"]*"' resources/app/product.json 2>/dev/null | cut -d'"' -f4)
+            if [ -z "$PRODUCT_NAME" ]; then
+              PRODUCT_NAME="tscode"
+            fi
+          fi
           echo "📌 产品名称: $PRODUCT_NAME"
 
           # 查找真实二进制文件
@@ -360,8 +366,8 @@ jobs:
           fi
 
           # 如果找不到，尝试其他常见名称
-          if [ -z "$REAL_EXEC" ]; then
-            for name in mycode code-oss code tscode; do
+          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
+            for name in tscode mycode code-oss code; do
               if [ -f "./$name" ]; then
                 REAL_EXEC="./$name"
                 echo "✅ 找到可执行文件: $REAL_EXEC"
@@ -376,21 +382,26 @@ jobs:
 
           # 如果还是找不到，查找所有可执行文件
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
-            echo "🔍 查找所有可执行文件:"
-            find . -maxdepth 2 -type f -executable ! -name "*.sh" 2>/dev/null | grep -v "node_modules" | grep -v "chrome-sandbox" | grep -v "chrome_crashpad_handler" | grep -v "lib" | while read f; do
-              echo "  - $f"
-              # 选择最大的可执行文件（通常是主程序）
-              if [ -z "$REAL_EXEC" ] || [ $(stat -c%s "$f" 2>/dev/null || echo 0) -gt $(stat -c%s "$REAL_EXEC" 2>/dev/null || echo 0) ]; then
-                REAL_EXEC="$f"
-              fi
-            done
+            echo "🔍 查找所有可执行文件（排除库和辅助程序）:"
+            # 查找主程序：最大的可执行文件（排除 chrome-sandbox, chrome_crashpad_handler, lib*）
+            REAL_EXEC=$(find . -maxdepth 2 -type f -executable ! -name "*.sh" 2>/dev/null | \
+                        grep -v "chrome-sandbox" | \
+                        grep -v "chrome_crashpad_handler" | \
+                        grep -v "lib.*\.so" | \
+                        grep -v "node_modules" | \
+                        sort -r -k5 -n | \
+                        head -1)
+
+            if [ -n "$REAL_EXEC" ]; then
+              echo "✅ 找到可执行文件: $REAL_EXEC"
+            fi
           fi
 
           if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
             echo "❌ 找不到可执行文件！"
             echo "当前目录内容:"
             ls -la
-            echo "查找可执行文件:"
+            echo "所有可执行文件:"
             find . -maxdepth 2 -type f -executable 2>/dev/null
             exit 1
           fi
@@ -401,7 +412,7 @@ jobs:
           REAL_EXEC_NAME=$(basename "$REAL_EXEC")
           mv "$REAL_EXEC" "${REAL_EXEC}.real"
 
-          # 创建启动包装器（无 root 权限运行）
+          # 创建启动包装器（使用原来的文件名）
           cat > "$REAL_EXEC_NAME" << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -423,12 +434,12 @@ jobs:
           mkdir -p "$USER_DATA_DIR"
 
           # 查找真实可执行文件
-          if [ -f "$SCRIPT_DIR/mycode.real" ]; then
-              EXEC="$SCRIPT_DIR/mycode.real"
-          elif [ -f "$SCRIPT_DIR/bin/mycode.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/mycode.real"
-          elif [ -f "$SCRIPT_DIR/tscode.real" ]; then
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
+              EXEC="$SCRIPT_DIR/bin/tscode.real"
+          elif [ -f "$SCRIPT_DIR/mycode.real" ]; then
+              EXEC="$SCRIPT_DIR/mycode.real"
           elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
               EXEC="$SCRIPT_DIR/code-oss.real"
           else
@@ -470,10 +481,10 @@ jobs:
           USER_DATA_DIR="${SCRIPT_DIR}/user-data"
           mkdir -p "$USER_DATA_DIR"
 
-          if [ -f "$SCRIPT_DIR/mycode.real" ]; then
-              EXEC="$SCRIPT_DIR/mycode.real"
-          elif [ -f "$SCRIPT_DIR/tscode.real" ]; then
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
+          elif [ -f "$SCRIPT_DIR/mycode.real" ]; then
+              EXEC="$SCRIPT_DIR/mycode.real"
           else
               echo "❌ 找不到 VSCode 可执行文件！"
               exit 1
@@ -499,7 +510,7 @@ jobs:
           [Desktop Entry]
           Version=1.0
           Type=Application
-          Name=MyCode IDE
+          Name=TSCode IDE
           Comment=Custom IDE for UOS
           Exec=./${DESKTOP_EXEC} %F
           Icon=./resources/app/resources/linux/code.png
@@ -513,7 +524,7 @@ jobs:
           # 创建使用说明
           cat > 使用说明.txt << EOF
           ==========================================
-          MyCode - 自定义 IDE (UOS 无 root 版本)
+          TSCode - 自定义 IDE (UOS 无 root 版本)
           ==========================================
 
           🖱️ 双击运行：
@@ -575,7 +586,7 @@ jobs:
           cd "$BUILD_DIR"
 
           # 获取实际的可执行文件名
-          EXEC_NAME="${REAL_EXEC_NAME:-mycode}"
+          EXEC_NAME="${REAL_EXEC_NAME:-tscode}"
 
           # 检查必要文件
           errors=0
@@ -683,7 +694,7 @@ jobs:
           cd "$BUILD_DIR"
 
           # 获取实际的可执行文件名
-          EXEC_NAME="${REAL_EXEC_NAME:-mycode}"
+          EXEC_NAME="${REAL_EXEC_NAME:-tscode}"
 
           # 确保所有文件可执行权限正确
           chmod +x "${EXEC_NAME}" 2>/dev/null || true
@@ -697,7 +708,7 @@ jobs:
 
           # 打包（使用目录名）
           DIR_NAME=$(basename "$BUILD_DIR")
-          PACKAGE_NAME="custom-ide-uos-${VERSION}-双击运行"
+          PACKAGE_NAME="tscode-ide-uos-${VERSION}-双击运行"
 
           echo "📦 打包目录: $DIR_NAME"
           echo "📦 包名: $PACKAGE_NAME"
@@ -720,11 +731,11 @@ jobs:
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: custom-ide-uos
+          name: tscode-ide-uos
           path: |
-            custom-ide-uos-*.tar.gz
-            custom-ide-uos-*.md5
-            custom-ide-uos-*.sha256
+            tscode-ide-uos-*.tar.gz
+            tscode-ide-uos-*.md5
+            tscode-ide-uos-*.sha256
           retention-days: 30
 
       # ============================================================
@@ -734,7 +745,7 @@ jobs:
         if: always()
         run: |
           echo "=========================================="
-          echo "📊 BUILD SUMMARY - Custom IDE"
+          echo "📊 BUILD SUMMARY - TSCode IDE"
           echo "=========================================="
           echo "🟢 Status: ${{ job.status }}"
           echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
@@ -746,18 +757,18 @@ jobs:
           if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 Build completed successfully!"
             echo ""
-            echo "📥 Download: custom-ide-uos-*.tar.gz"
-            echo "🔐 Checksum: custom-ide-uos-*.md5 / .sha256"
+            echo "📥 Download: tscode-ide-uos-*.tar.gz"
+            echo "🔐 Checksum: tscode-ide-uos-*.md5 / .sha256"
             echo ""
             echo "📌 部署到 UOS (无 root 权限):"
-            echo "  1. 解压: tar -xzf custom-ide-uos-*.tar.gz"
+            echo "  1. 解压: tar -xzf tscode-ide-uos-*.tar.gz"
             echo "  2. 进入目录: cd VSCode-linux-x64"
-            echo "  3. 双击 mycode 启动 (或查看实际可执行文件名)"
+            echo "  3. 双击 tscode 启动"
             echo "  4. 或执行: ./start-vscode.sh"
             echo ""
             echo "📁 产物结构:"
-            echo "  ├── mycode              # 双击启动脚本 (实际文件名可能不同)"
-            echo "  ├── mycode.real         # 真实二进制"
+            echo "  ├── tscode              # 双击启动脚本"
+            echo "  ├── tscode.real         # 真实二进制"
             echo "  ├── start-vscode.sh     # 备用启动脚本"
             echo "  ├── vscode-custom.desktop # 桌面快捷方式"
             echo "  ├── 使用说明.txt        # 使用说明"
