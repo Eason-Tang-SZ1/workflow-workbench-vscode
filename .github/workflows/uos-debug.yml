@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Debug Test Double-click)
+name: Build Custom VSCode for UOS (Debug Test Double-click-bultin)
 
 on:
   workflow_dispatch:
