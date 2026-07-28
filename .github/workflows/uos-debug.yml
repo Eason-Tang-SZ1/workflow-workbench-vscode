@@ -173,7 +173,7 @@ jobs:
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          # 【关键修复】移除 VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
@@ -183,7 +183,6 @@ jobs:
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
-          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           echo "Start: $(date)"
@@ -212,92 +211,214 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
+          echo ""
+          echo "Build directory contents:"
+          ls -la "$BUILD_DIR"
+
       # ============================================================
-      # 12. 复制 extensions 并从官方获取已编译的 Git
+      # 12. 从官方复制 @builtin 插件
       # ============================================================
-      - name: 📂 Copy extensions and compiled Git
+      - name: 📥 Copy @builtin from official
         run: |
           echo "=========================================="
-          echo "📂 Copy extensions and compiled Git"
+          echo "📥 Copy @builtin plugins from official"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 1. 从源码复制 extensions
-          if [ -d "./extensions" ]; then
-            echo "📌 Copying extensions from source..."
-            cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
-            echo "   ✅ extensions copied"
+          # 1. 下载官方 VSCode
+          echo ""
+          echo "📌 1. Downloading official VSCode..."
+          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+
+          if [ ! -f "/tmp/official.tar.gz" ]; then
+            echo "❌ Download failed!"
+            exit 1
           fi
 
-          # 2. 复制预构建扩展
+          echo "📌 Extracting..."
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+
+          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
+            echo "❌ Cannot find official VSCode directory!"
+            exit 1
+          fi
+
+          echo "✅ Found official directory: $OFFICIAL_DIR"
+
+          # 2. 复制 workbench/contrib（包含所有 @builtin 插件）
+          echo ""
+          echo "📌 2. Copying workbench/contrib (@builtin plugins)..."
+
+          OFFICIAL_CONTRIB="$OFFICIAL_DIR/resources/app/out/vs/workbench/contrib"
+          TARGET_CONTRIB="$BUILD_DIR/resources/app/out/vs/workbench/contrib"
+
+          if [ -d "$OFFICIAL_CONTRIB" ]; then
+            # 删除旧的 contrib
+            rm -rf "$TARGET_CONTRIB" 2>/dev/null
+            mkdir -p "$(dirname $TARGET_CONTRIB)"
+            cp -r "$OFFICIAL_CONTRIB" "$TARGET_CONTRIB"
+            echo "   ✅ workbench/contrib copied"
+
+            # 验证 Git
+            if [ -d "$TARGET_CONTRIB/git" ]; then
+              echo "   ✅ Git @builtin exists"
+            else
+              echo "   ⚠️ Git @builtin not found in official"
+            fi
+
+            # 统计插件数量
+            PLUGIN_COUNT=$(ls -la "$TARGET_CONTRIB" 2>/dev/null | grep "^d" | wc -l)
+            echo "   @builtin plugins count: $PLUGIN_COUNT"
+          else
+            echo "   ❌ Official workbench/contrib not found!"
+          fi
+
+          # 3. 复制其他必要的目录
+          echo ""
+          echo "📌 3. Copying other necessary directories..."
+
+          OFFICIAL_VS="$OFFICIAL_DIR/resources/app/out/vs"
+          TARGET_VS="$BUILD_DIR/resources/app/out/vs"
+
+          for dir in base code editor platform sessions; do
+            if [ -d "$OFFICIAL_VS/$dir" ]; then
+              rm -rf "$TARGET_VS/$dir" 2>/dev/null
+              cp -r "$OFFICIAL_VS/$dir" "$TARGET_VS/"
+              echo "   ✅ $dir copied"
+            fi
+          done
+
+          # 4. 复制官方 extensions（确保 Git 扩展已编译）
+          echo ""
+          echo "📌 4. Copying official extensions (compiled Git)..."
+
+          OFFICIAL_EXT="$OFFICIAL_DIR/resources/app/extensions"
+          TARGET_EXT="$BUILD_DIR/resources/app/extensions"
+
+          if [ -d "$OFFICIAL_EXT" ]; then
+            # 只复制 Git 扩展（已编译）
+            if [ -d "$OFFICIAL_EXT/git" ]; then
+              rm -rf "$TARGET_EXT/git" 2>/dev/null
+              cp -r "$OFFICIAL_EXT/git" "$TARGET_EXT/"
+              echo "   ✅ Git extension copied from official"
+
+              if [ -d "$TARGET_EXT/git/dist" ]; then
+                echo "   ✅ Git has dist/ (compiled)"
+              fi
+            fi
+          fi
+
+          # 5. 清理
+          echo ""
+          echo "📌 5. Cleaning up..."
+          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
+          echo "   ✅ Cleanup done"
+
+      # ============================================================
+      # 13. 复制预构建扩展
+      # ============================================================
+      - name: 📂 Copy prebuilt extensions
+        run: |
+          echo "=========================================="
+          echo "📂 Copy prebuilt extensions"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          TARGET_DIR="$BUILD_DIR/resources/app/extensions"
+          mkdir -p "$TARGET_DIR"
+
           if [ -d "./prebuilt-extensions" ]; then
-            echo "📌 Copying prebuilt extensions..."
+            echo "✅ Found prebuilt-extensions directory"
+
             for vsix in ./prebuilt-extensions/*.vsix; do
               if [ -f "$vsix" ]; then
                 ext_name=$(basename "$vsix" .vsix)
                 echo "   Extracting $ext_name..."
-                mkdir -p "$BUILD_DIR/resources/app/extensions/$ext_name"
-                unzip -q "$vsix" -d "$BUILD_DIR/resources/app/extensions/$ext_name"
-                if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name/extension" ]; then
-                  mv "$BUILD_DIR/resources/app/extensions/$ext_name/extension"/* "$BUILD_DIR/resources/app/extensions/$ext_name/"
-                  rm -rf "$BUILD_DIR/resources/app/extensions/$ext_name/extension"
+                rm -rf "$TARGET_DIR/$ext_name" 2>/dev/null
+                mkdir -p "$TARGET_DIR/$ext_name"
+                unzip -q "$vsix" -d "$TARGET_DIR/$ext_name"
+                if [ -d "$TARGET_DIR/$ext_name/extension" ]; then
+                  mv "$TARGET_DIR/$ext_name/extension"/* "$TARGET_DIR/$ext_name/"
+                  rm -rf "$TARGET_DIR/$ext_name/extension"
                 fi
+                echo "   ✅ $ext_name installed"
               fi
             done
-            echo "   ✅ prebuilt extensions copied"
           fi
 
-          # 3. 【关键】从官方下载已编译的 Git 扩展
-          echo ""
-          echo "📌 Downloading official VSCode for compiled Git..."
-          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+      # ============================================================
+      # 14. 复制 node_modules 和配置文件
+      # ============================================================
+      - name: 📄 Copy node_modules and config files
+        run: |
+          echo "=========================================="
+          echo "📄 Copy node_modules and config files"
+          echo "=========================================="
 
-          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions/git" ]; then
-            echo "   ✅ Found official Git extension"
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-            if [ -d "$OFFICIAL_DIR/resources/app/extensions/git/dist" ]; then
-              echo "   ✅ Official Git has dist/ (compiled)"
-              rm -rf "$BUILD_DIR/resources/app/extensions/git"
-              cp -r "$OFFICIAL_DIR/resources/app/extensions/git" "$BUILD_DIR/resources/app/extensions/"
-              echo "   ✅ Copied compiled Git from official"
-
-              # 验证
-              if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-                echo "   ✅ Git now has dist/"
-                ls -la "$BUILD_DIR/resources/app/extensions/git/dist/" | head -10
-              fi
-            else
-              echo "   ⚠️ Official Git also has src/ (not compiled)"
-            fi
-          else
-            echo "   ⚠️ Official Git extension not found"
-          fi
-
-          # 4. 复制 node_modules
+          # 复制 node_modules
           if [ -d "./node_modules" ]; then
-            echo ""
             echo "📌 Copying node_modules..."
             rm -rf "$BUILD_DIR/resources/app/node_modules"
             cp -r ./node_modules "$BUILD_DIR/resources/app/"
             echo "   ✅ node_modules copied"
           fi
 
-          # 5. 验证 Git 扩展
+          # 复制配置文件到根目录
           echo ""
-          echo "📌 Verifying Git extension:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-            echo "   ✅ Git has dist/ (compiled)"
+          echo "📌 Copying config files to root..."
+          cd "$BUILD_DIR"
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "   ✅ package.json"
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "   ✅ product.json"
+
+      # ============================================================
+      # 15. 验证 @builtin 插件
+      # ============================================================
+      - name: 🔍 Verify @builtin plugins
+        run: |
+          echo "=========================================="
+          echo "🔍 Verify @builtin plugins"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          echo ""
+          echo "📌 Checking @builtin plugins:"
+
+          # 检查 workbench/contrib
+          if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib" ]; then
+            CONTRIB_COUNT=$(ls -la "$BUILD_DIR/resources/app/out/vs/workbench/contrib" 2>/dev/null | grep "^d" | wc -l)
+            echo "   ✅ workbench/contrib exists ($CONTRIB_COUNT plugins)"
+
+            # 检查关键插件
+            for plugin in git github markdown-language-features typescript-language-features html-language-features css-language-features json-language-features; do
+              if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/$plugin" ]; then
+                echo "   ✅ $plugin"
+              fi
+            done
           else
-            echo "   ❌ Git does NOT have dist/ (not compiled)"
+            echo "   ❌ workbench/contrib NOT found!"
+            exit 1
           fi
 
-          # 6. 验证原生模块
+          # 检查 Git 扩展
           echo ""
-          echo "📌 Verifying native modules:"
+          echo "📌 Checking Git extension:"
+          if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
+            echo "   ✅ Git extension compiled (dist/)"
+          elif [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/git" ]; then
+            echo "   ✅ Git @builtin exists"
+          else
+            echo "   ❌ Git not found!"
+          fi
+
+          # 检查原生模块
+          echo ""
+          echo "📌 Checking native modules:"
           for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
             if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
               echo "   ✅ $module"
@@ -306,26 +427,8 @@ jobs:
             fi
           done
 
-          # 清理
-          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
-
       # ============================================================
-      # 13. 复制配置文件到根目录
-      # ============================================================
-      - name: 📄 Copy config files to root
-        run: |
-          echo "=========================================="
-          echo "📄 Copy config files to root"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          cd "$BUILD_DIR"
-
-          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
-          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
-
-      # ============================================================
-      # 14. 创建启动脚本
+      # 16. 创建启动脚本
       # ============================================================
       - name: 🚀 Create startup scripts
         run: |
@@ -336,6 +439,7 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
+          # 查找并重命名二进制
           REAL_EXEC=""
           for name in code code-oss; do
             if [ -f "./$name" ]; then
@@ -354,7 +458,9 @@ jobs:
           fi
 
           mv "$REAL_EXEC" "tscode.real"
+          chmod +x tscode.real
 
+          # 创建包装脚本
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -380,8 +486,8 @@ jobs:
           WRAPPER_EOF
 
           chmod +x tscode
-          chmod +x tscode.real
 
+          # 创建启动脚本
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -409,6 +515,7 @@ jobs:
 
           chmod +x start-vscode.sh
 
+          # 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -427,12 +534,12 @@ jobs:
           echo "✅ Startup scripts created"
 
       # ============================================================
-      # 15. 打包
+      # 17. 最终验证和打包
       # ============================================================
-      - name: 📦 Package
+      - name: 📦 Final validation and package
         run: |
           echo "=========================================="
-          echo "📦 Package"
+          echo "📦 Final validation and package"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -445,8 +552,50 @@ jobs:
 
           echo ""
           echo "📌 Pre-package validation:"
-          echo "   Git dist/: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   package.json: $(if [ -f $BUILD_DIR/package.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   product.json: $(if [ -f $BUILD_DIR/product.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
+
+          echo ""
+          echo "📌 @builtin plugins:"
+          if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib" ]; then
+            PLUGIN_COUNT=$(ls -la "$BUILD_DIR/resources/app/out/vs/workbench/contrib" 2>/dev/null | grep "^d" | wc -l)
+            echo "   workbench/contrib: $PLUGIN_COUNT plugins"
+
+            for plugin in git github markdown-language-features typescript-language-features; do
+              if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/$plugin" ]; then
+                echo "   ✅ $plugin"
+              else
+                echo "   ❌ $plugin"
+              fi
+            done
+          else
+            echo "   ❌ workbench/contrib NOT found!"
+          fi
+
+          echo ""
+          echo "📌 Git extension:"
+          if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
+            echo "   ✅ Git compiled (dist/)"
+          else
+            echo "   ⚠️ Git not compiled"
+          fi
+
+          echo ""
+          echo "📌 Native modules:"
+          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
+            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
+              NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
+              echo "   ✅ $module ($NODE_FILES .node files)"
+            else
+              echo "   ❌ $module"
+            fi
+          done
+
+          echo ""
+          echo "📌 Extensions count:"
+          EXT_COUNT=$(ls -la "$BUILD_DIR/resources/app/extensions" 2>/dev/null | grep "^d" | wc -l)
+          echo "   $EXT_COUNT extensions"
 
           tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" \
             --preserve-permissions \
@@ -477,11 +626,18 @@ jobs:
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "Git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'Compiled (dist/)'; else echo 'Not compiled (src/)'; fi)"
+            echo "Package contains:"
+            echo "  - Custom binary"
+            echo "  - @builtin plugins from official"
+            echo "  - Compiled Git extension"
+            echo "  - Native modules"
+            echo "  - Custom extensions"
             echo ""
             echo "On UOS:"
             echo "  1. tar -xzf vscode-uos-*.tar.gz"
             echo "  2. cd VSCode-linux-x64"
             echo "  3. ./tscode"
+          else
+            echo "Build failed. Check logs for details."
           fi
           echo "=========================================="
