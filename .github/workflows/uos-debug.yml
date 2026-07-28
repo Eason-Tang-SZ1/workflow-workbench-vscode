@@ -536,60 +536,89 @@ jobs:
           echo "📌 Before cleanup:"
           du -sh .
 
-          # 1. 只保留必要的原生模块
+          # 1. 清理 node_modules（保留必要的原生模块）
           echo ""
-          echo "1. Cleaning node_modules..."
-          cd resources/app/node_modules
+          echo "1. Cleaning node_modules (preserve essential modules)..."
 
-          # 需要保留的模块
-          KEEP_MODULES=("node-pty" "vscode-oniguruma" "vscode-textmate" "vscode-ripgrep" "vscode-proxy-agent" "native-keymap")
+          # 需要保留的模块（白名单）
+          KEEP_MODULES=(
+            "node-pty"
+            "vscode-oniguruma"
+            "vscode-textmate"
+            "vscode-ripgrep"
+            "vscode-proxy-agent"
+            "native-keymap"
+            "@vscode"
+          )
 
-          # 删除不必要的模块
-          for dir in */; do
-            dir_name="${dir%/}"
-            should_keep=false
+          if [ -d "resources/app/node_modules" ]; then
+            cd resources/app/node_modules
 
-            for keep in "${KEEP_MODULES[@]}"; do
-              if [[ "$dir_name" == "$keep" ]]; then
-                should_keep=true
-                break
-              fi
-            done
-
-            if [[ "$dir_name" == "@vscode" ]]; then
-              should_keep=true
-            fi
-
-            if [[ "$should_keep" == false ]]; then
-              size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}')
-              echo "   Deleting: $dir_name ($size)"
-              rm -rf "$dir_name"
-            fi
-          done
-
-          # 如果是 @vscode，只保留子模块
-          if [ -d "@vscode" ]; then
-            cd @vscode
-            KEEP_VSCODE=("spdlog" "sqlite3")
+            # 删除不必要的模块
             for dir in */; do
               dir_name="${dir%/}"
               should_keep=false
-              for keep in "${KEEP_VSCODE[@]}"; do
+
+              for keep in "${KEEP_MODULES[@]}"; do
                 if [[ "$dir_name" == "$keep" ]]; then
                   should_keep=true
                   break
                 fi
               done
+
               if [[ "$should_keep" == false ]]; then
-                size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}')
-                echo "   Deleting: @vscode/$dir_name ($size)"
+                size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}' || echo "unknown")
+                echo "   Deleting: $dir_name ($size)"
                 rm -rf "$dir_name"
+              else
+                echo "   Keeping: $dir_name"
               fi
             done
-            cd ..
+
+            # 清理 @vscode 子模块（只保留必要的）
+            if [ -d "@vscode" ]; then
+              cd @vscode
+              KEEP_VSCODE=("spdlog" "sqlite3")
+              for dir in */; do
+                dir_name="${dir%/}"
+                should_keep=false
+                for keep in "${KEEP_VSCODE[@]}"; do
+                  if [[ "$dir_name" == "$keep" ]]; then
+                    should_keep=true
+                    break
+                  fi
+                done
+                if [[ "$should_keep" == false ]]; then
+                  size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}' || echo "unknown")
+                  echo "   Deleting: @vscode/$dir_name ($size)"
+                  rm -rf "$dir_name"
+                else
+                  echo "   Keeping: @vscode/$dir_name"
+                fi
+              done
+              cd ..
+            fi
+
+            cd ../..
+          else
+            echo "   ⚠️ node_modules not found, skipping..."
           fi
 
-          cd ../..
+          # 验证 node_modules 是否还存在
+          echo ""
+          echo "📌 Verifying node_modules after cleanup:"
+          if [ -d "resources/app/node_modules" ]; then
+            MODULE_COUNT=$(ls -la resources/app/node_modules 2>/dev/null | grep "^d" | wc -l)
+            if [ "$MODULE_COUNT" -gt 0 ]; then
+              echo "   ✅ node_modules exists with $MODULE_COUNT directories"
+            else
+              echo "   ⚠️ node_modules is empty, creating stub..."
+              mkdir -p resources/app/node_modules
+            fi
+          else
+            echo "   ❌ node_modules was deleted! Recreating..."
+            mkdir -p resources/app/node_modules
+          fi
 
           # 2. 删除源码文件
           echo ""
@@ -626,9 +655,17 @@ jobs:
 
           echo ""
           echo "📌 Directory sizes:"
-          du -sh resources/app/node_modules 2>/dev/null || echo "   node_modules: deleted"
-          du -sh resources/app/extensions 2>/dev/null
-          du -sh resources/app/out 2>/dev/null
+          if [ -d "resources/app/node_modules" ]; then
+            du -sh resources/app/node_modules 2>/dev/null || echo "   node_modules: (empty)"
+          else
+            echo "   node_modules: NOT FOUND"
+          fi
+          if [ -d "resources/app/extensions" ]; then
+            du -sh resources/app/extensions 2>/dev/null
+          fi
+          if [ -d "resources/app/out" ]; then
+            du -sh resources/app/out 2>/dev/null
+          fi
 
       # ============================================================
       # 18. 验证原生模块是否完整
@@ -675,6 +712,18 @@ jobs:
           else
             echo ""
             echo "⚠️ Some modules are missing. Check cleanup script."
+            # 如果 node-pty 缺失，尝试从备份恢复
+            if [ ! -d "$BUILD_DIR/resources/app/node_modules/node-pty" ]; then
+              echo ""
+              echo "📌 Attempting to restore node-pty..."
+              if [ -d "/tmp/backup-custom/node_modules/node-pty" ]; then
+                mkdir -p "$BUILD_DIR/resources/app/node_modules"
+                cp -r "/tmp/backup-custom/node_modules/node-pty" "$BUILD_DIR/resources/app/node_modules/"
+                echo "   ✅ node-pty restored from backup"
+              else
+                echo "   ❌ No backup found for node-pty"
+              fi
+            fi
           fi
 
       # ============================================================
@@ -713,7 +762,6 @@ jobs:
           echo "📌 Git extension:"
           if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
             echo "   ✅ Git compiled (dist/)"
-
           elif [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/git" ]; then
             echo "   ✅ Git @builtin exists"
           else
