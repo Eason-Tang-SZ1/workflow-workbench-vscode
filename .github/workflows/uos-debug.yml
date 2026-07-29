@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Zip Debug Test Double-click-bultin)
+name: Build Custom VSCode for UOS (Debug Test Double-click)
 
 on:
   workflow_dispatch:
@@ -173,6 +173,7 @@ jobs:
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
@@ -182,6 +183,7 @@ jobs:
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           echo "Start: $(date)"
@@ -210,206 +212,92 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          echo ""
-          echo "Build directory contents:"
-          ls -la "$BUILD_DIR"
-
       # ============================================================
-      # 12. 从官方复制 @builtin 插件
+      # 12. 复制 extensions 并从官方获取已编译的 Git
       # ============================================================
-      - name: 📥 Copy @builtin from official
+      - name: 📂 Copy extensions and compiled Git
         run: |
           echo "=========================================="
-          echo "📥 Copy @builtin plugins from official"
+          echo "📂 Copy extensions and compiled Git"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 1. 下载官方 VSCode
-          echo ""
-          echo "📌 1. Downloading official VSCode..."
-          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
-
-          if [ ! -f "/tmp/official.tar.gz" ]; then
-            echo "❌ Download failed!"
-            exit 1
+          # 1. 从源码复制 extensions
+          if [ -d "./extensions" ]; then
+            echo "📌 Copying extensions from source..."
+            cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
+            echo "   ✅ extensions copied"
           fi
 
-          echo "📌 Extracting..."
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-
-          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
-            echo "❌ Cannot find official VSCode directory!"
-            exit 1
-          fi
-
-          echo "✅ Found official directory: $OFFICIAL_DIR"
-
-          # 2. 复制 workbench/contrib（包含所有 @builtin 插件）
-          echo ""
-          echo "📌 2. Copying workbench/contrib (@builtin plugins)..."
-
-          OFFICIAL_CONTRIB="$OFFICIAL_DIR/resources/app/out/vs/workbench/contrib"
-          TARGET_CONTRIB="$BUILD_DIR/resources/app/out/vs/workbench/contrib"
-
-          if [ -d "$OFFICIAL_CONTRIB" ]; then
-            rm -rf "$TARGET_CONTRIB" 2>/dev/null
-            mkdir -p "$(dirname $TARGET_CONTRIB)"
-            cp -r "$OFFICIAL_CONTRIB" "$TARGET_CONTRIB"
-            echo "   ✅ workbench/contrib copied"
-
-            if [ -d "$TARGET_CONTRIB/git" ]; then
-              echo "   ✅ Git @builtin exists"
-            else
-              echo "   ⚠️ Git @builtin not found in official"
-            fi
-
-            PLUGIN_COUNT=$(ls -la "$TARGET_CONTRIB" 2>/dev/null | grep "^d" | wc -l)
-            echo "   @builtin plugins count: $PLUGIN_COUNT"
-          else
-            echo "   ❌ Official workbench/contrib not found!"
-          fi
-
-          # 3. 复制其他必要的目录
-          echo ""
-          echo "📌 3. Copying other necessary directories..."
-
-          OFFICIAL_VS="$OFFICIAL_DIR/resources/app/out/vs"
-          TARGET_VS="$BUILD_DIR/resources/app/out/vs"
-
-          for dir in base code editor platform sessions; do
-            if [ -d "$OFFICIAL_VS/$dir" ]; then
-              rm -rf "$TARGET_VS/$dir" 2>/dev/null
-              cp -r "$OFFICIAL_VS/$dir" "$TARGET_VS/"
-              echo "   ✅ $dir copied"
-            fi
-          done
-
-          # 4. 复制官方 extensions（确保 Git 扩展已编译）
-          echo ""
-          echo "📌 4. Copying official extensions (compiled Git)..."
-
-          OFFICIAL_EXT="$OFFICIAL_DIR/resources/app/extensions"
-          TARGET_EXT="$BUILD_DIR/resources/app/extensions"
-
-          if [ -d "$OFFICIAL_EXT" ]; then
-            if [ -d "$OFFICIAL_EXT/git" ]; then
-              rm -rf "$TARGET_EXT/git" 2>/dev/null
-              cp -r "$OFFICIAL_EXT/git" "$TARGET_EXT/"
-              echo "   ✅ Git extension copied from official"
-
-              if [ -d "$TARGET_EXT/git/dist" ]; then
-                echo "   ✅ Git has dist/ (compiled)"
-              fi
-            fi
-          fi
-
-          # 5. 清理
-          echo ""
-          echo "📌 5. Cleaning up..."
-          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
-          echo "   ✅ Cleanup done"
-
-      # ============================================================
-      # 13. 复制预构建扩展
-      # ============================================================
-      - name: 📂 Copy prebuilt extensions
-        run: |
-          echo "=========================================="
-          echo "📂 Copy prebuilt extensions"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          TARGET_DIR="$BUILD_DIR/resources/app/extensions"
-          mkdir -p "$TARGET_DIR"
-
+          # 2. 复制预构建扩展
           if [ -d "./prebuilt-extensions" ]; then
-            echo "✅ Found prebuilt-extensions directory"
-
+            echo "📌 Copying prebuilt extensions..."
             for vsix in ./prebuilt-extensions/*.vsix; do
               if [ -f "$vsix" ]; then
                 ext_name=$(basename "$vsix" .vsix)
                 echo "   Extracting $ext_name..."
-                rm -rf "$TARGET_DIR/$ext_name" 2>/dev/null
-                mkdir -p "$TARGET_DIR/$ext_name"
-                unzip -q "$vsix" -d "$TARGET_DIR/$ext_name"
-                if [ -d "$TARGET_DIR/$ext_name/extension" ]; then
-                  mv "$TARGET_DIR/$ext_name/extension"/* "$TARGET_DIR/$ext_name/"
-                  rm -rf "$TARGET_DIR/$ext_name/extension"
+                mkdir -p "$BUILD_DIR/resources/app/extensions/$ext_name"
+                unzip -q "$vsix" -d "$BUILD_DIR/resources/app/extensions/$ext_name"
+                if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name/extension" ]; then
+                  mv "$BUILD_DIR/resources/app/extensions/$ext_name/extension"/* "$BUILD_DIR/resources/app/extensions/$ext_name/"
+                  rm -rf "$BUILD_DIR/resources/app/extensions/$ext_name/extension"
                 fi
-                echo "   ✅ $ext_name installed"
               fi
             done
+            echo "   ✅ prebuilt extensions copied"
           fi
 
-      # ============================================================
-      # 14. 复制 node_modules 和配置文件
-      # ============================================================
-      - name: 📄 Copy node_modules and config files
-        run: |
-          echo "=========================================="
-          echo "📄 Copy node_modules and config files"
-          echo "=========================================="
+          # 3. 【关键】从官方下载已编译的 Git 扩展
+          echo ""
+          echo "📌 Downloading official VSCode for compiled Git..."
+          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions/git" ]; then
+            echo "   ✅ Found official Git extension"
 
-          # 复制 node_modules
+            if [ -d "$OFFICIAL_DIR/resources/app/extensions/git/dist" ]; then
+              echo "   ✅ Official Git has dist/ (compiled)"
+              rm -rf "$BUILD_DIR/resources/app/extensions/git"
+              cp -r "$OFFICIAL_DIR/resources/app/extensions/git" "$BUILD_DIR/resources/app/extensions/"
+              echo "   ✅ Copied compiled Git from official"
+
+              # 验证
+              if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
+                echo "   ✅ Git now has dist/"
+                ls -la "$BUILD_DIR/resources/app/extensions/git/dist/" | head -10
+              fi
+            else
+              echo "   ⚠️ Official Git also has src/ (not compiled)"
+            fi
+          else
+            echo "   ⚠️ Official Git extension not found"
+          fi
+
+          # 4. 复制 node_modules
           if [ -d "./node_modules" ]; then
+            echo ""
             echo "📌 Copying node_modules..."
             rm -rf "$BUILD_DIR/resources/app/node_modules"
             cp -r ./node_modules "$BUILD_DIR/resources/app/"
             echo "   ✅ node_modules copied"
           fi
 
-          # 复制配置文件到根目录
+          # 5. 验证 Git 扩展
           echo ""
-          echo "📌 Copying config files to root..."
-          cd "$BUILD_DIR"
-          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "   ✅ package.json"
-          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "   ✅ product.json"
-
-      # ============================================================
-      # 15. 验证 @builtin 插件
-      # ============================================================
-      - name: 🔍 Verify @builtin plugins
-        run: |
-          echo "=========================================="
-          echo "🔍 Verify @builtin plugins"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo ""
-          echo "📌 Checking @builtin plugins:"
-
-          if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib" ]; then
-            CONTRIB_COUNT=$(ls -la "$BUILD_DIR/resources/app/out/vs/workbench/contrib" 2>/dev/null | grep "^d" | wc -l)
-            echo "   ✅ workbench/contrib exists ($CONTRIB_COUNT plugins)"
-
-            for plugin in git github markdown-language-features typescript-language-features html-language-features css-language-features json-language-features; do
-              if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/$plugin" ]; then
-                echo "   ✅ $plugin"
-              fi
-            done
-          else
-            echo "   ❌ workbench/contrib NOT found!"
-            exit 1
-          fi
-
-          echo ""
-          echo "📌 Checking Git extension:"
+          echo "📌 Verifying Git extension:"
           if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-            echo "   ✅ Git extension compiled (dist/)"
-          elif [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/git" ]; then
-            echo "   ✅ Git @builtin exists"
+            echo "   ✅ Git has dist/ (compiled)"
           else
-            echo "   ❌ Git not found!"
+            echo "   ❌ Git does NOT have dist/ (not compiled)"
           fi
 
+          # 6. 验证原生模块
           echo ""
-          echo "📌 Checking native modules:"
+          echo "📌 Verifying native modules:"
           for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
             if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
               echo "   ✅ $module"
@@ -418,8 +306,26 @@ jobs:
             fi
           done
 
+          # 清理
+          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
+
       # ============================================================
-      # 16. 创建启动脚本
+      # 13. 复制配置文件到根目录
+      # ============================================================
+      - name: 📄 Copy config files to root
+        run: |
+          echo "=========================================="
+          echo "📄 Copy config files to root"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          cd "$BUILD_DIR"
+
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
+
+      # ============================================================
+      # 14. 创建启动脚本
       # ============================================================
       - name: 🚀 Create startup scripts
         run: |
@@ -448,7 +354,6 @@ jobs:
           fi
 
           mv "$REAL_EXEC" "tscode.real"
-          chmod +x tscode.real
 
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
@@ -475,6 +380,7 @@ jobs:
           WRAPPER_EOF
 
           chmod +x tscode
+          chmod +x tscode.real
 
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
@@ -521,218 +427,12 @@ jobs:
           echo "✅ Startup scripts created"
 
       # ============================================================
-      # 17. 清理不必要的文件（减小包体积）
+      # 15. 打包
       # ============================================================
-      - name: 🗑️ Clean unnecessary files
+      - name: 📦 Package
         run: |
           echo "=========================================="
-          echo "🗑️ Clean unnecessary files"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          cd "$BUILD_DIR"
-
-          echo ""
-          echo "📌 Before cleanup:"
-          du -sh .
-
-          # 1. 清理 node_modules（保留必要的原生模块）
-          echo ""
-          echo "1. Cleaning node_modules (preserve essential modules)..."
-
-          # 需要保留的模块（白名单）
-          KEEP_MODULES=(
-            "node-pty"
-            "vscode-oniguruma"
-            "vscode-textmate"
-            "vscode-ripgrep"
-            "vscode-proxy-agent"
-            "native-keymap"
-            "@vscode"
-          )
-
-          if [ -d "resources/app/node_modules" ]; then
-            cd resources/app/node_modules
-
-            # 删除不必要的模块
-            for dir in */; do
-              dir_name="${dir%/}"
-              should_keep=false
-
-              for keep in "${KEEP_MODULES[@]}"; do
-                if [[ "$dir_name" == "$keep" ]]; then
-                  should_keep=true
-                  break
-                fi
-              done
-
-              if [[ "$should_keep" == false ]]; then
-                size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}' || echo "unknown")
-                echo "   Deleting: $dir_name ($size)"
-                rm -rf "$dir_name"
-              else
-                echo "   Keeping: $dir_name"
-              fi
-            done
-
-            # 清理 @vscode 子模块（只保留必要的）
-            if [ -d "@vscode" ]; then
-              cd @vscode
-              KEEP_VSCODE=("spdlog" "sqlite3")
-              for dir in */; do
-                dir_name="${dir%/}"
-                should_keep=false
-                for keep in "${KEEP_VSCODE[@]}"; do
-                  if [[ "$dir_name" == "$keep" ]]; then
-                    should_keep=true
-                    break
-                  fi
-                done
-                if [[ "$should_keep" == false ]]; then
-                  size=$(du -sh "$dir_name" 2>/dev/null | awk '{print $1}' || echo "unknown")
-                  echo "   Deleting: @vscode/$dir_name ($size)"
-                  rm -rf "$dir_name"
-                else
-                  echo "   Keeping: @vscode/$dir_name"
-                fi
-              done
-              cd ..
-            fi
-
-            cd ../..
-          else
-            echo "   ⚠️ node_modules not found, skipping..."
-          fi
-
-          # 验证 node_modules 是否还存在
-          echo ""
-          echo "📌 Verifying node_modules after cleanup:"
-          if [ -d "resources/app/node_modules" ]; then
-            MODULE_COUNT=$(ls -la resources/app/node_modules 2>/dev/null | grep "^d" | wc -l)
-            if [ "$MODULE_COUNT" -gt 0 ]; then
-              echo "   ✅ node_modules exists with $MODULE_COUNT directories"
-            else
-              echo "   ⚠️ node_modules is empty, creating stub..."
-              mkdir -p resources/app/node_modules
-            fi
-          else
-            echo "   ❌ node_modules was deleted! Recreating..."
-            mkdir -p resources/app/node_modules
-          fi
-
-          # 2. 删除源码文件
-          echo ""
-          echo "2. Deleting source files..."
-          find resources/app/extensions -type d -name "src" -exec rm -rf {} + 2>/dev/null || true
-          find resources/app/extensions -type f -name "*.ts" -delete 2>/dev/null || true
-          find resources/app/extensions -type f -name "*.tsx" -delete 2>/dev/null || true
-          echo "   ✅ Source files deleted"
-
-          # 3. 删除 .map 文件
-          echo ""
-          echo "3. Deleting .map files..."
-          find resources/app/extensions -type f -name "*.map" -delete 2>/dev/null || true
-          echo "   ✅ .map files deleted"
-
-          # 4. 删除测试文件
-          echo ""
-          echo "4. Deleting test files..."
-          find resources/app/extensions -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find resources/app/extensions -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find resources/app/extensions -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          echo "   ✅ Test files deleted"
-
-          # 5. 删除文档文件（保留 LICENSE 和 README）
-          echo ""
-          echo "5. Deleting documentation files..."
-          find resources/app/extensions -type f \( -name "*.md" -o -name "*.txt" -o -name "*.doc" -o -name "*.pdf" \) ! -name "LICENSE*" ! -name "README*" -delete 2>/dev/null || true
-          echo "   ✅ Documentation files deleted"
-
-          # 6. 显示清理结果
-          echo ""
-          echo "📌 After cleanup:"
-          du -sh .
-
-          echo ""
-          echo "📌 Directory sizes:"
-          if [ -d "resources/app/node_modules" ]; then
-            du -sh resources/app/node_modules 2>/dev/null || echo "   node_modules: (empty)"
-          else
-            echo "   node_modules: NOT FOUND"
-          fi
-          if [ -d "resources/app/extensions" ]; then
-            du -sh resources/app/extensions 2>/dev/null
-          fi
-          if [ -d "resources/app/out" ]; then
-            du -sh resources/app/out 2>/dev/null
-          fi
-
-      # ============================================================
-      # 18. 验证原生模块是否完整
-      # ============================================================
-      - name: 🔍 Verify native modules after cleanup
-        run: |
-          echo "=========================================="
-          echo "🔍 Verify native modules after cleanup"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo ""
-          echo "📌 Verifying critical native modules:"
-
-          CRITICAL_MODULES=(
-            "node-pty"
-            "@vscode/spdlog"
-            "@vscode/sqlite3"
-            "native-keymap"
-          )
-
-          ALL_OK=true
-          for module in "${CRITICAL_MODULES[@]}"; do
-            MODULE_PATH="$BUILD_DIR/resources/app/node_modules/$module"
-            if [ -d "$MODULE_PATH" ]; then
-              NODE_FILES=$(find "$MODULE_PATH" -name "*.node" -type f 2>/dev/null | wc -l)
-              if [ "$NODE_FILES" -gt 0 ]; then
-                echo "   ✅ $module ($NODE_FILES .node files)"
-              else
-                echo "   ⚠️ $module (exists but no .node files)"
-                ALL_OK=false
-              fi
-            else
-              echo "   ❌ $module (missing)"
-              ALL_OK=false
-            fi
-          done
-
-          if [ "$ALL_OK" = true ]; then
-            echo ""
-            echo "✅ All critical native modules preserved!"
-            echo "   Terminal (node-pty) will work normally"
-          else
-            echo ""
-            echo "⚠️ Some modules are missing. Check cleanup script."
-            # 如果 node-pty 缺失，尝试从备份恢复
-            if [ ! -d "$BUILD_DIR/resources/app/node_modules/node-pty" ]; then
-              echo ""
-              echo "📌 Attempting to restore node-pty..."
-              if [ -d "/tmp/backup-custom/node_modules/node-pty" ]; then
-                mkdir -p "$BUILD_DIR/resources/app/node_modules"
-                cp -r "/tmp/backup-custom/node_modules/node-pty" "$BUILD_DIR/resources/app/node_modules/"
-                echo "   ✅ node-pty restored from backup"
-              else
-                echo "   ❌ No backup found for node-pty"
-              fi
-            fi
-          fi
-
-      # ============================================================
-      # 19. 最终验证和打包
-      # ============================================================
-      - name: 📦 Final validation and package
-        run: |
-          echo "=========================================="
-          echo "📦 Final validation and package"
+          echo "📦 Package"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -745,43 +445,8 @@ jobs:
 
           echo ""
           echo "📌 Pre-package validation:"
-          echo "   tscode.real: $(if [ -f $BUILD_DIR/tscode.real ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   package.json: $(if [ -f $BUILD_DIR/package.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   product.json: $(if [ -f $BUILD_DIR/product.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
-
-          echo ""
-          echo "📌 @builtin plugins:"
-          if [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib" ]; then
-            PLUGIN_COUNT=$(ls -la "$BUILD_DIR/resources/app/out/vs/workbench/contrib" 2>/dev/null | grep "^d" | wc -l)
-            echo "   workbench/contrib: $PLUGIN_COUNT plugins"
-          else
-            echo "   ❌ workbench/contrib NOT found!"
-          fi
-
-          echo ""
-          echo "📌 Git extension:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-            echo "   ✅ Git compiled (dist/)"
-          elif [ -d "$BUILD_DIR/resources/app/out/vs/workbench/contrib/git" ]; then
-            echo "   ✅ Git @builtin exists"
-          else
-            echo "   ❌ Git not found!"
-          fi
-
-          echo ""
-          echo "📌 Native modules:"
-          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
-            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
-              NODE_FILES=$(find "$BUILD_DIR/resources/app/node_modules/$module" -name "*.node" -type f 2>/dev/null | wc -l)
-              echo "   ✅ $module ($NODE_FILES .node files)"
-            else
-              echo "   ❌ $module"
-            fi
-          done
-
-          echo ""
-          echo "📌 Package size:"
-          du -sh "$BUILD_DIR"
+          echo "   Git dist/: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'OK'; else echo 'MISSING'; fi)"
+          echo "   extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
 
           tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" \
             --preserve-permissions \
@@ -812,18 +477,11 @@ jobs:
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "Package contains:"
-            echo "  - Custom binary"
-            echo "  - @builtin plugins from official"
-            echo "  - Compiled Git extension"
-            echo "  - Only essential native modules"
-            echo "  - Custom extensions"
+            echo "Git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'Compiled (dist/)'; else echo 'Not compiled (src/)'; fi)"
             echo ""
             echo "On UOS:"
             echo "  1. tar -xzf vscode-uos-*.tar.gz"
             echo "  2. cd VSCode-linux-x64"
             echo "  3. ./tscode"
-          else
-            echo "Build failed. Check logs for details."
           fi
           echo "=========================================="
