@@ -213,7 +213,7 @@ jobs:
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 12. 复制 extensions 并从官方获取已编译的 Git
+      # 12. 复制 extensions 并从官方获取已编译的 Git 相关扩展
       # ============================================================
       - name: 📂 Copy extensions and compiled Git
         run: |
@@ -224,10 +224,19 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 1. 从源码复制 extensions
+          # 1. 从源码复制 extensions（除了 Git 相关）
           if [ -d "./extensions" ]; then
-            echo "📌 Copying extensions from source..."
-            cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
+            echo "📌 Copying extensions from source (excluding Git)..."
+            # 复制所有扩展，但跳过 Git 相关目录
+            for dir in ./extensions/*; do
+              dir_name=$(basename "$dir")
+              # 跳过 Git 相关目录（后面从官方复制）
+              if [[ "$dir_name" =~ ^(git|git-base|github|github-authentication|tunnel-forwarding)$ ]]; then
+                echo "   Skipping $dir_name (will copy from official)"
+                continue
+              fi
+              cp -r "$dir" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null
+            done
             echo "   ✅ extensions copied"
           fi
 
@@ -238,6 +247,7 @@ jobs:
               if [ -f "$vsix" ]; then
                 ext_name=$(basename "$vsix" .vsix)
                 echo "   Extracting $ext_name..."
+                rm -rf "$BUILD_DIR/resources/app/extensions/$ext_name" 2>/dev/null
                 mkdir -p "$BUILD_DIR/resources/app/extensions/$ext_name"
                 unzip -q "$vsix" -d "$BUILD_DIR/resources/app/extensions/$ext_name"
                 if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name/extension" ]; then
@@ -249,32 +259,73 @@ jobs:
             echo "   ✅ prebuilt extensions copied"
           fi
 
-          # 3. 【关键】从官方下载已编译的 Git 扩展
+          # 3. 【关键】从官方下载所有 Git 相关扩展（已编译）
           echo ""
-          echo "📌 Downloading official VSCode for compiled Git..."
+          echo "📌 Downloading official VSCode for compiled Git extensions..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
           tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
           OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
-          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions/git" ]; then
-            echo "   ✅ Found official Git extension"
+          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
+            echo "   ✅ Found official extensions directory"
 
-            if [ -d "$OFFICIAL_DIR/resources/app/extensions/git/dist" ]; then
-              echo "   ✅ Official Git has dist/ (compiled)"
-              rm -rf "$BUILD_DIR/resources/app/extensions/git"
-              cp -r "$OFFICIAL_DIR/resources/app/extensions/git" "$BUILD_DIR/resources/app/extensions/"
-              echo "   ✅ Copied compiled Git from official"
+            # Git 相关扩展列表
+            GIT_EXTS=("git" "git-base" "github" "github-authentication" "tunnel-forwarding")
 
-              # 验证
-              if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-                echo "   ✅ Git now has dist/"
-                ls -la "$BUILD_DIR/resources/app/extensions/git/dist/" | head -10
+            for ext in "${GIT_EXTS[@]}"; do
+              OFFICIAL_EXT="$OFFICIAL_DIR/resources/app/extensions/$ext"
+              TARGET_EXT="$BUILD_DIR/resources/app/extensions/$ext"
+
+              if [ -d "$OFFICIAL_EXT" ]; then
+                echo ""
+                echo "   Processing $ext..."
+
+                # 检查官方是否有 dist 目录
+                if [ -d "$OFFICIAL_EXT/dist" ]; then
+                  echo "      ✅ Official $ext has dist/ (compiled)"
+                  rm -rf "$TARGET_EXT" 2>/dev/null
+                  cp -r "$OFFICIAL_EXT" "$TARGET_EXT"
+                  DIST_COUNT=$(ls -la "$TARGET_EXT/dist" 2>/dev/null | wc -l)
+                  echo "      ✅ Copied compiled $ext ($DIST_COUNT files in dist/)"
+                else
+                  echo "      ⚠️ Official $ext does NOT have dist/ (not compiled)"
+                  # 如果官方也没有 dist，检查是否有 src
+                  if [ -d "$OFFICIAL_EXT/src" ]; then
+                    echo "      ⚠️ Official $ext has src/ (also not compiled)"
+                  fi
+                fi
+              else
+                echo "   ⚠️ $ext not found in official"
               fi
+            done
+
+            # 验证所有 Git 扩展
+            echo ""
+            echo "📌 Verifying Git extensions after copy:"
+            ALL_OK=true
+            for ext in "${GIT_EXTS[@]}"; do
+              TARGET_EXT="$BUILD_DIR/resources/app/extensions/$ext"
+              if [ -d "$TARGET_EXT/dist" ]; then
+                DIST_COUNT=$(ls -la "$TARGET_EXT/dist" 2>/dev/null | grep -v "^total" | wc -l)
+                echo "   ✅ $ext: dist/ ($DIST_COUNT files)"
+              elif [ -d "$TARGET_EXT" ]; then
+                echo "   ⚠️ $ext: exists but no dist/"
+                ALL_OK=false
+              else
+                echo "   ❌ $ext: missing"
+                ALL_OK=false
+              fi
+            done
+
+            if [ "$ALL_OK" = true ]; then
+              echo ""
+              echo "   ✅ All Git extensions have dist/ (compiled)"
             else
-              echo "   ⚠️ Official Git also has src/ (not compiled)"
+              echo ""
+              echo "   ⚠️ Some Git extensions are not compiled"
             fi
           else
-            echo "   ⚠️ Official Git extension not found"
+            echo "   ⚠️ Official extensions directory not found"
           fi
 
           # 4. 复制 node_modules
@@ -286,16 +337,7 @@ jobs:
             echo "   ✅ node_modules copied"
           fi
 
-          # 5. 验证 Git 扩展
-          echo ""
-          echo "📌 Verifying Git extension:"
-          if [ -d "$BUILD_DIR/resources/app/extensions/git/dist" ]; then
-            echo "   ✅ Git has dist/ (compiled)"
-          else
-            echo "   ❌ Git does NOT have dist/ (not compiled)"
-          fi
-
-          # 6. 验证原生模块
+          # 5. 验证原生模块
           echo ""
           echo "📌 Verifying native modules:"
           for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
@@ -306,7 +348,7 @@ jobs:
             fi
           done
 
-          # 清理
+          # 6. 清理
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
       # ============================================================
