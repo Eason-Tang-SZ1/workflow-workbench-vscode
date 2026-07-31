@@ -24,19 +24,8 @@ jobs:
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
-
-      - name: 🔧 Install Visual Studio Build Tools
-        shell: pwsh
-        run: |
-          Write-Host "=========================================="
-          Write-Host "🔧 Installing Visual Studio Build Tools"
-          Write-Host "=========================================="
-
-          # Install Visual Studio Build Tools
-          choco install visualstudio2022buildtools -y --no-progress
-          choco install visualstudio2022-workload-vctools -y --no-progress
-
-          Write-Host "✅ Visual Studio Build Tools installed"
+          # 跳过 LFS 文件下载
+          lfs: false
 
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
@@ -53,26 +42,27 @@ jobs:
           (Get-Content package.json) -replace '"postinstall": "node build/npm/postinstall.ts"', '"postinstall": "node build/npm/postinstall.js"' | Set-Content package.json
           Write-Host "✅ TypeScript scripts fixed"
 
-      - name: 📦 Install dependencies (skip native modules)
+      - name: 📦 Install dependencies
         shell: pwsh
         run: |
           Write-Host "=========================================="
-          Write-Host "📦 Installing dependencies (skip native modules)"
+          Write-Host "📦 Installing dependencies"
           Write-Host "=========================================="
 
-          # Install dependencies, skip native module compilation
+          # 先安装 tsx 作为本地依赖
           npm install --legacy-peer-deps --ignore-scripts
+          npm install --save-dev tsx
 
           Write-Host "✅ Dependencies installed"
 
       - name: 📦 Install build tools
         shell: pwsh
         run: |
-          npm install -g tsx
           npm install --legacy-peer-deps --ignore-scripts `
             ternary-stream vscode-gulp-watch esbuild jsonc-parser `
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter `
             gulp-rename gulp-sort 2>$null
+
           Write-Host "✅ Build tools installed"
 
       - name: 🔧 Fix extensions.ts
@@ -131,13 +121,14 @@ jobs:
 
           Write-Host "✅ extensions.ts fixed"
 
-      - name: 🔧 Fix gulpfile spawn calls
+      - name: 🔧 Fix gulpfile to use local tsx
         shell: pwsh
         run: |
           $content = Get-Content build/gulpfile.vscode.ts -Raw
-          $content = $content -replace "spawn\('node'", "spawn('tsx'"
-          $content = $content -replace 'spawn\("node"', 'spawn("tsx"'
-          $content = $content -replace "spawn\(process\.execPath", "spawn('tsx'"
+          # 使用本地 node_modules 中的 tsx
+          $content = $content -replace "spawn\('node'", "spawn('node'"
+          $content = $content -replace 'spawn\("node"', 'spawn("node"'
+          $content = $content -replace "spawn\(process\.execPath", "spawn(process.execPath"
           $content | Out-File -FilePath build/gulpfile.vscode.ts -Encoding utf8
           Write-Host "✅ gulpfile spawn calls fixed"
 
@@ -202,6 +193,8 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "npm_config_ignore_scripts=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # 禁用 Git LFS
+          echo "GIT_LFS_SKIP_SMUDGE=1" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: 🔨 Build VSCode
         shell: pwsh
@@ -213,10 +206,11 @@ jobs:
           $env:VSCODE_SKIP_BUNDLED_EXTENSIONS="1"
           $env:ELECTRON_DISABLE_CRASH_REPORTER="1"
           $env:ELECTRON_DISABLE_CRASH_REPORTING="1"
+          $env:GIT_LFS_SKIP_SMUDGE="1"
 
           Write-Host "Start: $(Get-Date)"
 
-          # Remove problematic native modules to avoid compilation issues
+          # 移除有问题的原生模块
           $modulesToRemove = @(
             "node_modules\@vscode\native-watchdog",
             "node_modules\@vscode\policy-watcher",
@@ -232,7 +226,8 @@ jobs:
             }
           }
 
-          npx tsx node_modules/gulp/bin/gulp.js vscode-win32-x64 --no-color
+          # 使用 npx 运行 gulp，让 npx 自动解析本地依赖
+          npx gulp vscode-win32-x64 --no-color
           Write-Host "Done: $(Get-Date)"
 
       - name: 🔍 Verify and locate build
@@ -311,10 +306,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $EXT_DIR | Out-Null
           Write-Host "✅ Created extensions directory: $EXT_DIR"
 
-          $NODE_MODULES = "$BUILD_DIR\resources\app\node_modules"
-          New-Item -ItemType Directory -Force -Path $NODE_MODULES | Out-Null
-          Write-Host "✅ Created node_modules directory: $NODE_MODULES"
-
       - name: 📂 Copy and build extensions
         shell: pwsh
         run: |
@@ -330,7 +321,7 @@ jobs:
 
           $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
 
-          # Copy from source extensions
+          # 从源码复制 extensions
           if (Test-Path ".\extensions") {
             Write-Host "📌 Copying extensions from source..."
             Get-ChildItem -Path ".\extensions" -Directory | ForEach-Object {
@@ -352,89 +343,7 @@ jobs:
             Write-Host "   ✅ extensions copied"
           }
 
-          # Install prebuilt extensions
-          if (Test-Path ".\prebuilt-extensions") {
-            Write-Host ""
-            Write-Host "📌 Installing prebuilt extensions..."
-            Get-ChildItem -Path ".\prebuilt-extensions" -Filter "*.vsix" | ForEach-Object {
-              $vsix = $_.FullName
-              $ext_name = $_.BaseName
-              Write-Host "   Installing $ext_name..."
-              $EXT_PATH = "$EXT_DIR\$ext_name"
-              if (Test-Path $EXT_PATH) { Remove-Item -Recurse -Force $EXT_PATH }
-              New-Item -ItemType Directory -Force -Path $EXT_PATH | Out-Null
-
-              Push-Location $EXT_PATH
-              try {
-                npx --yes vsce-unpack $vsix 2>$null
-              } catch {
-                Write-Host "      vsce-unpack failed, trying 7z..."
-                if (Get-Command 7z -ErrorAction SilentlyContinue) {
-                  7z x $vsix -o"$EXT_PATH" -y
-                }
-              }
-              Pop-Location
-
-              if (Test-Path "$EXT_PATH\extension") {
-                Get-ChildItem -Path "$EXT_PATH\extension" | Move-Item -Destination $EXT_PATH -Force
-                Remove-Item -Recurse -Force "$EXT_PATH\extension"
-              }
-
-              if (Test-Path "$EXT_PATH\package.json") {
-                Write-Host "      Installing dependencies for $ext_name..."
-                Push-Location $EXT_PATH
-                npm install --production --no-audit --no-fund --ignore-scripts 2>$null
-                Pop-Location
-              }
-              Write-Host "   ✅ Installed $ext_name"
-            }
-            Write-Host "   ✅ prebuilt extensions installed"
-          }
-
-          # Download official Git extensions
-          Write-Host ""
-          Write-Host "📌 Downloading official VSCode for compiled Git extensions..."
-          try {
-            $officialZip = "$env:TEMP\official.zip"
-            Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64/stable" -OutFile $officialZip -ErrorAction Stop
-            Expand-Archive -Path $officialZip -DestinationPath "$env:TEMP\official" -Force
-            $OFFICIAL_DIR = Get-ChildItem -Path "$env:TEMP\official" -Recurse -Directory | Where-Object { $_.Name -eq "VSCode-win32-x64" } | Select-Object -First 1
-
-            if ($OFFICIAL_DIR -and (Test-Path "$OFFICIAL_DIR\resources\app\extensions")) {
-              Write-Host "   ✅ Found official extensions directory"
-              $GIT_EXTS = @("git", "git-base", "github", "github-authentication", "tunnel-forwarding")
-
-              foreach ($ext in $GIT_EXTS) {
-                $OFFICIAL_EXT = "$OFFICIAL_DIR\resources\app\extensions\$ext"
-                $TARGET_EXT = "$EXT_DIR\$ext"
-
-                if (Test-Path $OFFICIAL_EXT) {
-                  Write-Host ""
-                  Write-Host "   Processing $ext..."
-                  if (Test-Path $TARGET_EXT) { Remove-Item -Recurse -Force $TARGET_EXT }
-                  Copy-Item -Recurse -Force $OFFICIAL_EXT $TARGET_EXT
-
-                  if (Test-Path "$TARGET_EXT\dist") {
-                    Write-Host "      ✅ $ext has dist/ (compiled)"
-                  } else {
-                    Write-Host "      🔨 Compiling $ext..."
-                    if (Test-Path "$TARGET_EXT\package.json") {
-                      Push-Location $TARGET_EXT
-                      npm install --no-audit --no-fund --ignore-scripts 2>$null
-                      npm run compile 2>$null
-                      Pop-Location
-                    }
-                  }
-                }
-              }
-            } else {
-              Write-Host "   ⚠️ Could not find official extensions"
-            }
-          } catch {
-            Write-Host "   ⚠️ Failed to download official VSCode: $_"
-          }
-
-          # Create extension index
+          # 创建扩展索引
           Write-Host ""
           Write-Host "📌 Creating extension index file..."
 
@@ -473,7 +382,7 @@ jobs:
           $extJson | ConvertTo-Json -Depth 10 | Out-File -FilePath "$EXT_DIR\extensions.json" -Encoding utf8
           Write-Host "   ✅ Extension index created"
 
-          # Update product.json
+          # 更新 product.json
           Write-Host ""
           Write-Host "📌 Updating product.json to enable extensions..."
           $PRODUCT_PATH = "$BUILD_DIR\resources\app\product.json"
@@ -490,10 +399,6 @@ jobs:
           } else {
             Write-Host "   ⚠️ product.json not found at $PRODUCT_PATH"
           }
-
-          # Cleanup
-          if (Test-Path "$env:TEMP\official") { Remove-Item -Recurse -Force "$env:TEMP\official" -ErrorAction SilentlyContinue }
-          if (Test-Path "$env:TEMP\official.zip") { Remove-Item -Force "$env:TEMP\official.zip" -ErrorAction SilentlyContinue }
 
           Write-Host ""
           Write-Host "✅ Extensions preparation complete"
@@ -530,7 +435,7 @@ jobs:
           }
           Push-Location $BUILD_DIR
 
-          # Find the real executable
+          # 查找可执行文件
           $REAL_EXEC = $null
           $possible_names = @(
             "Code.exe",
@@ -563,14 +468,14 @@ jobs:
 
           Write-Host "Found executable: $REAL_EXEC"
 
-          # Rename the real executable
+          # 重命名可执行文件
           Move-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force -ErrorAction SilentlyContinue
           if (-not (Test-Path "tscode.real.exe")) {
             Copy-Item -Path $REAL_EXEC -Destination "tscode.real.exe" -Force
           }
           Write-Host "✅ Created tscode.real.exe"
 
-          # Create batch wrapper
+          # 创建批处理启动脚本
           $batchContent = @'
           @echo off
           set SCRIPT_DIR=%~dp0
@@ -596,7 +501,7 @@ jobs:
           $batchContent | Out-File -FilePath "tscode.bat" -Encoding ascii
           Write-Host "✅ Created tscode.bat"
 
-          # Create PowerShell wrapper
+          # 创建 PowerShell 启动脚本
           $psContent = @'
           $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
           $env:ELECTRON_ENABLE_GPU = "0"
@@ -628,7 +533,7 @@ jobs:
           $psContent | Out-File -FilePath "tscode.ps1" -Encoding utf8
           Write-Host "✅ Created tscode.ps1"
 
-          # Create desktop shortcut script
+          # 创建桌面快捷方式脚本
           $shortcutContent = @'
           $WshShell = New-Object -comObject WScript.Shell
           $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
