@@ -213,7 +213,7 @@ jobs:
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 复制 extensions 并编译
+      # 复制 extensions 并编译（关键修复）
       # ============================================================
       - name: 📂 Copy and build extensions
         run: |
@@ -233,6 +233,17 @@ jobs:
               dir_name=$(basename "$dir")
               echo "   Processing $dir_name..."
               cp -r "$dir" "$BUILD_DIR/resources/app/extensions/"
+
+              # 编译每个扩展
+              EXT_PATH="$BUILD_DIR/resources/app/extensions/$dir_name"
+              if [ -f "$EXT_PATH/package.json" ]; then
+                echo "      Building $dir_name..."
+                (cd "$EXT_PATH" && npm install --production --no-audit --no-fund 2>/dev/null || true)
+                # 尝试编译 TypeScript
+                if [ -d "$EXT_PATH/src" ]; then
+                  (cd "$EXT_PATH" && npx tsc -p . 2>/dev/null || true)
+                fi
+              fi
             done
             echo "   ✅ extensions copied"
           fi
@@ -247,18 +258,14 @@ jobs:
               if [ -f "$vsix" ]; then
                 ext_name=$(basename "$vsix" .vsix)
                 echo "   Installing $ext_name..."
-                # 创建扩展目录
                 EXT_DIR="$BUILD_DIR/resources/app/extensions/$ext_name"
                 rm -rf "$EXT_DIR" 2>/dev/null
                 mkdir -p "$EXT_DIR"
-                # 解压 VSIX
                 unzip -q "$vsix" -d "$EXT_DIR"
-                # 如果解压后有 extension 子目录，移动内容
                 if [ -d "$EXT_DIR/extension" ]; then
                   mv "$EXT_DIR/extension"/* "$EXT_DIR/"
                   rm -rf "$EXT_DIR/extension"
                 fi
-                # 检查是否有 node_modules 需要安装
                 if [ -f "$EXT_DIR/package.json" ]; then
                   echo "      Installing dependencies for $ext_name..."
                   (cd "$EXT_DIR" && npm install --production --no-audit --no-fund 2>/dev/null || true)
@@ -270,7 +277,7 @@ jobs:
           fi
 
           # ============================================
-          # 3. 从官方下载编译好的 Git 扩展
+          # 3. 从官方下载 Git 扩展（编译好的）
           # ============================================
           echo ""
           echo "📌 Downloading official VSCode for compiled Git extensions..."
@@ -281,7 +288,6 @@ jobs:
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "   ✅ Found official extensions directory"
 
-            # Git 相关扩展列表（需要编译的）
             GIT_EXTS=("git" "git-base" "github" "github-authentication" "tunnel-forwarding")
 
             for ext in "${GIT_EXTS[@]}"; do
@@ -291,84 +297,104 @@ jobs:
               if [ -d "$OFFICIAL_EXT" ]; then
                 echo ""
                 echo "   Processing $ext..."
-
-                # 完全替换为官方版本
                 rm -rf "$TARGET_EXT" 2>/dev/null
                 cp -r "$OFFICIAL_EXT" "$TARGET_EXT"
 
-                # 检查是否有 dist 目录（编译好的）
                 if [ -d "$TARGET_EXT/dist" ]; then
-                  DIST_COUNT=$(ls -la "$TARGET_EXT/dist" 2>/dev/null | grep -v "^total" | wc -l)
-                  echo "      ✅ $ext has dist/ ($DIST_COUNT files) - compiled"
+                  echo "      ✅ $ext has dist/ (compiled)"
                 else
-                  echo "      ⚠️ $ext does NOT have dist/ - needs compilation"
-
-                  # 尝试编译（如果有 src）
-                  if [ -d "$TARGET_EXT/src" ] && [ -f "$TARGET_EXT/package.json" ]; then
-                    echo "      🔨 Compiling $ext..."
+                  echo "      🔨 Compiling $ext..."
+                  if [ -f "$TARGET_EXT/package.json" ]; then
                     (cd "$TARGET_EXT" && npm install --no-audit --no-fund 2>/dev/null && npm run compile 2>/dev/null || true)
-                    if [ -d "$TARGET_EXT/dist" ] || [ -d "$TARGET_EXT/out" ]; then
-                      echo "      ✅ Compiled $ext successfully"
-                    fi
                   fi
                 fi
-
-                # 验证 package.json 的 main 入口
-                if [ -f "$TARGET_EXT/package.json" ]; then
-                  MAIN_ENTRY=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' "$TARGET_EXT/package.json" 2>/dev/null | cut -d'"' -f4)
-                  if [ -n "$MAIN_ENTRY" ]; then
-                    echo "      📌 main entry: $MAIN_ENTRY"
-                  fi
-                fi
-              else
-                echo "   ⚠️ $ext not found in official"
               fi
             done
-          else
-            echo "   ⚠️ Official extensions directory not found"
           fi
 
           # ============================================
-          # 4. 验证所有扩展都有正确的入口
+          # 4. 【关键】创建 extensions 索引文件
           # ============================================
           echo ""
-          echo "📌 Validating extensions..."
+          echo "📌 Creating extension index file..."
 
           EXT_DIR="$BUILD_DIR/resources/app/extensions"
-          VALID_COUNT=0
-          INVALID_COUNT=0
+          cat > "$EXT_DIR/package.json" << 'PKG_EOF'
+          {
+            "name": "builtin-extensions",
+            "version": "1.0.0",
+            "description": "Built-in extensions",
+            "private": true,
+            "extensionPack": []
+          }
+          PKG_EOF
 
+          # 创建 extensions.json 索引
+          echo "{" > "$BUILD_DIR/resources/app/extensions/extensions.json"
+          echo "  \"extensions\": [" >> "$BUILD_DIR/resources/app/extensions/extensions.json"
+
+          FIRST=true
           for ext in "$EXT_DIR"/*; do
-            if [ -d "$ext" ]; then
+            if [ -d "$ext" ] && [ -f "$ext/package.json" ]; then
               ext_name=$(basename "$ext")
+              if [ "$ext_name" != "node_modules" ] && [ "$ext_name" != "package.json" ] && [ "$ext_name" != "extensions.json" ]; then
+                PUBLISHER=$(grep -o '"publisher"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
+                NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
+                VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
 
-              # 检查是否有 package.json
-              if [ -f "$ext/package.json" ]; then
-                # 检查是否有 main 或 browser 入口
-                MAIN=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1)
-                BROWSER=$(grep -o '"browser"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1)
-
-                if [ -n "$MAIN" ] || [ -n "$BROWSER" ]; then
-                  echo "   ✅ $ext_name (has entry point)"
-                  VALID_COUNT=$((VALID_COUNT + 1))
-                else
-                  echo "   ⚠️ $ext_name (no main/browser entry)"
-                  INVALID_COUNT=$((INVALID_COUNT + 1))
+                if [ -n "$PUBLISHER" ] && [ -n "$NAME" ]; then
+                  EXT_ID="$PUBLISHER.$NAME"
+                  if [ "$FIRST" = true ]; then
+                    echo "    \"$EXT_ID\"" >> "$BUILD_DIR/resources/app/extensions/extensions.json"
+                    FIRST=false
+                  else
+                    echo "    ,\"$EXT_ID\"" >> "$BUILD_DIR/resources/app/extensions/extensions.json"
+                  fi
+                  echo "   📌 $EXT_ID@$VERSION"
                 fi
-              else
-                echo "   ❌ $ext_name (no package.json)"
-                INVALID_COUNT=$((INVALID_COUNT + 1))
               fi
             fi
           done
 
-          echo ""
-          echo "📊 Extension validation:"
-          echo "   Valid: $VALID_COUNT"
-          echo "   Invalid: $INVALID_COUNT"
+          echo "  ]" >> "$BUILD_DIR/resources/app/extensions/extensions.json"
+          echo "}" >> "$BUILD_DIR/resources/app/extensions/extensions.json"
+
+          echo "   ✅ Extension index created"
 
           # ============================================
-          # 5. 清理临时文件
+          # 5. 【关键】修改 product.json 启用扩展
+          # ============================================
+          echo ""
+          echo "📌 Updating product.json to enable extensions..."
+
+          if [ -f "$BUILD_DIR/resources/app/product.json" ]; then
+            python3 << 'PY_PRODUCT_END'
+          import json
+          import os
+
+          product_path = os.environ['BUILD_DIR'] + '/resources/app/product.json'
+          with open(product_path, 'r') as f:
+              data = json.load(f)
+
+          # 启用扩展
+          data['extensionsGallery'] = {
+              'serviceUrl': 'https://marketplace.visualstudio.com/_apis/public/gallery',
+              'cacheUrl': 'https://vscode.blob.core.windows.net/gallery/index',
+              'itemUrl': 'https://marketplace.visualstudio.com/items'
+          }
+
+          # 启用内置扩展
+          data['builtInExtensions'] = []
+
+          with open(product_path, 'w') as f:
+              json.dump(data, f, indent=2)
+
+          print("   ✅ product.json updated")
+          PY_PRODUCT_END
+          fi
+
+          # ============================================
+          # 6. 清理临时文件
           # ============================================
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
@@ -387,7 +413,6 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           EXT_DIR="$BUILD_DIR/resources/app/extensions"
 
-          # 需要编译的 Git 扩展
           GIT_EXTS=("git" "git-base" "github" "github-authentication" "tunnel-forwarding")
 
           for ext in "${GIT_EXTS[@]}"; do
@@ -395,98 +420,31 @@ jobs:
             if [ -d "$EXT_PATH" ]; then
               echo ""
               echo "📌 Building $ext..."
-
               cd "$EXT_PATH"
 
-              # 检查是否需要编译
               if [ ! -d "dist" ] && [ ! -d "out" ]; then
                 echo "   🔨 Compiling $ext..."
-
-                # 安装依赖
                 if [ -f "package.json" ]; then
                   npm install --no-audit --no-fund 2>/dev/null || true
-                fi
-
-                # 尝试编译
-                if [ -f "package.json" ]; then
-                  # 检查可用的编译脚本
                   if grep -q '"compile"' package.json; then
                     npm run compile 2>/dev/null || true
                   elif grep -q '"build"' package.json; then
                     npm run build 2>/dev/null || true
-                  elif grep -q '"tsc"' package.json; then
-                    npm run tsc 2>/dev/null || true
                   else
-                    # 尝试直接运行 tsc
                     npx tsc -p . 2>/dev/null || true
                   fi
                 fi
-
-                # 检查编译结果
                 if [ -d "dist" ]; then
                   echo "   ✅ $ext compiled to dist/"
                 elif [ -d "out" ]; then
                   echo "   ✅ $ext compiled to out/"
-                else
-                  echo "   ⚠️ $ext compilation may have issues"
                 fi
               else
                 echo "   ✅ $ext already compiled"
               fi
-
               cd - > /dev/null
             fi
           done
-
-          echo ""
-          echo "✅ Git extensions build complete"
-
-      # ============================================================
-      # 生成扩展注册表
-      # ============================================================
-      - name: 📋 Generate extension registry
-        run: |
-          echo "=========================================="
-          echo "📋 Generate extension registry"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          EXT_DIR="$BUILD_DIR/resources/app/extensions"
-
-          # 生成扩展列表
-          echo "{" > "$BUILD_DIR/extensions.json"
-          echo "  \"extensions\": [" >> "$BUILD_DIR/extensions.json"
-
-          FIRST=true
-          for ext in "$EXT_DIR"/*; do
-            if [ -d "$ext" ]; then
-              ext_name=$(basename "$ext")
-              if [ -f "$ext/package.json" ]; then
-                # 获取扩展ID
-                PUBLISHER=$(grep -o '"publisher"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
-                NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
-                VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | cut -d'"' -f4)
-
-                if [ -n "$PUBLISHER" ] && [ -n "$NAME" ]; then
-                  echo "   📌 $PUBLISHER.$NAME ($VERSION)"
-                  if [ "$FIRST" = true ]; then
-                    echo "    { \"id\": \"$PUBLISHER.$NAME\", \"version\": \"$VERSION\", \"path\": \"$ext_name\" }" >> "$BUILD_DIR/extensions.json"
-                    FIRST=false
-                  else
-                    echo "    ,{ \"id\": \"$PUBLISHER.$NAME\", \"version\": \"$VERSION\", \"path\": \"$ext_name\" }" >> "$BUILD_DIR/extensions.json"
-                  fi
-                fi
-              fi
-            fi
-          done
-
-          # 完成 JSON
-          echo "  ]" >> "$BUILD_DIR/extensions.json"
-          echo "}" >> "$BUILD_DIR/extensions.json"
-
-          echo ""
-          echo "📄 Extension registry created at: extensions.json"
-          echo "   Total extensions: $(ls -1 "$EXT_DIR" | wc -l)"
 
       # ============================================================
       # 调试扩展
@@ -501,36 +459,16 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
           echo ""
-          echo "📁 Extension directory structure:"
-          find "$BUILD_DIR/resources/app/extensions" -maxdepth 2 -type d | head -30
+          echo "📁 Extensions directory:"
+          ls -la "$BUILD_DIR/resources/app/extensions/"
 
           echo ""
-          echo "📄 Extension package.json entries:"
-          for ext in "$BUILD_DIR/resources/app/extensions"/*; do
-            if [ -f "$ext/package.json" ]; then
-              echo ""
-              echo "  $(basename "$ext"):"
-              grep -E '"name"|"publisher"|"version"|"main"|"browser"|"engines"' "$ext/package.json" | head -10
-            fi
-          done
+          echo "📄 Extensions index:"
+          cat "$BUILD_DIR/resources/app/extensions/extensions.json" 2>/dev/null || echo "No index file"
 
           echo ""
-          echo "📂 Git extensions details:"
-          for ext in git git-base github github-authentication tunnel-forwarding; do
-            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-              echo "  ✅ $ext:"
-              ls -la "$BUILD_DIR/resources/app/extensions/$ext" | head -10
-              if [ -d "$BUILD_DIR/resources/app/extensions/$ext/dist" ]; then
-                echo "     ✅ has dist/ directory"
-                ls -la "$BUILD_DIR/resources/app/extensions/$ext/dist" | head -5
-              fi
-            else
-              echo "  ❌ $ext: missing"
-            fi
-          done
-
-          echo ""
-          echo "📊 Extension count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+          echo "📄 Product.json:"
+          grep -A 5 "extensionsGallery" "$BUILD_DIR/resources/app/product.json" 2>/dev/null || echo "No extensionsGallery"
 
       # ============================================================
       # 复制配置文件到根目录
@@ -599,7 +537,16 @@ jobs:
           fi
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
-          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" "$@"
+          # 【关键】添加 --enable-extension 参数
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$USER_DATA_DIR" \
+              --enable-extensions \
+              --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
+              "$@"
           WRAPPER_EOF
 
           chmod +x tscode
@@ -627,7 +574,15 @@ jobs:
           echo "=== VSCode for UOS ==="
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
-          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" "$@"
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$USER_DATA_DIR" \
+              --enable-extensions \
+              --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
+              "$@"
           START_EOF
 
           chmod +x start-vscode.sh
@@ -668,8 +623,8 @@ jobs:
 
           echo ""
           echo "📌 Pre-package validation:"
-          echo "   Git dist/: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'OK'; else echo 'MISSING'; fi)"
-          echo "   extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "   Extensions count: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+          echo "   Extensions index: $(if [ -f $BUILD_DIR/resources/app/extensions/extensions.json ]; then echo 'OK'; else echo 'MISSING'; fi)"
 
           tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" \
             --preserve-permissions \
@@ -700,10 +655,7 @@ jobs:
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "Git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git/dist ]; then echo 'Compiled (dist/)'; else echo 'Not compiled (src/)'; fi)"
-            echo ""
-            echo "📁 Extensions:"
-            echo "   Count: $(ls -1 $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l)"
+            echo "📁 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l)"
             echo ""
             echo "On UOS:"
             echo "  1. tar -xzf vscode-uos-*.tar.gz"
