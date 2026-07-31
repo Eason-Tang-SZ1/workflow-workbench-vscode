@@ -25,6 +25,22 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
+      - name: 🔧 Install Visual Studio Build Tools
+        run: |
+          echo "=========================================="
+          echo "🔧 Installing Visual Studio Build Tools"
+          echo "=========================================="
+
+          # Install Visual Studio Build Tools with C++ workload
+          choco install visualstudio2022buildtools -y
+          choco install visualstudio2022-workload-vctools -y
+
+          # Add to PATH
+          echo "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64" >> $env:GITHUB_PATH
+          echo "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE" >> $env:GITHUB_PATH
+
+          echo "✅ Visual Studio Build Tools installed"
+
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -43,7 +59,13 @@ jobs:
           echo "=========================================="
           echo "📦 Installing dependencies"
           echo "=========================================="
-          npm install --legacy-peer-deps
+
+          # Set environment for native modules
+          $env:VCToolsInstallDir = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433"
+          $env:PATH = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64;$env:PATH"
+
+          # Install dependencies with build flags
+          npm install --legacy-peer-deps --build-from-source
 
       - name: 📦 Install build tools
         run: |
@@ -168,6 +190,7 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $env:GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $env:GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $env:GITHUB_ENV
+          echo "PYTHON=C:\hostedtoolcache\windows\Python\3.14.6\x64\python.exe" >> $env:GITHUB_ENV
 
       - name: 🔨 Build VSCode
         run: |
@@ -178,6 +201,8 @@ jobs:
           $env:VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           $env:ELECTRON_DISABLE_CRASH_REPORTER=1
           $env:ELECTRON_DISABLE_CRASH_REPORTING=1
+          $env:VCToolsInstallDir = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433"
+
           echo "Start: $(Get-Date)"
           npx tsx node_modules/gulp/bin/gulp.js vscode-win32-x64 --no-color
           echo "Done: $(Get-Date)"
@@ -188,7 +213,6 @@ jobs:
           echo "🔍 Verify build contents"
           echo "=========================================="
 
-          # List all directories to find the build
           echo "Current directory contents:"
           Get-ChildItem -Directory
 
@@ -196,7 +220,6 @@ jobs:
           echo "Searching for VSCode build directories..."
           $BUILD_DIR = $null
 
-          # Check common locations
           $possible_dirs = @(
             ".\VSCode-win32-x64",
             ".\vscode\VSCode-win32-x64",
@@ -214,7 +237,6 @@ jobs:
             }
           }
 
-          # If not found, search recursively
           if (-not $BUILD_DIR) {
             echo "Searching recursively for VSCode-win32-x64..."
             $found = Get-ChildItem -Recurse -Directory -Filter "VSCode-win32-x64" | Select-Object -First 1
@@ -233,20 +255,15 @@ jobs:
 
           echo "BUILD_DIR=$BUILD_DIR" >> $env:GITHUB_ENV
 
-          # Show build directory structure
           echo ""
           echo "Build directory structure:"
           Get-ChildItem -Path $BUILD_DIR
 
-          # Check if app directory exists
-          echo ""
           if (Test-Path "$BUILD_DIR\resources\app") {
             echo "✅ resources\app exists"
             Get-ChildItem -Path "$BUILD_DIR\resources\app"
           } else {
             echo "⚠️ resources\app does not exist"
-            echo "Looking for package.json or product.json anywhere in build directory..."
-            Get-ChildItem -Path $BUILD_DIR -Recurse -Filter "package.json" | Select-Object -First 5 -ExpandProperty FullName
           }
 
       - name: 📂 Prepare extensions directory
@@ -261,12 +278,10 @@ jobs:
             exit 1
           }
 
-          # Create the extensions directory if it doesn't exist
           $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
           New-Item -ItemType Directory -Force -Path $EXT_DIR
           echo "✅ Created extensions directory: $EXT_DIR"
 
-          # Also create node_modules directory if needed
           $NODE_MODULES = "$BUILD_DIR\resources\app\node_modules"
           New-Item -ItemType Directory -Force -Path $NODE_MODULES
           echo "✅ Created node_modules directory: $NODE_MODULES"
@@ -285,9 +300,6 @@ jobs:
 
           $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
 
-          # ============================================
-          # 1. 从源码复制 extensions
-          # ============================================
           if (Test-Path ".\extensions") {
             echo "📌 Copying extensions from source..."
             Get-ChildItem -Path ".\extensions" -Directory | ForEach-Object {
@@ -307,13 +319,8 @@ jobs:
               }
             }
             echo "   ✅ extensions copied"
-          } else {
-            echo "⚠️ No extensions directory found in source"
           }
 
-          # ============================================
-          # 2. 复制预构建扩展 (VSIX)
-          # ============================================
           if (Test-Path ".\prebuilt-extensions") {
             echo ""
             echo "📌 Installing prebuilt extensions..."
@@ -325,20 +332,16 @@ jobs:
               if (Test-Path $EXT_PATH) { Remove-Item -Recurse -Force $EXT_PATH }
               New-Item -ItemType Directory -Force -Path $EXT_PATH
 
-              # Try to unpack vsix
               Push-Location $EXT_PATH
               try {
-                # Use npm's vsce if available
                 npx --yes vsce-unpack $vsix 2>$null
               } catch {
-                # Fallback: try with 7zip
                 if (Get-Command 7z -ErrorAction SilentlyContinue) {
                   7z x $vsix -o"$EXT_PATH" -y
                 }
               }
               Pop-Location
 
-              # Move files from extension subfolder if exists
               if (Test-Path "$EXT_PATH\extension") {
                 Get-ChildItem -Path "$EXT_PATH\extension" | Move-Item -Destination $EXT_PATH -Force
                 Remove-Item -Recurse -Force "$EXT_PATH\extension"
@@ -355,9 +358,6 @@ jobs:
             echo "   ✅ prebuilt extensions installed"
           }
 
-          # ============================================
-          # 3. 从官方下载 Git 扩展 (Windows)
-          # ============================================
           echo ""
           echo "📌 Downloading official VSCode for compiled Git extensions..."
           try {
@@ -399,9 +399,6 @@ jobs:
             echo "   ⚠️ Failed to download official VSCode: $_"
           }
 
-          # ============================================
-          # 4. 创建 extensions 索引文件
-          # ============================================
           echo ""
           echo "📌 Creating extension index file..."
 
@@ -442,9 +439,6 @@ jobs:
           $extJson | ConvertTo-Json -Depth 10 | Out-File -FilePath "$EXT_DIR\extensions.json" -Encoding utf8
           echo "   ✅ Extension index created"
 
-          # ============================================
-          # 5. 修改 product.json
-          # ============================================
           echo ""
           echo "📌 Updating product.json to enable extensions..."
           $PRODUCT_PATH = "$BUILD_DIR\resources\app\product.json"
@@ -462,7 +456,6 @@ jobs:
             echo "   ⚠️ product.json not found at $PRODUCT_PATH"
           }
 
-          # Cleanup
           if (Test-Path "$env:TEMP\official") { Remove-Item -Recurse -Force "$env:TEMP\official" -ErrorAction SilentlyContinue }
           if (Test-Path "$env:TEMP\official.zip") { Remove-Item -Force "$env:TEMP\official.zip" -ErrorAction SilentlyContinue }
 
@@ -497,7 +490,6 @@ jobs:
           }
           Push-Location $BUILD_DIR
 
-          # Find the real executable
           $REAL_EXEC = $null
           $possible_names = @(
             "Code.exe",
@@ -513,7 +505,6 @@ jobs:
           }
 
           if (-not $REAL_EXEC) {
-            # Look for any exe file
             $exeFiles = Get-ChildItem -Filter "*.exe" -File | Where-Object {
               $_.Name -notmatch "chrome|crash|debug|libGL|vulkan|d3d"
             }
@@ -531,15 +522,12 @@ jobs:
 
           echo "Found executable: $REAL_EXEC"
 
-          # Rename the real executable
           Move-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force -ErrorAction SilentlyContinue
           if (-not (Test-Path "tscode.real.exe")) {
-            # Try copy instead of move
             Copy-Item -Path $REAL_EXEC -Destination "tscode.real.exe" -Force
           }
           echo "✅ Created tscode.real.exe"
 
-          # Create batch wrapper
           $batchContent = @'
           @echo off
           set SCRIPT_DIR=%~dp0
@@ -565,7 +553,6 @@ jobs:
           $batchContent | Out-File -FilePath "tscode.bat" -Encoding ascii
           echo "✅ Created tscode.bat"
 
-          # Create PowerShell wrapper
           $psContent = @'
           $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
           $env:ELECTRON_ENABLE_GPU = "0"
@@ -597,7 +584,6 @@ jobs:
           $psContent | Out-File -FilePath "tscode.ps1" -Encoding utf8
           echo "✅ Created tscode.ps1"
 
-          # Create desktop shortcut script
           $shortcutContent = @'
           $WshShell = New-Object -comObject WScript.Shell
           $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -634,11 +620,9 @@ jobs:
 
           $VERSION = "${{ github.event.inputs.version || '1.116.0' }}"
 
-          # Create zip package
           $zipName = "vscode-windows-${VERSION}.zip"
           echo "Creating $zipName ..."
 
-          # Go to parent directory of BUILD_DIR
           $parentDir = Split-Path $BUILD_DIR -Parent
           $buildFolderName = Split-Path $BUILD_DIR -Leaf
 
@@ -646,7 +630,6 @@ jobs:
           if (Get-Command Compress-Archive -ErrorAction SilentlyContinue) {
             Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
           } else {
-            # Fallback to 7zip if available
             if (Get-Command 7z -ErrorAction SilentlyContinue) {
               7z a -tzip "$zipName" "$buildFolderName\*"
             } else {
