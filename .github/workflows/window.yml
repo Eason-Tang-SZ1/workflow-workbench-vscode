@@ -1,21 +1,400 @@
-Start: 07/31/2026 09:25:24
-  Removing node_modules\@vscode\native-watchdog...
-  Removing node_modules\@vscode\policy-watcher...
-  Removing node_modules\@vscode\deviceid...
-  Removing node_modules\@vscode\spdlog...
-  Removing node_modules\@vscode\sqlite3...
-TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts" for D:\a\workflow-workbench-vscode\workflow-workbench-vscode\build\gulpfile.ts
-  at Object.getFileProtocolModuleFormat [as file:] (node:internal/modules/esm/get_format:189:9)
-  at defaultGetFormat (node:internal/modules/esm/get_format:232:36)
-  at defaultLoadSync (node:internal/modules/esm/load:202:14)
-  at ModuleLoader.getModuleJobForRequire (node:internal/modules/esm/loader:439:24)
-  at new ModuleJobSync (node:internal/modules/esm/module_job:375:34)
-  at ModuleLoader.importSyncForRequire (node:internal/modules/esm/loader:386:11)
-  at loadESMFromCJS (node:internal/modules/cjs/loader:1363:24)
-  at Module._compile (node:internal/modules/cjs/loader:1503:5)
-  at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
-  at Module.load (node:internal/modules/cjs/loader:1266:32) {
-  code: 'ERR_UNKNOWN_FILE_EXTENSION'
-}
-Done: 07/31/2026 09:25:25
-Error: Process completed with exit code 1.
+name: Build Custom VSCode for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+      version:
+        description: 'Package version'
+        required: false
+        default: '1.116.0'
+
+jobs:
+  build-windows:
+    name: Build Windows Version
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 1
+          lfs: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.x'
+
+      - name: Fix TypeScript scripts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/npm -ErrorAction SilentlyContinue
+          "console.log('Preinstall OK');" | Out-File -FilePath build/npm/preinstall.js -Encoding utf8
+          (Get-Content package.json) -replace '"preinstall": "node build/npm/preinstall.ts"', '"preinstall": "node build/npm/preinstall.js"' | Set-Content package.json
+          "console.log('Postinstall OK');" | Out-File -FilePath build/npm/postinstall.js -Encoding utf8
+          (Get-Content package.json) -replace '"postinstall": "node build/npm/postinstall.ts"', '"postinstall": "node build/npm/postinstall.js"' | Set-Content package.json
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          Write-Host "Installing dependencies..."
+          npm install --legacy-peer-deps --ignore-scripts
+          npm install --save-dev tsx
+
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          npm install --legacy-peer-deps --ignore-scripts `
+            ternary-stream vscode-gulp-watch esbuild jsonc-parser `
+            gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter `
+            gulp-rename gulp-sort
+
+      - name: Fix extensions.ts
+        shell: pwsh
+        run: |
+          $content = @'
+          import { Stream } from "stream";
+          const empty: any[] = [];
+          function emptyStream(): Stream {
+            const s = new Stream.Readable();
+            s._read = () => s.push(null);
+            return s;
+          }
+          export function isWebExtension(): boolean { return false; }
+          export function getExtensionStream(): Stream { return emptyStream(); }
+          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageExtensionsStream(): Stream { return emptyStream(); }
+          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+          export function fromMarketplace(): any[] { return empty; }
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
+          }
+          export function buildExtensionMedia(): void {}
+          export function compileExtensionMedia(): void {}
+          export function buildExtensionMediaTask(done: any): void { done(); }
+          export const builtInExtensions = empty;
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions = empty;
+          export const shouldDownloadWebBuiltInExtensions = false;
+          '@
+          $content | Out-File -FilePath build/lib/extensions.ts -Encoding utf8
+
+          $builtin = @'
+          export const builtInExtensions: any[] = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;
+          '@
+          $builtin | Out-File -FilePath build/lib/builtInExtensions.ts -Encoding utf8
+
+          $fetch = @'
+          import { Stream } from "stream";
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
+          }
+          '@
+          $fetch | Out-File -FilePath build/lib/fetch.ts -Encoding utf8
+
+      - name: Replace copilot.ts
+        shell: pwsh
+        run: |
+          $content = @'
+          export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
+              console.log('Copilot extension shims preparation skipped for Windows build');
+              return;
+          }
+          export function copyCopilotNativeDeps(productRoot: string): void {
+              console.log('Copilot native deps copy skipped for Windows build');
+          }
+          export function getCopilotExcludeFilter(): any {
+              return function() { return false; };
+          }
+          '@
+          $content | Out-File -FilePath build/lib/copilot.ts -Encoding utf8
+
+      - name: Disable Crashpad
+        shell: pwsh
+        run: |
+          Write-Host "Disabling Crashpad"
+          $productPath = "product.json"
+          if (Test-Path $productPath) {
+            $json = Get-Content $productPath | ConvertFrom-Json
+            $json | Add-Member -MemberType NoteProperty -Name "enableCrashReport" -Value $false -Force
+            if ($null -eq $json.crashReporter) {
+              $json | Add-Member -MemberType NoteProperty -Name "crashReporter" -Value @{} -Force
+            }
+            $json.crashReporter | Add-Member -MemberType NoteProperty -Name "disabled" -Value $true -Force
+            $json | ConvertTo-Json -Depth 10 | Set-Content $productPath
+          }
+
+          New-Item -ItemType Directory -Force -Path src/vs/platform/crash/common -ErrorAction SilentlyContinue
+          $crashService = @'
+          import { createDecorator } from '../../../base/common/instantiation.js';
+          export const ICrashService = createDecorator<ICrashService>('crashService');
+          export interface ICrashService { _serviceBrand: undefined; }
+          export class CrashService implements ICrashService {
+              declare readonly _serviceBrand: undefined;
+              constructor() { console.log('Crash service disabled for Windows build'); }
+          }
+          '@
+          $crashService | Out-File -FilePath src/vs/platform/crash/common/crashService.ts -Encoding utf8
+
+      - name: Set environment variables
+        shell: pwsh
+        run: |
+          "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VSCODE_SKIP_PRELAUNCH=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ELECTRON_DISABLE_CRASH_REPORTER=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ELECTRON_DISABLE_CRASH_REPORTING=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "npm_config_ignore_scripts=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "GIT_LFS_SKIP_SMUDGE=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build VSCode
+        shell: pwsh
+        run: |
+          $env:NODE_OPTIONS="--max-old-space-size=8192"
+          $env:VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD="1"
+          $env:VSCODE_ELECTRON_SKIP_DOWNLOAD="1"
+          $env:VSCODE_SKIP_PRELAUNCH="1"
+          $env:VSCODE_SKIP_BUNDLED_EXTENSIONS="1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTER="1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTING="1"
+          $env:GIT_LFS_SKIP_SMUDGE="1"
+
+          Write-Host "Start build at: $(Get-Date)"
+
+          # Remove problematic native modules
+          $modulesToRemove = @(
+            "node_modules\@vscode\native-watchdog",
+            "node_modules\@vscode\policy-watcher",
+            "node_modules\@vscode\deviceid",
+            "node_modules\@vscode\spdlog",
+            "node_modules\@vscode\sqlite3"
+          )
+          foreach ($mod in $modulesToRemove) {
+            if (Test-Path $mod) {
+              Write-Host "Removing $mod..."
+              Remove-Item -Recurse -Force $mod -ErrorAction SilentlyContinue
+            }
+          }
+
+          npx gulp vscode-win32-x64 --no-color
+          Write-Host "Build completed at: $(Get-Date)"
+
+      - name: Verify and locate build
+        shell: pwsh
+        run: |
+          Write-Host "Verifying build contents..."
+
+          $BUILD_DIR = $null
+          $possible_dirs = @(
+            ".\VSCode-win32-x64",
+            ".\vscode\VSCode-win32-x64",
+            "..\VSCode-win32-x64"
+          )
+
+          foreach ($dir in $possible_dirs) {
+            if (Test-Path $dir) {
+              $BUILD_DIR = (Resolve-Path $dir).Path
+              Write-Host "Found build directory: $BUILD_DIR"
+              break
+            }
+          }
+
+          if (-not $BUILD_DIR) {
+            Write-Host "Searching recursively for VSCode-win32-x64..."
+            $found = Get-ChildItem -Recurse -Directory -Filter "VSCode-win32-x64" | Select-Object -First 1
+            if ($found) {
+              $BUILD_DIR = $found.FullName
+              Write-Host "Found build directory: $BUILD_DIR"
+            }
+          }
+
+          if (-not $BUILD_DIR) {
+            Write-Host "Build directory not found!"
+            exit 1
+          }
+
+          "BUILD_DIR=$BUILD_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Build directory set to: $BUILD_DIR"
+
+          if (Test-Path "$BUILD_DIR\resources\app") {
+            Write-Host "resources/app exists"
+          }
+
+      - name: Prepare extensions directory
+        shell: pwsh
+        run: |
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) { exit 1 }
+
+          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
+          New-Item -ItemType Directory -Force -Path $EXT_DIR -ErrorAction SilentlyContinue
+          Write-Host "Created extensions directory: $EXT_DIR"
+
+      - name: Copy and build extensions
+        shell: pwsh
+        run: |
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) { exit 1 }
+          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
+
+          if (Test-Path ".\extensions") {
+            Write-Host "Copying extensions from source..."
+            Get-ChildItem -Path ".\extensions" -Directory | ForEach-Object {
+              $dir_name = $_.Name
+              Write-Host "Processing $dir_name..."
+              Copy-Item -Recurse -Force $_.FullName "$EXT_DIR\$dir_name"
+
+              $EXT_PATH = "$EXT_DIR\$dir_name"
+              if (Test-Path "$EXT_PATH\package.json") {
+                Push-Location $EXT_PATH
+                npm install --production --no-audit --no-fund --ignore-scripts 2>$null
+                if (Test-Path "src") {
+                  npx tsc -p . 2>$null
+                }
+                Pop-Location
+              }
+            }
+          }
+
+      - name: Update product.json
+        shell: pwsh
+        run: |
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) { exit 1 }
+
+          $PRODUCT_PATH = "$BUILD_DIR\resources\app\product.json"
+          if (Test-Path $PRODUCT_PATH) {
+            $product = Get-Content $PRODUCT_PATH | ConvertFrom-Json
+            $product | Add-Member -MemberType NoteProperty -Name "extensionsGallery" -Value @{
+              serviceUrl = "https://marketplace.visualstudio.com/_apis/public/gallery"
+              cacheUrl = "https://vscode.blob.core.windows.net/gallery/index"
+              itemUrl = "https://marketplace.visualstudio.com/items"
+            } -Force
+            $product | Add-Member -MemberType NoteProperty -Name "builtInExtensions" -Value @() -Force
+            $product | ConvertTo-Json -Depth 10 | Set-Content $PRODUCT_PATH
+            Write-Host "product.json updated"
+          }
+
+      - name: Create startup scripts
+        shell: pwsh
+        run: |
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) { exit 1 }
+          Push-Location $BUILD_DIR
+
+          # Find executable
+          $REAL_EXEC = $null
+          $possible_names = @("Code.exe", "code.exe")
+          foreach ($name in $possible_names) {
+            if (Test-Path $name) {
+              $REAL_EXEC = $name
+              break
+            }
+          }
+
+          if (-not $REAL_EXEC) {
+            $exeFiles = Get-ChildItem -Filter "*.exe" -File | Where-Object { $_.Name -notmatch "chrome|crash|debug" }
+            if ($exeFiles) { $REAL_EXEC = $exeFiles[0].Name }
+          }
+
+          if (-not $REAL_EXEC) {
+            Write-Host "No executable found!"
+            exit 1
+          }
+
+          Move-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force
+          Write-Host "Created tscode.real.exe"
+
+          # Create batch file
+          @'
+          @echo off
+          set SCRIPT_DIR=%~dp0
+          set ELECTRON_ENABLE_GPU=0
+          set NODE_OPTIONS=--max-old-space-size=4096
+          set ELECTRON_DISABLE_SANDBOX=1
+          set ELECTRON_DISABLE_CRASH_REPORTER=1
+          set ELECTRON_DISABLE_CRASH_REPORTING=1
+          set CRASHPAD_DISABLE=1
+          set USER_DATA_DIR=%SCRIPT_DIR%user-data
+          if not exist "%USER_DATA_DIR%" mkdir "%USER_DATA_DIR%"
+          "%SCRIPT_DIR%tscode.real.exe" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="%USER_DATA_DIR%" --enable-extensions --builtin-extensions-dir="%SCRIPT_DIR%resources\app\extensions" %*
+          '@ | Out-File -FilePath "tscode.bat" -Encoding ascii
+
+          # Create PowerShell file
+          @'
+          $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+          $env:ELECTRON_ENABLE_GPU = "0"
+          $env:NODE_OPTIONS = "--max-old-space-size=4096"
+          $env:ELECTRON_DISABLE_SANDBOX = "1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTER = "1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTING = "1"
+          $env:CRASHPAD_DISABLE = "1"
+          $UserDataDir = Join-Path $ScriptDir "user-data"
+          if (-not (Test-Path $UserDataDir)) { New-Item -ItemType Directory -Path $UserDataDir -Force | Out-Null }
+          $Executable = Join-Path $ScriptDir "tscode.real.exe"
+          & $Executable --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$UserDataDir" --enable-extensions --builtin-extensions-dir="$ScriptDir\resources\app\extensions" $args
+          '@ | Out-File -FilePath "tscode.ps1" -Encoding utf8
+
+          Write-Host "Created startup scripts"
+          Pop-Location
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) { exit 1 }
+
+          $VERSION = "${{ github.event.inputs.version || '1.116.0' }}"
+          $zipName = "vscode-windows-${VERSION}.zip"
+
+          $parentDir = Split-Path $BUILD_DIR -Parent
+          $buildFolderName = Split-Path $BUILD_DIR -Leaf
+
+          Push-Location $parentDir
+          Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
+          Pop-Location
+
+          Write-Host "Package created: $zipName"
+          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-windows-x64
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 30
+
+      - name: Build summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=========================================="
+          Write-Host "BUILD SUMMARY"
+          Write-Host "=========================================="
+          Write-Host "Status: ${{ job.status }}"
+          Write-Host "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          Write-Host "Platform: Windows x64"
+          Write-Host "=========================================="
+          if ("${{ job.status }}" -eq "success") {
+            Write-Host ""
+            Write-Host "Build completed successfully!"
+            Write-Host "Package: $env:ZIP_NAME"
+          }
