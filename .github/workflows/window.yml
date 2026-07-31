@@ -26,19 +26,17 @@ jobs:
           fetch-depth: 1
 
       - name: 🔧 Install Visual Studio Build Tools
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "🔧 Installing Visual Studio Build Tools"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "🔧 Installing Visual Studio Build Tools"
+          Write-Host "=========================================="
 
-          choco install visualstudio2022buildtools -y
-          choco install visualstudio2022-workload-vctools -y
-          choco install visualstudio2022-workload-nativedesktop -y
+          # Install Visual Studio Build Tools
+          choco install visualstudio2022buildtools -y --no-progress
+          choco install visualstudio2022-workload-vctools -y --no-progress
 
-          echo "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64" >> $env:GITHUB_PATH
-          echo "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE" >> $env:GITHUB_PATH
-
-          echo "✅ Visual Studio Build Tools installed"
+          Write-Host "✅ Visual Studio Build Tools installed"
 
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
@@ -46,40 +44,39 @@ jobs:
           node-version: '20.x'
 
       - name: 🔧 Fix TypeScript scripts
+        shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path build/npm
+          New-Item -ItemType Directory -Force -Path build/npm | Out-Null
           "console.log('Preinstall OK');" | Out-File -FilePath build/npm/preinstall.js -Encoding utf8
           (Get-Content package.json) -replace '"preinstall": "node build/npm/preinstall.ts"', '"preinstall": "node build/npm/preinstall.js"' | Set-Content package.json
           "console.log('Postinstall OK');" | Out-File -FilePath build/npm/postinstall.js -Encoding utf8
           (Get-Content package.json) -replace '"postinstall": "node build/npm/postinstall.ts"', '"postinstall": "node build/npm/postinstall.js"' | Set-Content package.json
+          Write-Host "✅ TypeScript scripts fixed"
 
       - name: 📦 Install dependencies (skip native modules)
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "📦 Installing dependencies (skip native modules)"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "📦 Installing dependencies (skip native modules)"
+          Write-Host "=========================================="
 
-          # 安装依赖，跳过原生模块编译
+          # Install dependencies, skip native module compilation
           npm install --legacy-peer-deps --ignore-scripts
 
-          # 手动编译必要的模块
-          echo ""
-          echo "📦 Compiling native modules..."
-
-          # 使用预编译的二进制文件或者跳过
-          npm rebuild --ignore-scripts
-
-          echo "✅ Dependencies installed"
+          Write-Host "✅ Dependencies installed"
 
       - name: 📦 Install build tools
+        shell: pwsh
         run: |
           npm install -g tsx
-          npm install --legacy-peer-deps `
+          npm install --legacy-peer-deps --ignore-scripts `
             ternary-stream vscode-gulp-watch esbuild jsonc-parser `
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter `
             gulp-rename gulp-sort 2>$null
+          Write-Host "✅ Build tools installed"
 
       - name: 🔧 Fix extensions.ts
+        shell: pwsh
         run: |
           $content = @'
           import { Stream } from "stream";
@@ -132,15 +129,20 @@ jobs:
           '@
           $fetch | Out-File -FilePath build/lib/fetch.ts -Encoding utf8
 
+          Write-Host "✅ extensions.ts fixed"
+
       - name: 🔧 Fix gulpfile spawn calls
+        shell: pwsh
         run: |
           $content = Get-Content build/gulpfile.vscode.ts -Raw
           $content = $content -replace "spawn\('node'", "spawn('tsx'"
           $content = $content -replace 'spawn\("node"', 'spawn("tsx"'
           $content = $content -replace "spawn\(process\.execPath", "spawn('tsx'"
           $content | Out-File -FilePath build/gulpfile.vscode.ts -Encoding utf8
+          Write-Host "✅ gulpfile spawn calls fixed"
 
       - name: 🔧 Replace copilot.ts
+        shell: pwsh
         run: |
           $content = @'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
@@ -155,22 +157,25 @@ jobs:
           }
           '@
           $content | Out-File -FilePath build/lib/copilot.ts -Encoding utf8
+          Write-Host "✅ copilot.ts replaced"
 
       - name: 🔧 Disable Crashpad
+        shell: pwsh
         run: |
-          echo "Disabling Crashpad"
+          Write-Host "Disabling Crashpad"
           $productPath = "product.json"
           if (Test-Path $productPath) {
             $json = Get-Content $productPath | ConvertFrom-Json
             $json | Add-Member -MemberType NoteProperty -Name "enableCrashReport" -Value $false -Force
-            if (-not $json.crashReporter) {
+            if ($null -eq $json.crashReporter) {
               $json | Add-Member -MemberType NoteProperty -Name "crashReporter" -Value @{} -Force
             }
             $json.crashReporter | Add-Member -MemberType NoteProperty -Name "disabled" -Value $true -Force
             $json | ConvertTo-Json -Depth 10 | Set-Content $productPath
+            Write-Host "product.json modified"
           }
 
-          New-Item -ItemType Directory -Force -Path src/vs/platform/crash/common
+          New-Item -ItemType Directory -Force -Path src/vs/platform/crash/common | Out-Null
           $crashService = @'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -185,51 +190,63 @@ jobs:
           }
           '@
           $crashService | Out-File -FilePath src/vs/platform/crash/common/crashService.ts -Encoding utf8
+          Write-Host "✅ Crashpad disabled"
 
       - name: ⚙️ Set env
+        shell: pwsh
         run: |
-          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $env:GITHUB_ENV
-          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $env:GITHUB_ENV
-          echo "VSCODE_SKIP_PRELAUNCH=1" >> $env:GITHUB_ENV
-          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $env:GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $env:GITHUB_ENV
-          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $env:GITHUB_ENV
-          echo "npm_config_ignore_scripts=true" >> $env:GITHUB_ENV
-          echo "npm_config_node_gyp=false" >> $env:GITHUB_ENV
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VSCODE_SKIP_PRELAUNCH=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "npm_config_ignore_scripts=true" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: 🔨 Build VSCode
+        shell: pwsh
         run: |
           $env:NODE_OPTIONS="--max-old-space-size=8192"
-          $env:VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
-          $env:VSCODE_ELECTRON_SKIP_DOWNLOAD=1
-          $env:VSCODE_SKIP_PRELAUNCH=1
-          $env:VSCODE_SKIP_BUNDLED_EXTENSIONS=1
-          $env:ELECTRON_DISABLE_CRASH_REPORTER=1
-          $env:ELECTRON_DISABLE_CRASH_REPORTING=1
-          $env:npm_config_ignore_scripts=true
+          $env:VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD="1"
+          $env:VSCODE_ELECTRON_SKIP_DOWNLOAD="1"
+          $env:VSCODE_SKIP_PRELAUNCH="1"
+          $env:VSCODE_SKIP_BUNDLED_EXTENSIONS="1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTER="1"
+          $env:ELECTRON_DISABLE_CRASH_REPORTING="1"
 
-          echo "Start: $(Get-Date)"
+          Write-Host "Start: $(Get-Date)"
 
-          # 构建前修复 native-watchdog 相关的问题
-          if (Test-Path "node_modules\@vscode\native-watchdog") {
-            echo "Fixing native-watchdog..."
-            Remove-Item -Recurse -Force "node_modules\@vscode\native-watchdog" -ErrorAction SilentlyContinue
+          # Remove problematic native modules to avoid compilation issues
+          $modulesToRemove = @(
+            "node_modules\@vscode\native-watchdog",
+            "node_modules\@vscode\policy-watcher",
+            "node_modules\@vscode\deviceid",
+            "node_modules\@vscode\spdlog",
+            "node_modules\@vscode\sqlite3"
+          )
+
+          foreach ($mod in $modulesToRemove) {
+            if (Test-Path $mod) {
+              Write-Host "Removing $mod..."
+              Remove-Item -Recurse -Force $mod -ErrorAction SilentlyContinue
+            }
           }
 
           npx tsx node_modules/gulp/bin/gulp.js vscode-win32-x64 --no-color
-          echo "Done: $(Get-Date)"
+          Write-Host "Done: $(Get-Date)"
 
       - name: 🔍 Verify and locate build
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "🔍 Verify build contents"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "🔍 Verify build contents"
+          Write-Host "=========================================="
 
-          echo "Current directory contents:"
-          Get-ChildItem -Directory
+          Write-Host "Current directory contents:"
+          Get-ChildItem -Directory | ForEach-Object { Write-Host "  $($_.Name)" }
 
-          echo ""
-          echo "Searching for VSCode build directories..."
+          Write-Host ""
+          Write-Host "Searching for VSCode build directories..."
           $BUILD_DIR = $null
 
           $possible_dirs = @(
@@ -243,85 +260,87 @@ jobs:
 
           foreach ($dir in $possible_dirs) {
             if (Test-Path $dir) {
-              $BUILD_DIR = Resolve-Path $dir
-              echo "Found build directory: $BUILD_DIR"
+              $BUILD_DIR = (Resolve-Path $dir).Path
+              Write-Host "Found build directory: $BUILD_DIR"
               break
             }
           }
 
           if (-not $BUILD_DIR) {
-            echo "Searching recursively for VSCode-win32-x64..."
+            Write-Host "Searching recursively for VSCode-win32-x64..."
             $found = Get-ChildItem -Recurse -Directory -Filter "VSCode-win32-x64" | Select-Object -First 1
             if ($found) {
               $BUILD_DIR = $found.FullName
-              echo "Found build directory via recursive search: $BUILD_DIR"
+              Write-Host "Found build directory via recursive search: $BUILD_DIR"
             }
           }
 
           if (-not $BUILD_DIR) {
-            echo "❌ Build directory not found!"
-            echo "Listing all directories recursively (top 30):"
-            Get-ChildItem -Recurse -Directory | Select-Object -First 30 -ExpandProperty FullName
+            Write-Host "❌ Build directory not found!"
+            Write-Host "Listing all directories recursively (top 30):"
+            Get-ChildItem -Recurse -Directory | Select-Object -First 30 | ForEach-Object { Write-Host "  $($_.FullName)" }
             exit 1
           }
 
-          echo "BUILD_DIR=$BUILD_DIR" >> $env:GITHUB_ENV
+          echo "BUILD_DIR=$BUILD_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          echo ""
-          echo "Build directory structure:"
-          Get-ChildItem -Path $BUILD_DIR
+          Write-Host ""
+          Write-Host "Build directory structure:"
+          Get-ChildItem -Path $BUILD_DIR | ForEach-Object { Write-Host "  $($_.Name)" }
 
           if (Test-Path "$BUILD_DIR\resources\app") {
-            echo "✅ resources\app exists"
-            Get-ChildItem -Path "$BUILD_DIR\resources\app"
+            Write-Host "✅ resources\app exists"
           } else {
-            echo "⚠️ resources\app does not exist"
+            Write-Host "⚠️ resources\app does not exist"
           }
 
       - name: 📂 Prepare extensions directory
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "📂 Prepare extensions directory"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "📂 Prepare extensions directory"
+          Write-Host "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
           if (-not $BUILD_DIR) {
-            echo "❌ BUILD_DIR not set!"
+            Write-Host "❌ BUILD_DIR not set!"
             exit 1
           }
 
           $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
-          New-Item -ItemType Directory -Force -Path $EXT_DIR
-          echo "✅ Created extensions directory: $EXT_DIR"
+          New-Item -ItemType Directory -Force -Path $EXT_DIR | Out-Null
+          Write-Host "✅ Created extensions directory: $EXT_DIR"
 
           $NODE_MODULES = "$BUILD_DIR\resources\app\node_modules"
-          New-Item -ItemType Directory -Force -Path $NODE_MODULES
-          echo "✅ Created node_modules directory: $NODE_MODULES"
+          New-Item -ItemType Directory -Force -Path $NODE_MODULES | Out-Null
+          Write-Host "✅ Created node_modules directory: $NODE_MODULES"
 
       - name: 📂 Copy and build extensions
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "📂 Copy and build extensions"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "📂 Copy and build extensions"
+          Write-Host "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
           if (-not $BUILD_DIR) {
-            echo "❌ BUILD_DIR not set!"
+            Write-Host "❌ BUILD_DIR not set!"
             exit 1
           }
 
           $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
 
+          # Copy from source extensions
           if (Test-Path ".\extensions") {
-            echo "📌 Copying extensions from source..."
+            Write-Host "📌 Copying extensions from source..."
             Get-ChildItem -Path ".\extensions" -Directory | ForEach-Object {
               $dir_name = $_.Name
-              echo "   Processing $dir_name..."
+              Write-Host "   Processing $dir_name..."
               Copy-Item -Recurse -Force $_.FullName "$EXT_DIR\$dir_name"
 
               $EXT_PATH = "$EXT_DIR\$dir_name"
               if (Test-Path "$EXT_PATH\package.json") {
-                echo "      Building $dir_name..."
+                Write-Host "      Building $dir_name..."
                 Push-Location $EXT_PATH
                 npm install --production --no-audit --no-fund --ignore-scripts 2>$null
                 if (Test-Path "src") {
@@ -330,24 +349,26 @@ jobs:
                 Pop-Location
               }
             }
-            echo "   ✅ extensions copied"
+            Write-Host "   ✅ extensions copied"
           }
 
+          # Install prebuilt extensions
           if (Test-Path ".\prebuilt-extensions") {
-            echo ""
-            echo "📌 Installing prebuilt extensions..."
+            Write-Host ""
+            Write-Host "📌 Installing prebuilt extensions..."
             Get-ChildItem -Path ".\prebuilt-extensions" -Filter "*.vsix" | ForEach-Object {
               $vsix = $_.FullName
               $ext_name = $_.BaseName
-              echo "   Installing $ext_name..."
+              Write-Host "   Installing $ext_name..."
               $EXT_PATH = "$EXT_DIR\$ext_name"
               if (Test-Path $EXT_PATH) { Remove-Item -Recurse -Force $EXT_PATH }
-              New-Item -ItemType Directory -Force -Path $EXT_PATH
+              New-Item -ItemType Directory -Force -Path $EXT_PATH | Out-Null
 
               Push-Location $EXT_PATH
               try {
                 npx --yes vsce-unpack $vsix 2>$null
               } catch {
+                Write-Host "      vsce-unpack failed, trying 7z..."
                 if (Get-Command 7z -ErrorAction SilentlyContinue) {
                   7z x $vsix -o"$EXT_PATH" -y
                 }
@@ -360,25 +381,27 @@ jobs:
               }
 
               if (Test-Path "$EXT_PATH\package.json") {
-                echo "      Installing dependencies for $ext_name..."
+                Write-Host "      Installing dependencies for $ext_name..."
                 Push-Location $EXT_PATH
                 npm install --production --no-audit --no-fund --ignore-scripts 2>$null
                 Pop-Location
               }
-              echo "   ✅ Installed $ext_name"
+              Write-Host "   ✅ Installed $ext_name"
             }
-            echo "   ✅ prebuilt extensions installed"
+            Write-Host "   ✅ prebuilt extensions installed"
           }
 
-          echo ""
-          echo "📌 Downloading official VSCode for compiled Git extensions..."
+          # Download official Git extensions
+          Write-Host ""
+          Write-Host "📌 Downloading official VSCode for compiled Git extensions..."
           try {
-            Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64/stable" -OutFile "$env:TEMP\official.zip" -ErrorAction Stop
-            Expand-Archive -Path "$env:TEMP\official.zip" -DestinationPath "$env:TEMP\official" -Force
+            $officialZip = "$env:TEMP\official.zip"
+            Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64/stable" -OutFile $officialZip -ErrorAction Stop
+            Expand-Archive -Path $officialZip -DestinationPath "$env:TEMP\official" -Force
             $OFFICIAL_DIR = Get-ChildItem -Path "$env:TEMP\official" -Recurse -Directory | Where-Object { $_.Name -eq "VSCode-win32-x64" } | Select-Object -First 1
 
             if ($OFFICIAL_DIR -and (Test-Path "$OFFICIAL_DIR\resources\app\extensions")) {
-              echo "   ✅ Found official extensions directory"
+              Write-Host "   ✅ Found official extensions directory"
               $GIT_EXTS = @("git", "git-base", "github", "github-authentication", "tunnel-forwarding")
 
               foreach ($ext in $GIT_EXTS) {
@@ -386,15 +409,15 @@ jobs:
                 $TARGET_EXT = "$EXT_DIR\$ext"
 
                 if (Test-Path $OFFICIAL_EXT) {
-                  echo ""
-                  echo "   Processing $ext..."
+                  Write-Host ""
+                  Write-Host "   Processing $ext..."
                   if (Test-Path $TARGET_EXT) { Remove-Item -Recurse -Force $TARGET_EXT }
                   Copy-Item -Recurse -Force $OFFICIAL_EXT $TARGET_EXT
 
                   if (Test-Path "$TARGET_EXT\dist") {
-                    echo "      ✅ $ext has dist/ (compiled)"
+                    Write-Host "      ✅ $ext has dist/ (compiled)"
                   } else {
-                    echo "      🔨 Compiling $ext..."
+                    Write-Host "      🔨 Compiling $ext..."
                     if (Test-Path "$TARGET_EXT\package.json") {
                       Push-Location $TARGET_EXT
                       npm install --no-audit --no-fund --ignore-scripts 2>$null
@@ -405,14 +428,15 @@ jobs:
                 }
               }
             } else {
-              echo "   ⚠️ Could not find official extensions"
+              Write-Host "   ⚠️ Could not find official extensions"
             }
           } catch {
-            echo "   ⚠️ Failed to download official VSCode: $_"
+            Write-Host "   ⚠️ Failed to download official VSCode: $_"
           }
 
-          echo ""
-          echo "📌 Creating extension index file..."
+          # Create extension index
+          Write-Host ""
+          Write-Host "📌 Creating extension index file..."
 
           $pkgContent = @'
           {
@@ -425,34 +449,33 @@ jobs:
           '@
           $pkgContent | Out-File -FilePath "$EXT_DIR\package.json" -Encoding utf8
 
-          $extJson = @{
-            extensions = @()
-          }
-
+          $extensions = @()
           Get-ChildItem -Path $EXT_DIR -Directory | ForEach-Object {
             $extPath = $_.FullName
             $packageJson = "$extPath\package.json"
             if (Test-Path $packageJson) {
               $ext_name = $_.Name
-              if ($ext_name -ne "node_modules" -and $ext_name -ne "package.json" -and $ext_name -ne "extensions.json") {
+              if ($ext_name -notin @("node_modules", "package.json", "extensions.json")) {
                 try {
                   $pkg = Get-Content $packageJson | ConvertFrom-Json
                   if ($pkg.publisher -and $pkg.name) {
-                    $extJson.extensions += "$($pkg.publisher).$($pkg.name)"
-                    echo "   📌 $($pkg.publisher).$($pkg.name)@$($pkg.version)"
+                    $extensions += "$($pkg.publisher).$($pkg.name)"
+                    Write-Host "   📌 $($pkg.publisher).$($pkg.name)@$($pkg.version)"
                   }
                 } catch {
-                  echo "   ⚠️ Could not parse $packageJson"
+                  Write-Host "   ⚠️ Could not parse $packageJson"
                 }
               }
             }
           }
 
+          $extJson = @{ extensions = $extensions }
           $extJson | ConvertTo-Json -Depth 10 | Out-File -FilePath "$EXT_DIR\extensions.json" -Encoding utf8
-          echo "   ✅ Extension index created"
+          Write-Host "   ✅ Extension index created"
 
-          echo ""
-          echo "📌 Updating product.json to enable extensions..."
+          # Update product.json
+          Write-Host ""
+          Write-Host "📌 Updating product.json to enable extensions..."
           $PRODUCT_PATH = "$BUILD_DIR\resources\app\product.json"
           if (Test-Path $PRODUCT_PATH) {
             $product = Get-Content $PRODUCT_PATH | ConvertFrom-Json
@@ -463,45 +486,51 @@ jobs:
             } -Force
             $product | Add-Member -MemberType NoteProperty -Name "builtInExtensions" -Value @() -Force
             $product | ConvertTo-Json -Depth 10 | Set-Content $PRODUCT_PATH
-            echo "   ✅ product.json updated"
+            Write-Host "   ✅ product.json updated"
           } else {
-            echo "   ⚠️ product.json not found at $PRODUCT_PATH"
+            Write-Host "   ⚠️ product.json not found at $PRODUCT_PATH"
           }
 
+          # Cleanup
           if (Test-Path "$env:TEMP\official") { Remove-Item -Recurse -Force "$env:TEMP\official" -ErrorAction SilentlyContinue }
           if (Test-Path "$env:TEMP\official.zip") { Remove-Item -Force "$env:TEMP\official.zip" -ErrorAction SilentlyContinue }
 
-          echo ""
-          echo "✅ Extensions preparation complete"
+          Write-Host ""
+          Write-Host "✅ Extensions preparation complete"
 
       - name: 📄 Copy config files to root
+        shell: pwsh
         run: |
           $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
+          if (-not $BUILD_DIR) {
+            $BUILD_DIR = ".\VSCode-win32-x64"
+          }
           Push-Location $BUILD_DIR
           if (Test-Path "resources\app\package.json") {
             Copy-Item "resources\app\package.json" . -Force
-            echo "✅ package.json copied to root"
+            Write-Host "✅ package.json copied to root"
           }
           if (Test-Path "resources\app\product.json") {
             Copy-Item "resources\app\product.json" . -Force
-            echo "✅ product.json copied to root"
+            Write-Host "✅ product.json copied to root"
           }
           Pop-Location
 
       - name: 🚀 Create startup scripts
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "🚀 Create startup scripts"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "🚀 Create startup scripts"
+          Write-Host "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
           if (-not $BUILD_DIR) {
-            echo "❌ BUILD_DIR not set!"
+            Write-Host "❌ BUILD_DIR not set!"
             exit 1
           }
           Push-Location $BUILD_DIR
 
+          # Find the real executable
           $REAL_EXEC = $null
           $possible_names = @(
             "Code.exe",
@@ -518,7 +547,7 @@ jobs:
 
           if (-not $REAL_EXEC) {
             $exeFiles = Get-ChildItem -Filter "*.exe" -File | Where-Object {
-              $_.Name -notmatch "chrome|crash|debug|libGL|vulkan|d3d"
+              $_.Name -notmatch "chrome|crash|debug|libGL|vulkan|d3d|nw"
             }
             if ($exeFiles) {
               $REAL_EXEC = $exeFiles[0].Name
@@ -526,20 +555,22 @@ jobs:
           }
 
           if (-not $REAL_EXEC) {
-            echo "❌ No executable found!"
-            echo "Files in build directory:"
-            Get-ChildItem
+            Write-Host "❌ No executable found!"
+            Write-Host "Files in build directory:"
+            Get-ChildItem | ForEach-Object { Write-Host "  $($_.Name)" }
             exit 1
           }
 
-          echo "Found executable: $REAL_EXEC"
+          Write-Host "Found executable: $REAL_EXEC"
 
+          # Rename the real executable
           Move-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force -ErrorAction SilentlyContinue
           if (-not (Test-Path "tscode.real.exe")) {
             Copy-Item -Path $REAL_EXEC -Destination "tscode.real.exe" -Force
           }
-          echo "✅ Created tscode.real.exe"
+          Write-Host "✅ Created tscode.real.exe"
 
+          # Create batch wrapper
           $batchContent = @'
           @echo off
           set SCRIPT_DIR=%~dp0
@@ -563,8 +594,9 @@ jobs:
               %*
           '@
           $batchContent | Out-File -FilePath "tscode.bat" -Encoding ascii
-          echo "✅ Created tscode.bat"
+          Write-Host "✅ Created tscode.bat"
 
+          # Create PowerShell wrapper
           $psContent = @'
           $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
           $env:ELECTRON_ENABLE_GPU = "0"
@@ -594,67 +626,66 @@ jobs:
               $args
           '@
           $psContent | Out-File -FilePath "tscode.ps1" -Encoding utf8
-          echo "✅ Created tscode.ps1"
+          Write-Host "✅ Created tscode.ps1"
 
+          # Create desktop shortcut script
           $shortcutContent = @'
           $WshShell = New-Object -comObject WScript.Shell
           $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
           $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\VSCode for Windows.lnk")
           $Shortcut.TargetPath = "$PSScriptRoot\tscode.bat"
           $Shortcut.WorkingDirectory = "$PSScriptRoot"
-          $Shortcut.IconLocation = "$PSScriptRoot\resources\app\resources\win32\code.ico"
+          $IconPath = "$PSScriptRoot\resources\app\resources\win32\code.ico"
+          if (Test-Path $IconPath) {
+              $Shortcut.IconLocation = $IconPath
+          }
           $Shortcut.Save()
           Write-Host "Desktop shortcut created!" -ForegroundColor Green
           Write-Host "Shortcut: $env:USERPROFILE\Desktop\VSCode for Windows.lnk" -ForegroundColor Green
           '@
           $shortcutContent | Out-File -FilePath "create-shortcut.ps1" -Encoding utf8
-          echo "✅ Created create-shortcut.ps1"
+          Write-Host "✅ Created create-shortcut.ps1"
 
-          echo ""
-          echo "📋 Startup scripts created:"
-          echo "   tscode.bat           - Batch launcher (double-click to run)"
-          echo "   tscode.ps1           - PowerShell launcher"
-          echo "   create-shortcut.ps1  - Create desktop shortcut"
+          Write-Host ""
+          Write-Host "📋 Startup scripts created:"
+          Write-Host "   tscode.bat           - Batch launcher (double-click to run)"
+          Write-Host "   tscode.ps1           - PowerShell launcher"
+          Write-Host "   create-shortcut.ps1  - Create desktop shortcut"
 
           Pop-Location
 
       - name: 📦 Package
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "📦 Package"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "📦 Package"
+          Write-Host "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
           if (-not $BUILD_DIR) {
-            echo "❌ BUILD_DIR not set!"
+            Write-Host "❌ BUILD_DIR not set!"
             exit 1
           }
 
           $VERSION = "${{ github.event.inputs.version || '1.116.0' }}"
 
           $zipName = "vscode-windows-${VERSION}.zip"
-          echo "Creating $zipName ..."
+          Write-Host "Creating $zipName ..."
 
           $parentDir = Split-Path $BUILD_DIR -Parent
           $buildFolderName = Split-Path $BUILD_DIR -Leaf
 
           Push-Location $parentDir
-          if (Get-Command Compress-Archive -ErrorAction SilentlyContinue) {
-            Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
-          } else {
-            if (Get-Command 7z -ErrorAction SilentlyContinue) {
-              7z a -tzip "$zipName" "$buildFolderName\*"
-            } else {
-              Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
-            }
-          }
+          Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
           Pop-Location
 
-          echo ""
-          echo "✅ Package created:"
-          Get-ChildItem -Path $zipName | Format-Table Name, Length
+          Write-Host ""
+          Write-Host "✅ Package created:"
+          $fileInfo = Get-ChildItem -Path $zipName
+          Write-Host "  Name: $($fileInfo.Name)"
+          Write-Host "  Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
 
-          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          echo "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -665,26 +696,27 @@ jobs:
 
       - name: 📊 Build summary
         if: always()
+        shell: pwsh
         run: |
-          echo "=========================================="
-          echo "BUILD SUMMARY"
-          echo "=========================================="
-          echo "Status: ${{ job.status }}"
-          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "Platform: Windows x64"
-          echo "=========================================="
+          Write-Host "=========================================="
+          Write-Host "BUILD SUMMARY"
+          Write-Host "=========================================="
+          Write-Host "Status: ${{ job.status }}"
+          Write-Host "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          Write-Host "Platform: Windows x64"
+          Write-Host "=========================================="
           if ("${{ job.status }}" -eq "success") {
-            echo ""
-            echo "✅ Build completed successfully!"
-            echo ""
-            echo "📦 Package: $env:ZIP_NAME"
-            echo ""
-            echo "📋 To use on Windows:"
-            echo "  1. Extract the zip file"
-            echo "  2. Run tscode.bat or tscode.ps1"
-            echo "  3. Optional: run create-shortcut.ps1 to create desktop shortcut"
+            Write-Host ""
+            Write-Host "✅ Build completed successfully!"
+            Write-Host ""
+            Write-Host "📦 Package: $env:ZIP_NAME"
+            Write-Host ""
+            Write-Host "📋 To use on Windows:"
+            Write-Host "  1. Extract the zip file"
+            Write-Host "  2. Run tscode.bat or tscode.ps1"
+            Write-Host "  3. Optional: run create-shortcut.ps1 to create desktop shortcut"
           } else {
-            echo ""
-            echo "❌ Build failed. Check the logs above for errors."
+            Write-Host ""
+            Write-Host "❌ Build failed. Check the logs above for errors."
           }
-          echo "=========================================="
+          Write-Host "=========================================="
