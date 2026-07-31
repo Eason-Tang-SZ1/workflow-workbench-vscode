@@ -182,32 +182,94 @@ jobs:
           npx tsx node_modules/gulp/bin/gulp.js vscode-win32-x64 --no-color
           echo "Done: $(Get-Date)"
 
-      - name: 🔍 Verify build contents
+      - name: 🔍 Verify and locate build
         run: |
           echo "=========================================="
           echo "🔍 Verify build contents"
           echo "=========================================="
 
-          $BUILD_DIR = ""
+          # List all directories to find the build
+          echo "Current directory contents:"
+          Get-ChildItem -Directory
+
+          echo ""
+          echo "Searching for VSCode build directories..."
+          $BUILD_DIR = $null
+
+          # Check common locations
           $possible_dirs = @(
             ".\VSCode-win32-x64",
             ".\vscode\VSCode-win32-x64",
-            "..\VSCode-win32-x64"
+            "..\VSCode-win32-x64",
+            ".\VSCode",
+            ".\vscode\VSCode",
+            ".\out\VSCode-win32-x64"
           )
+
           foreach ($dir in $possible_dirs) {
             if (Test-Path $dir) {
-              $BUILD_DIR = $dir
+              $BUILD_DIR = Resolve-Path $dir
               echo "Found build directory: $BUILD_DIR"
               break
             }
           }
 
+          # If not found, search recursively
           if (-not $BUILD_DIR) {
-            echo "Build directory not found!"
+            echo "Searching recursively for VSCode-win32-x64..."
+            $found = Get-ChildItem -Recurse -Directory -Filter "VSCode-win32-x64" | Select-Object -First 1
+            if ($found) {
+              $BUILD_DIR = $found.FullName
+              echo "Found build directory via recursive search: $BUILD_DIR"
+            }
+          }
+
+          if (-not $BUILD_DIR) {
+            echo "❌ Build directory not found!"
+            echo "Listing all directories recursively (top 20):"
+            Get-ChildItem -Recurse -Directory | Select-Object -First 20 -ExpandProperty FullName
             exit 1
           }
 
           echo "BUILD_DIR=$BUILD_DIR" >> $env:GITHUB_ENV
+
+          # Show build directory structure
+          echo ""
+          echo "Build directory structure:"
+          Get-ChildItem -Path $BUILD_DIR
+
+          # Check if app directory exists
+          echo ""
+          if (Test-Path "$BUILD_DIR\resources\app") {
+            echo "✅ resources\app exists"
+            Get-ChildItem -Path "$BUILD_DIR\resources\app"
+          } else {
+            echo "⚠️ resources\app does not exist"
+            echo "Looking for package.json or product.json anywhere in build directory..."
+            Get-ChildItem -Path $BUILD_DIR -Recurse -Filter "package.json" | Select-Object -First 5 -ExpandProperty FullName
+          }
+
+      - name: 📂 Prepare extensions directory
+        run: |
+          echo "=========================================="
+          echo "📂 Prepare extensions directory"
+          echo "=========================================="
+
+          $BUILD_DIR = $env:BUILD_DIR
+          if (-not $BUILD_DIR) {
+            echo "❌ BUILD_DIR not set!"
+            exit 1
+          }
+
+          # Create the extensions directory if it doesn't exist
+          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
+          New-Item -ItemType Directory -Force -Path $EXT_DIR
+          echo "✅ Created extensions directory: $EXT_DIR"
+
+          # Also create node_modules directory if needed
+          $NODE_MODULES = "$BUILD_DIR\resources\app\node_modules"
+          New-Item -ItemType Directory -Force -Path $NODE_MODULES
+          echo "✅ Created node_modules directory: $NODE_MODULES"
 
       - name: 📂 Copy and build extensions
         run: |
@@ -216,8 +278,12 @@ jobs:
           echo "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
-          New-Item -ItemType Directory -Force -Path "$BUILD_DIR\resources\app\extensions"
+          if (-not $BUILD_DIR) {
+            echo "❌ BUILD_DIR not set!"
+            exit 1
+          }
+
+          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
 
           # ============================================
           # 1. 从源码复制 extensions
@@ -227,9 +293,9 @@ jobs:
             Get-ChildItem -Path ".\extensions" -Directory | ForEach-Object {
               $dir_name = $_.Name
               echo "   Processing $dir_name..."
-              Copy-Item -Recurse -Force $_.FullName "$BUILD_DIR\resources\app\extensions\$dir_name"
+              Copy-Item -Recurse -Force $_.FullName "$EXT_DIR\$dir_name"
 
-              $EXT_PATH = "$BUILD_DIR\resources\app\extensions\$dir_name"
+              $EXT_PATH = "$EXT_DIR\$dir_name"
               if (Test-Path "$EXT_PATH\package.json") {
                 echo "      Building $dir_name..."
                 Push-Location $EXT_PATH
@@ -241,6 +307,8 @@ jobs:
               }
             }
             echo "   ✅ extensions copied"
+          } else {
+            echo "⚠️ No extensions directory found in source"
           }
 
           # ============================================
@@ -253,25 +321,32 @@ jobs:
               $vsix = $_.FullName
               $ext_name = $_.BaseName
               echo "   Installing $ext_name..."
-              $EXT_DIR = "$BUILD_DIR\resources\app\extensions\$ext_name"
-              if (Test-Path $EXT_DIR) { Remove-Item -Recurse -Force $EXT_DIR }
-              New-Item -ItemType Directory -Force -Path $EXT_DIR
-              # Use 7zip or expand-archive for unzip
-              if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
-                Expand-Archive -Path $vsix -DestinationPath $EXT_DIR -Force
-              } else {
-                # Fallback: use npm to unpack vsix
-                Push-Location $EXT_DIR
-                npx vsce-unpack $vsix 2>$null
-                Pop-Location
+              $EXT_PATH = "$EXT_DIR\$ext_name"
+              if (Test-Path $EXT_PATH) { Remove-Item -Recurse -Force $EXT_PATH }
+              New-Item -ItemType Directory -Force -Path $EXT_PATH
+
+              # Try to unpack vsix
+              Push-Location $EXT_PATH
+              try {
+                # Use npm's vsce if available
+                npx --yes vsce-unpack $vsix 2>$null
+              } catch {
+                # Fallback: try with 7zip
+                if (Get-Command 7z -ErrorAction SilentlyContinue) {
+                  7z x $vsix -o"$EXT_PATH" -y
+                }
               }
-              if (Test-Path "$EXT_DIR\extension") {
-                Get-ChildItem -Path "$EXT_DIR\extension" | Move-Item -Destination $EXT_DIR -Force
-                Remove-Item -Recurse -Force "$EXT_DIR\extension"
+              Pop-Location
+
+              # Move files from extension subfolder if exists
+              if (Test-Path "$EXT_PATH\extension") {
+                Get-ChildItem -Path "$EXT_PATH\extension" | Move-Item -Destination $EXT_PATH -Force
+                Remove-Item -Recurse -Force "$EXT_PATH\extension"
               }
-              if (Test-Path "$EXT_DIR\package.json") {
+
+              if (Test-Path "$EXT_PATH\package.json") {
                 echo "      Installing dependencies for $ext_name..."
-                Push-Location $EXT_DIR
+                Push-Location $EXT_PATH
                 npm install --production --no-audit --no-fund 2>$null
                 Pop-Location
               }
@@ -285,37 +360,43 @@ jobs:
           # ============================================
           echo ""
           echo "📌 Downloading official VSCode for compiled Git extensions..."
-          Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64/stable" -OutFile "$env:TEMP\official.zip"
-          Expand-Archive -Path "$env:TEMP\official.zip" -DestinationPath "$env:TEMP\official" -Force
-          $OFFICIAL_DIR = Get-ChildItem -Path "$env:TEMP\official" -Recurse -Directory | Where-Object { $_.Name -eq "VSCode-win32-x64" } | Select-Object -First 1
+          try {
+            Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64/stable" -OutFile "$env:TEMP\official.zip" -ErrorAction Stop
+            Expand-Archive -Path "$env:TEMP\official.zip" -DestinationPath "$env:TEMP\official" -Force
+            $OFFICIAL_DIR = Get-ChildItem -Path "$env:TEMP\official" -Recurse -Directory | Where-Object { $_.Name -eq "VSCode-win32-x64" } | Select-Object -First 1
 
-          if ($OFFICIAL_DIR -and (Test-Path "$OFFICIAL_DIR\resources\app\extensions")) {
-            echo "   ✅ Found official extensions directory"
-            $GIT_EXTS = @("git", "git-base", "github", "github-authentication", "tunnel-forwarding")
+            if ($OFFICIAL_DIR -and (Test-Path "$OFFICIAL_DIR\resources\app\extensions")) {
+              echo "   ✅ Found official extensions directory"
+              $GIT_EXTS = @("git", "git-base", "github", "github-authentication", "tunnel-forwarding")
 
-            foreach ($ext in $GIT_EXTS) {
-              $OFFICIAL_EXT = "$OFFICIAL_DIR\resources\app\extensions\$ext"
-              $TARGET_EXT = "$BUILD_DIR\resources\app\extensions\$ext"
+              foreach ($ext in $GIT_EXTS) {
+                $OFFICIAL_EXT = "$OFFICIAL_DIR\resources\app\extensions\$ext"
+                $TARGET_EXT = "$EXT_DIR\$ext"
 
-              if (Test-Path $OFFICIAL_EXT) {
-                echo ""
-                echo "   Processing $ext..."
-                if (Test-Path $TARGET_EXT) { Remove-Item -Recurse -Force $TARGET_EXT }
-                Copy-Item -Recurse -Force $OFFICIAL_EXT $TARGET_EXT
+                if (Test-Path $OFFICIAL_EXT) {
+                  echo ""
+                  echo "   Processing $ext..."
+                  if (Test-Path $TARGET_EXT) { Remove-Item -Recurse -Force $TARGET_EXT }
+                  Copy-Item -Recurse -Force $OFFICIAL_EXT $TARGET_EXT
 
-                if (Test-Path "$TARGET_EXT\dist") {
-                  echo "      ✅ $ext has dist/ (compiled)"
-                } else {
-                  echo "      🔨 Compiling $ext..."
-                  if (Test-Path "$TARGET_EXT\package.json") {
-                    Push-Location $TARGET_EXT
-                    npm install --no-audit --no-fund 2>$null
-                    npm run compile 2>$null
-                    Pop-Location
+                  if (Test-Path "$TARGET_EXT\dist") {
+                    echo "      ✅ $ext has dist/ (compiled)"
+                  } else {
+                    echo "      🔨 Compiling $ext..."
+                    if (Test-Path "$TARGET_EXT\package.json") {
+                      Push-Location $TARGET_EXT
+                      npm install --no-audit --no-fund 2>$null
+                      npm run compile 2>$null
+                      Pop-Location
+                    }
                   }
                 }
               }
+            } else {
+              echo "   ⚠️ Could not find official extensions"
             }
+          } catch {
+            echo "   ⚠️ Failed to download official VSCode: $_"
           }
 
           # ============================================
@@ -324,7 +405,6 @@ jobs:
           echo ""
           echo "📌 Creating extension index file..."
 
-          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
           $pkgContent = @'
           {
             "name": "builtin-extensions",
@@ -346,10 +426,14 @@ jobs:
             if (Test-Path $packageJson) {
               $ext_name = $_.Name
               if ($ext_name -ne "node_modules" -and $ext_name -ne "package.json" -and $ext_name -ne "extensions.json") {
-                $pkg = Get-Content $packageJson | ConvertFrom-Json
-                if ($pkg.publisher -and $pkg.name) {
-                  $extJson.extensions += "$($pkg.publisher).$($pkg.name)"
-                  echo "   📌 $($pkg.publisher).$($pkg.name)@$($pkg.version)"
+                try {
+                  $pkg = Get-Content $packageJson | ConvertFrom-Json
+                  if ($pkg.publisher -and $pkg.name) {
+                    $extJson.extensions += "$($pkg.publisher).$($pkg.name)"
+                    echo "   📌 $($pkg.publisher).$($pkg.name)@$($pkg.version)"
+                  }
+                } catch {
+                  echo "   ⚠️ Could not parse $packageJson"
                 }
               }
             }
@@ -374,88 +458,30 @@ jobs:
             $product | Add-Member -MemberType NoteProperty -Name "builtInExtensions" -Value @() -Force
             $product | ConvertTo-Json -Depth 10 | Set-Content $PRODUCT_PATH
             echo "   ✅ product.json updated"
+          } else {
+            echo "   ⚠️ product.json not found at $PRODUCT_PATH"
           }
 
           # Cleanup
-          if (Test-Path "$env:TEMP\official") { Remove-Item -Recurse -Force "$env:TEMP\official" }
-          if (Test-Path "$env:TEMP\official.zip") { Remove-Item -Force "$env:TEMP\official.zip" }
+          if (Test-Path "$env:TEMP\official") { Remove-Item -Recurse -Force "$env:TEMP\official" -ErrorAction SilentlyContinue }
+          if (Test-Path "$env:TEMP\official.zip") { Remove-Item -Force "$env:TEMP\official.zip" -ErrorAction SilentlyContinue }
 
           echo ""
           echo "✅ Extensions preparation complete"
-
-      - name: 🔨 Build Git extensions
-        run: |
-          echo "=========================================="
-          echo "🔨 Build Git extensions"
-          echo "=========================================="
-
-          $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
-          $EXT_DIR = "$BUILD_DIR\resources\app\extensions"
-
-          $GIT_EXTS = @("git", "git-base", "github", "github-authentication", "tunnel-forwarding")
-
-          foreach ($ext in $GIT_EXTS) {
-            $EXT_PATH = "$EXT_DIR\$ext"
-            if (Test-Path $EXT_PATH) {
-              echo ""
-              echo "📌 Building $ext..."
-              Push-Location $EXT_PATH
-
-              if (-not (Test-Path "dist") -and -not (Test-Path "out")) {
-                echo "   🔨 Compiling $ext..."
-                if (Test-Path "package.json") {
-                  npm install --no-audit --no-fund 2>$null
-                  $pkg = Get-Content "package.json" | ConvertFrom-Json
-                  if ($pkg.scripts.compile) {
-                    npm run compile 2>$null
-                  } elseif ($pkg.scripts.build) {
-                    npm run build 2>$null
-                  } else {
-                    npx tsc -p . 2>$null
-                  }
-                }
-                if (Test-Path "dist") {
-                  echo "   ✅ $ext compiled to dist/"
-                } elseif (Test-Path "out") {
-                  echo "   ✅ $ext compiled to out/"
-                }
-              } else {
-                echo "   ✅ $ext already compiled"
-              }
-              Pop-Location
-            }
-          }
-
-      - name: 🔍 Debug extensions
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "🔍 Debug extensions"
-          echo "=========================================="
-
-          $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
-
-          echo ""
-          echo "📁 Extensions directory:"
-          Get-ChildItem -Path "$BUILD_DIR\resources\app\extensions" | Format-Table
-
-          echo ""
-          echo "📄 Extensions index:"
-          if (Test-Path "$BUILD_DIR\resources\app\extensions\extensions.json") {
-            Get-Content "$BUILD_DIR\resources\app\extensions\extensions.json"
-          } else {
-            echo "No index file"
-          }
 
       - name: 📄 Copy config files to root
         run: |
           $BUILD_DIR = $env:BUILD_DIR
           if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
           Push-Location $BUILD_DIR
-          if (Test-Path "resources\app\package.json") { Copy-Item "resources\app\package.json" . -Force; echo "✅ package.json" }
-          if (Test-Path "resources\app\product.json") { Copy-Item "resources\app\product.json" . -Force; echo "✅ product.json" }
+          if (Test-Path "resources\app\package.json") {
+            Copy-Item "resources\app\package.json" . -Force
+            echo "✅ package.json copied to root"
+          }
+          if (Test-Path "resources\app\product.json") {
+            Copy-Item "resources\app\product.json" . -Force
+            echo "✅ product.json copied to root"
+          }
           Pop-Location
 
       - name: 🚀 Create startup scripts
@@ -465,30 +491,53 @@ jobs:
           echo "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
+          if (-not $BUILD_DIR) {
+            echo "❌ BUILD_DIR not set!"
+            exit 1
+          }
           Push-Location $BUILD_DIR
 
           # Find the real executable
           $REAL_EXEC = $null
-          $possible_names = @("Code.exe", "code.exe", "bin\code.exe", "bin\Code.exe")
+          $possible_names = @(
+            "Code.exe",
+            "code.exe",
+            "bin\code.exe",
+            "bin\Code.exe"
+          )
           foreach ($name in $possible_names) {
             if (Test-Path $name) {
               $REAL_EXEC = $name
               break
             }
           }
+
           if (-not $REAL_EXEC) {
-            $REAL_EXEC = Get-ChildItem -Filter "*.exe" -File | Where-Object { $_.Name -notmatch "chrome|crash|debug" } | Select-Object -First 1
-            if ($REAL_EXEC) { $REAL_EXEC = $REAL_EXEC.Name }
+            # Look for any exe file
+            $exeFiles = Get-ChildItem -Filter "*.exe" -File | Where-Object {
+              $_.Name -notmatch "chrome|crash|debug|libGL|vulkan|d3d"
+            }
+            if ($exeFiles) {
+              $REAL_EXEC = $exeFiles[0].Name
+            }
           }
 
           if (-not $REAL_EXEC) {
             echo "❌ No executable found!"
+            echo "Files in build directory:"
+            Get-ChildItem
             exit 1
           }
 
+          echo "Found executable: $REAL_EXEC"
+
           # Rename the real executable
-          Rename-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force
+          Move-Item -Path $REAL_EXEC -NewName "tscode.real.exe" -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path "tscode.real.exe")) {
+            # Try copy instead of move
+            Copy-Item -Path $REAL_EXEC -Destination "tscode.real.exe" -Force
+          }
+          echo "✅ Created tscode.real.exe"
 
           # Create batch wrapper
           $batchContent = @'
@@ -502,6 +551,7 @@ jobs:
           set CRASHPAD_DISABLE=1
           set USER_DATA_DIR=%SCRIPT_DIR%user-data
           if not exist "%USER_DATA_DIR%" mkdir "%USER_DATA_DIR%"
+          echo Starting VSCode for Windows...
           "%SCRIPT_DIR%tscode.real.exe" ^
               --no-sandbox ^
               --disable-gpu-sandbox ^
@@ -513,6 +563,7 @@ jobs:
               %*
           '@
           $batchContent | Out-File -FilePath "tscode.bat" -Encoding ascii
+          echo "✅ Created tscode.bat"
 
           # Create PowerShell wrapper
           $psContent = @'
@@ -524,12 +575,15 @@ jobs:
           $env:ELECTRON_DISABLE_CRASH_REPORTING = "1"
           $env:CRASHPAD_DISABLE = "1"
           $UserDataDir = Join-Path $ScriptDir "user-data"
-          if (-not (Test-Path $UserDataDir)) { New-Item -ItemType Directory -Path $UserDataDir -Force }
+          if (-not (Test-Path $UserDataDir)) { New-Item -ItemType Directory -Path $UserDataDir -Force | Out-Null }
           $Executable = Join-Path $ScriptDir "tscode.real.exe"
           if (-not (Test-Path $Executable)) {
               Write-Host "VSCode executable not found!" -ForegroundColor Red
+              Write-Host "Looking for exe files in $ScriptDir..."
+              Get-ChildItem -Path $ScriptDir -Filter "*.exe" | ForEach-Object { Write-Host "  $($_.Name)" }
               exit 1
           }
+          Write-Host "Starting VSCode for Windows..." -ForegroundColor Green
           & $Executable `
               --no-sandbox `
               --disable-gpu-sandbox `
@@ -541,24 +595,28 @@ jobs:
               $args
           '@
           $psContent | Out-File -FilePath "tscode.ps1" -Encoding utf8
+          echo "✅ Created tscode.ps1"
 
           # Create desktop shortcut script
           $shortcutContent = @'
           $WshShell = New-Object -comObject WScript.Shell
+          $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
           $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\VSCode for Windows.lnk")
           $Shortcut.TargetPath = "$PSScriptRoot\tscode.bat"
           $Shortcut.WorkingDirectory = "$PSScriptRoot"
           $Shortcut.IconLocation = "$PSScriptRoot\resources\app\resources\win32\code.ico"
           $Shortcut.Save()
           Write-Host "Desktop shortcut created!" -ForegroundColor Green
+          Write-Host "Shortcut: $env:USERPROFILE\Desktop\VSCode for Windows.lnk" -ForegroundColor Green
           '@
           $shortcutContent | Out-File -FilePath "create-shortcut.ps1" -Encoding utf8
+          echo "✅ Created create-shortcut.ps1"
 
-          echo "✅ Startup scripts created"
           echo ""
-          echo "   tscode.bat        - Batch launcher"
-          echo "   tscode.ps1        - PowerShell launcher"
-          echo "   create-shortcut.ps1 - Create desktop shortcut"
+          echo "📋 Startup scripts created:"
+          echo "   tscode.bat           - Batch launcher (double-click to run)"
+          echo "   tscode.ps1           - PowerShell launcher"
+          echo "   create-shortcut.ps1  - Create desktop shortcut"
 
           Pop-Location
 
@@ -569,29 +627,38 @@ jobs:
           echo "=========================================="
 
           $BUILD_DIR = $env:BUILD_DIR
-          if (-not $BUILD_DIR) { $BUILD_DIR = ".\VSCode-win32-x64" }
+          if (-not $BUILD_DIR) {
+            echo "❌ BUILD_DIR not set!"
+            exit 1
+          }
+
           $VERSION = "${{ github.event.inputs.version || '1.116.0' }}"
 
           # Create zip package
           $zipName = "vscode-windows-${VERSION}.zip"
           echo "Creating $zipName ..."
+
+          # Go to parent directory of BUILD_DIR
+          $parentDir = Split-Path $BUILD_DIR -Parent
+          $buildFolderName = Split-Path $BUILD_DIR -Leaf
+
+          Push-Location $parentDir
           if (Get-Command Compress-Archive -ErrorAction SilentlyContinue) {
-            Compress-Archive -Path "$BUILD_DIR\*" -DestinationPath $zipName -Force
+            Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
           } else {
             # Fallback to 7zip if available
             if (Get-Command 7z -ErrorAction SilentlyContinue) {
-              7z a -tzip $zipName "$BUILD_DIR\*"
+              7z a -tzip "$zipName" "$buildFolderName\*"
             } else {
-              # Use PowerShell's Compress-Archive (should be available)
-              Compress-Archive -Path "$BUILD_DIR\*" -DestinationPath $zipName -Force
+              Compress-Archive -Path "$buildFolderName\*" -DestinationPath "$zipName" -Force
             }
           }
+          Pop-Location
 
           echo ""
           echo "✅ Package created:"
           Get-ChildItem -Path $zipName | Format-Table Name, Length
 
-          # Set output for upload
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
 
       - name: 📤 Upload artifacts
@@ -617,9 +684,12 @@ jobs:
             echo ""
             echo "📦 Package: $env:ZIP_NAME"
             echo ""
-            echo "On Windows:"
+            echo "📋 To use on Windows:"
             echo "  1. Extract the zip file"
             echo "  2. Run tscode.bat or tscode.ps1"
             echo "  3. Optional: run create-shortcut.ps1 to create desktop shortcut"
+          } else {
+            echo ""
+            echo "❌ Build failed. Check the logs above for errors."
           }
           echo "=========================================="
