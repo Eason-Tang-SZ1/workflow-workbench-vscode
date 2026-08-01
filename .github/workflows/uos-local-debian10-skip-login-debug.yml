@@ -37,7 +37,7 @@ jobs:
             libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl tree
+            python3 git wget curl tree unzip
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -389,12 +389,12 @@ jobs:
           [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
 
       # ============================================================
-      # 创建启动脚本
+      # 创建启动脚本（带详细日志）
       # ============================================================
-      - name: 🚀 Create startup scripts
+      - name: 🚀 Create startup scripts with debug logging
         run: |
           echo "=========================================="
-          echo "🚀 Create startup scripts"
+          echo "🚀 Create startup scripts with debug logging"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
@@ -420,9 +420,18 @@ jobs:
           echo "✅ Found executable: $REAL_EXEC"
           mv "$REAL_EXEC" "tscode.real"
 
+          # ============================================
+          # 创建带调试日志的启动脚本
+          # ============================================
           cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          # 日志文件
+          LOG_FILE="$SCRIPT_DIR/vscode-debug.log"
+          echo "==========================================" > "$LOG_FILE"
+          echo "TSCode Debug Log - $(date)" >> "$LOG_FILE"
+          echo "==========================================" >> "$LOG_FILE"
 
           # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
@@ -440,32 +449,124 @@ jobs:
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="1.116.0"
 
+          # 设置 Node.js 调试
+          export NODE_DEBUG=vscode*
+          export ELECTRON_DEBUG_EXTENSIONS=1
+
+          # 检查目录结构并记录日志
+          echo "=== Directory Structure ===" >> "$LOG_FILE"
+          echo "SCRIPT_DIR: $SCRIPT_DIR" >> "$LOG_FILE"
+          echo "Contents of SCRIPT_DIR:" >> "$LOG_FILE"
+          ls -la "$SCRIPT_DIR" >> "$LOG_FILE" 2>&1
+
+          echo "" >> "$LOG_FILE"
+          echo "=== resources/app structure ===" >> "$LOG_FILE"
+          if [ -d "$SCRIPT_DIR/resources/app" ]; then
+            ls -la "$SCRIPT_DIR/resources/app" >> "$LOG_FILE" 2>&1
+          else
+            echo "ERROR: resources/app directory not found!" >> "$LOG_FILE"
+          fi
+
+          echo "" >> "$LOG_FILE"
+          echo "=== Extensions directory ===" >> "$LOG_FILE"
+          EXT_DIR="$SCRIPT_DIR/resources/app/extensions"
+          if [ -d "$EXT_DIR" ]; then
+            echo "Extensions found at: $EXT_DIR" >> "$LOG_FILE"
+            ls -la "$EXT_DIR" >> "$LOG_FILE" 2>&1
+            echo "" >> "$LOG_FILE"
+            echo "Extension count: $(ls -1 $EXT_DIR 2>/dev/null | wc -l)" >> "$LOG_FILE"
+
+            # 列出每个扩展的 package.json
+            for ext in "$EXT_DIR"/*; do
+              if [ -d "$ext" ] && [ -f "$ext/package.json" ]; then
+                echo "Extension: $(basename $ext)" >> "$LOG_FILE"
+                cat "$ext/package.json" | jq -r '.name + " (" + .version + ")"' 2>/dev/null >> "$LOG_FILE" || echo "  Could not parse package.json" >> "$LOG_FILE"
+              fi
+            done
+          else
+            echo "ERROR: Extensions directory not found at $EXT_DIR" >> "$LOG_FILE"
+          fi
+
+          echo "" >> "$LOG_FILE"
+          echo "=== node_modules ===" >> "$LOG_FILE"
+          if [ -d "$SCRIPT_DIR/resources/app/node_modules" ]; then
+            echo "node_modules found" >> "$LOG_FILE"
+            echo "Size: $(du -sh $SCRIPT_DIR/resources/app/node_modules 2>/dev/null | cut -f1)" >> "$LOG_FILE"
+            echo "Top modules:" >> "$LOG_FILE"
+            ls -la "$SCRIPT_DIR/resources/app/node_modules" | head -20 >> "$LOG_FILE" 2>&1
+          else
+            echo "ERROR: node_modules not found in resources/app!" >> "$LOG_FILE"
+          fi
+
+          # 检查 product.json
+          echo "" >> "$LOG_FILE"
+          echo "=== product.json ===" >> "$LOG_FILE"
+          if [ -f "$SCRIPT_DIR/resources/app/product.json" ]; then
+            cat "$SCRIPT_DIR/resources/app/product.json" >> "$LOG_FILE" 2>&1
+          else
+            echo "product.json not found!" >> "$LOG_FILE"
+          fi
+
+          # 检查 package.json
+          echo "" >> "$LOG_FILE"
+          echo "=== package.json ===" >> "$LOG_FILE"
+          if [ -f "$SCRIPT_DIR/resources/app/package.json" ]; then
+            cat "$SCRIPT_DIR/resources/app/package.json" | jq -r '.name, .version' 2>/dev/null >> "$LOG_FILE" || echo "  Could not parse package.json" >> "$LOG_FILE"
+          else
+            echo "package.json not found!" >> "$LOG_FILE"
+          fi
+
+          # 查找可执行文件
+          echo "" >> "$LOG_FILE"
+          echo "=== Executable ===" >> "$LOG_FILE"
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
+              echo "Found executable: $EXEC" >> "$LOG_FILE"
+              ls -la "$EXEC" >> "$LOG_FILE" 2>&1
           else
-              echo "VSCode executable not found!"
+              echo "ERROR: tscode.real not found!" >> "$LOG_FILE"
               exit 1
           fi
 
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
+          echo "User data dir: $USER_DATA_DIR" >> "$LOG_FILE"
 
-          # 启动 VSCode
-          exec "$EXEC" \
+          # 设置额外的调试参数
+          EXTRA_ARGS=""
+          EXTRA_ARGS="$EXTRA_ARGS --verbose"
+          EXTRA_ARGS="$EXTRA_ARGS --enable-extensions"
+          EXTRA_ARGS="$EXTRA_ARGS --list-extensions"
+          EXTRA_ARGS="$EXTRA_ARGS --show-versions"
+
+          echo "" >> "$LOG_FILE"
+          echo "=== Launching VSCode ===" >> "$LOG_FILE"
+          echo "Command: $EXEC --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir=$USER_DATA_DIR --builtin-extensions-dir=$SCRIPT_DIR/resources/app/extensions --extensions-dir=$USER_DATA_DIR/extensions $EXTRA_ARGS $@" >> "$LOG_FILE"
+
+          # 启动 VSCode 并记录输出
+          "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
               --user-data-dir="$USER_DATA_DIR" \
-              --enable-extensions \
               --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
               --extensions-dir="$USER_DATA_DIR/extensions" \
-              "$@"
+              $EXTRA_ARGS \
+              "$@" 2>&1 | tee -a "$LOG_FILE"
+
+          EXIT_CODE=$?
+          echo "" >> "$LOG_FILE"
+          echo "=== Exit Code: $EXIT_CODE ===" >> "$LOG_FILE"
+          exit $EXIT_CODE
           WRAPPER_EOF
 
           chmod +x tscode
           chmod +x tscode.real
 
+          # ============================================
+          # 创建简单启动脚本（用于快速调试）
+          # ============================================
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -482,6 +583,8 @@ jobs:
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="1.116.0"
+          export NODE_DEBUG=vscode*
+          export ELECTRON_DEBUG_EXTENSIONS=1
 
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
@@ -494,6 +597,9 @@ jobs:
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
 
+          echo "Starting VSCode with debug..."
+          echo "Log file: $SCRIPT_DIR/vscode-debug.log"
+
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -503,11 +609,74 @@ jobs:
               --enable-extensions \
               --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
               --extensions-dir="$USER_DATA_DIR/extensions" \
-              "$@"
+              --verbose \
+              "$@" 2>&1 | tee "$SCRIPT_DIR/vscode-debug.log"
           START_EOF
 
           chmod +x start-vscode.sh
 
+          # ============================================
+          # 创建扩展检查脚本
+          # ============================================
+          cat > check-extensions.sh << 'CHECK_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          echo "=========================================="
+          echo "Extension Check Script"
+          echo "=========================================="
+
+          EXT_DIR="$SCRIPT_DIR/resources/app/extensions"
+          USER_EXT_DIR="$SCRIPT_DIR/user-data/extensions"
+
+          echo ""
+          echo "=== Built-in Extensions ($EXT_DIR) ==="
+          if [ -d "$EXT_DIR" ]; then
+            echo "Found $(ls -1 $EXT_DIR 2>/dev/null | wc -l) extensions"
+            for ext in "$EXT_DIR"/*; do
+              if [ -d "$ext" ] && [ -f "$ext/package.json" ]; then
+                NAME=$(cat "$ext/package.json" | jq -r '.name' 2>/dev/null || echo "unknown")
+                VERSION=$(cat "$ext/package.json" | jq -r '.version' 2>/dev/null || echo "unknown")
+                echo "  ✅ $NAME ($VERSION)"
+              fi
+            done
+          else
+            echo "  ❌ Directory not found!"
+          fi
+
+          echo ""
+          echo "=== User Extensions ($USER_EXT_DIR) ==="
+          if [ -d "$USER_EXT_DIR" ]; then
+            echo "Found $(ls -1 $USER_EXT_DIR 2>/dev/null | wc -l) extensions"
+            for ext in "$USER_EXT_DIR"/*; do
+              if [ -d "$ext" ] && [ -f "$ext/package.json" ]; then
+                NAME=$(cat "$ext/package.json" | jq -r '.name' 2>/dev/null || echo "unknown")
+                VERSION=$(cat "$ext/package.json" | jq -r '.version' 2>/dev/null || echo "unknown")
+                echo "  ✅ $NAME ($VERSION)"
+              fi
+            done
+          else
+            echo "  ℹ️ Directory not found (extensions not yet installed)"
+          fi
+
+          echo ""
+          echo "=== Running VSCode CLI Extension List ==="
+          if [ -f "$SCRIPT_DIR/tscode.real" ]; then
+            echo "Executing: $SCRIPT_DIR/tscode.real --list-extensions --show-versions"
+            "$SCRIPT_DIR/tscode.real" --list-extensions --show-versions 2>/dev/null || echo "  ❌ Failed to list extensions"
+          else
+            echo "  ❌ tscode.real not found"
+          fi
+
+          echo ""
+          echo "=========================================="
+          CHECK_EOF
+
+          chmod +x check-extensions.sh
+
+          # ============================================
+          # 创建 desktop 文件
+          # ============================================
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -523,7 +692,55 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          echo "✅ Startup scripts created"
+          echo ""
+          echo "✅ Startup scripts with debug logging created"
+          echo ""
+          echo "📋 Debug tools available:"
+          echo "  - ./tscode             : Main startup script with debug logging"
+          echo "  - ./start-vscode.sh    : Simple startup with debug output"
+          echo "  - ./check-extensions.sh: Extension diagnostic tool"
+          echo "  - vscode-debug.log     : Debug log file (generated after running)"
+
+      # ============================================================
+      # 创建诊断包
+      # ============================================================
+      - name: 📦 Create diagnostic package
+        run: |
+          echo "=========================================="
+          echo "📦 Create diagnostic package"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          # 创建诊断信息
+          cat > "$BUILD_DIR/README-DEBUG.txt" << 'EOF'
+          TSCode for UOS - Debug Information
+          ========================================
+
+          If extensions are not showing up, please:
+
+          1. Run the diagnostic tool:
+             ./check-extensions.sh
+
+          2. Check the debug log:
+             cat vscode-debug.log
+
+          3. Look for these common issues:
+             - Extension paths not found
+             - Node_modules missing
+             - Permission issues
+             - Missing extension dependencies
+
+          4. Try running with verbose output:
+             ./start-vscode.sh --verbose
+
+          5. Check user-data directory:
+             ls -la user-data/extensions/
+
+          ========================================
+          EOF
+
+          echo "✅ Diagnostic information added"
 
       # ============================================================
       # 打包
@@ -540,6 +757,7 @@ jobs:
           # 确保所有文件有正确权限
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
+          chmod +x $BUILD_DIR/check-extensions.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
           chmod +x $BUILD_DIR/tscode.real 2>/dev/null || true
 
@@ -594,6 +812,8 @@ jobs:
             echo "On UOS:"
             echo "  1. tar -xzf vscode-uos-*.tar.gz"
             echo "  2. cd VSCode-linux-x64"
-            echo "  3. ./tscode"
+            echo "  3. ./tscode (with debug logging)"
+            echo "  4. For diagnostics: ./check-extensions.sh"
+            echo "  5. Check debug log: cat vscode-debug.log"
           fi
           echo "=========================================="
