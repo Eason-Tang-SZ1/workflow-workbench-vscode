@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (Double-click)
+name: Build Custom VSCode for UOS (uos-no-sandbox.yml)
 
 on:
   workflow_dispatch:
@@ -37,17 +37,21 @@ jobs:
             libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl
+            python3 git wget curl tree
 
       - name: 🔧 Fix TypeScript scripts
         run: |
-          echo 'console.log("✅ Preinstall OK");' > build/npm/preinstall.js
+          echo 'console.log("Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
-          echo 'console.log("✅ Postinstall OK");' > build/npm/postinstall.js
+          echo 'console.log("Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
       - name: 📦 Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          echo "=========================================="
+          echo "📦 Installing dependencies"
+          echo "=========================================="
+          npm install --legacy-peer-deps
 
       - name: 📦 Install build tools
         run: |
@@ -80,7 +84,7 @@ jobs:
           export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
           export function fromMarketplace(): any[] { return empty; }
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
+            console.log("fetchUrls: disabled");
             return Promise.resolve();
           }
           export function buildExtensionMedia(): void {}
@@ -97,7 +101,7 @@ jobs:
           export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
           echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log("⚠️ fetchUrls: disabled");
+            console.log("fetchUrls: disabled");
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
@@ -112,42 +116,27 @@ jobs:
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
           with open('build/gulpfile.vscode.ts', 'w') as f:
               f.write(content)
-          print("✅ spawn calls fixed")
+          print("spawn calls fixed")
           PY_END
 
       - name: 🔧 Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
-              console.log('⚠️ Copilot extension shims preparation skipped for UOS build');
+              console.log('Copilot extension shims preparation skipped for UOS build');
               return;
           }
           export function copyCopilotNativeDeps(productRoot: string): void {
-              console.log('⚠️ Copilot native deps copy skipped for UOS build');
+              console.log('Copilot native deps copy skipped for UOS build');
           }
           export function getCopilotExcludeFilter(): any {
               return function() { return false; };
           }
           EOF
 
-      # ============================================================
-      # 10. 修复 src/main.ts 并禁用 Crashpad
-      # ============================================================
-      - name: 🔧 Fix main.ts and disable Crashpad
+      - name: 🔧 Disable Crashpad
         run: |
-          echo "=========================================="
-          echo "🔧 修复 src/main.ts 并禁用 Crashpad"
-          echo "=========================================="
-
-          # 从原始仓库恢复 src/main.ts
-          echo "📌 恢复 src/main.ts..."
-          if [ -f "src/main.ts" ]; then
-            git checkout src/main.ts 2>/dev/null || echo "⚠️ git checkout 失败"
-          else
-            echo "⚠️ src/main.ts 不存在，跳过"
-          fi
-
-          # 修改 product.json
+          echo "Disabling Crashpad"
           python3 << 'PY_JSON_END'
           import json
           import os
@@ -160,34 +149,24 @@ jobs:
               data['crashReporter']['disabled'] = True
               with open('product.json', 'w') as f:
                   json.dump(data, f, indent=2)
-              print("✅ product.json 已修改")
+              print("product.json modified")
           PY_JSON_END
 
-          # 创建禁用的 crash 服务
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
            *  Licensed under the MIT License. See License.txt in the project root for license information.
            *--------------------------------------------------------------------------------------------*/
-          // DISABLED: Crash service for UOS build
           import { createDecorator } from '../../../base/common/instantiation.js';
           export const ICrashService = createDecorator<ICrashService>('crashService');
           export interface ICrashService { _serviceBrand: undefined; }
           export class CrashService implements ICrashService {
               declare readonly _serviceBrand: undefined;
-              constructor() { console.log('⚠️ Crash service disabled for UOS build'); }
+              constructor() { console.log('Crash service disabled for UOS build'); }
           }
           CRASH_EOF
-          echo "✅ crashService.ts 已创建"
-
-          # 只修改 electron-main.ts 中的 crashReporter.start
-          if [ -f "src/vs/workbench/electron-main/electron-main.ts" ]; then
-            sed -i '/crashReporter\.start/s/^/\/\/ DISABLED: /' src/vs/workbench/electron-main/electron-main.ts
-            echo "✅ electron-main.ts 已修改"
-          fi
-
-          echo "✅ 修复完成"
+          echo "crashService.ts created"
 
       - name: ⚙️ Set env
         run: |
@@ -208,66 +187,244 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           echo "Start: $(date)"
-          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-min --no-color
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
 
-      - name: 🔍 Verify
+      - name: 🔍 Verify build contents
         run: |
+          echo "=========================================="
+          echo "🔍 Verify build contents"
+          echo "=========================================="
+
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
-              echo "✅ Build found at: $BUILD_DIR"
+              echo "Found build directory: $BUILD_DIR"
               break
             fi
           done
+
           if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build not found!"
+            echo "Build directory not found!"
             exit 1
           fi
+
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
       # ============================================================
-      # 11. 创建可直接双击运行的 VSCode
+      # 关键修复：复制 node_modules 到 resources/app
       # ============================================================
-      - name: 🚀 Create double-click executable
+      - name: 📦 Copy node_modules to resources/app
         run: |
+          echo "=========================================="
+          echo "📦 Copy node_modules to resources/app"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          # 检查 node_modules 是否存在
+          if [ ! -d "./node_modules" ]; then
+            echo "❌ node_modules not found in root!"
+            echo "Installing node_modules..."
+            npm install --legacy-peer-deps
+          fi
+
+          # 复制 node_modules 到 resources/app
+          echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
+          rm -rf "$BUILD_DIR/resources/app/node_modules"
+          cp -r ./node_modules "$BUILD_DIR/resources/app/"
+
+          # 验证复制结果
+          echo ""
+          echo "📌 Verifying node_modules:"
+          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
+            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
+              echo "   ✅ $module"
+            else
+              echo "   ⚠️ $module (missing)"
+            fi
+          done
+
+          # 检查关键原生模块
+          echo ""
+          echo "📌 Checking native modules:"
+          find "$BUILD_DIR/resources/app/node_modules" -name "*.node" 2>/dev/null | head -10 | while read f; do
+            echo "   ✅ $(basename $f)"
+          done
+
+          echo ""
+          echo "   Total size: $(du -sh $BUILD_DIR/resources/app/node_modules 2>/dev/null | cut -f1)"
+
+      # ============================================================
+      # 复制 extensions 并编译
+      # ============================================================
+      - name: 📂 Copy and build extensions
+        run: |
+          echo "=========================================="
+          echo "📂 Copy and build extensions"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          mkdir -p "$BUILD_DIR/resources/app/extensions"
+
+          # ============================================
+          # 1. 从源码复制 extensions
+          # ============================================
+          if [ -d "./extensions" ]; then
+            echo "📌 Copying extensions from source..."
+            for dir in ./extensions/*; do
+              if [ -d "$dir" ]; then
+                dir_name=$(basename "$dir")
+                echo "   Processing $dir_name..."
+                cp -r "$dir" "$BUILD_DIR/resources/app/extensions/"
+              fi
+            done
+            echo "   ✅ extensions copied"
+          fi
+
+          # ============================================
+          # 2. 复制预构建扩展 (VSIX)
+          # ============================================
+          if [ -d "./prebuilt-extensions" ]; then
+            echo ""
+            echo "📌 Installing prebuilt extensions..."
+            for vsix in ./prebuilt-extensions/*.vsix; do
+              if [ -f "$vsix" ]; then
+                ext_name=$(basename "$vsix" .vsix)
+                echo "   Installing $ext_name..."
+                EXT_DIR="$BUILD_DIR/resources/app/extensions/$ext_name"
+                rm -rf "$EXT_DIR" 2>/dev/null
+                mkdir -p "$EXT_DIR"
+                unzip -q "$vsix" -d "$EXT_DIR"
+                if [ -d "$EXT_DIR/extension" ]; then
+                  mv "$EXT_DIR/extension"/* "$EXT_DIR/"
+                  rm -rf "$EXT_DIR/extension"
+                fi
+                echo "   ✅ Installed $ext_name"
+              fi
+            done
+            echo "   ✅ prebuilt extensions installed"
+          fi
+
+          # ============================================
+          # 3. 从官方下载 Git 扩展
+          # ============================================
+          echo ""
+          echo "📌 Downloading official VSCode for Git extensions..."
+          wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+
+          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
+            echo "   ✅ Found official extensions directory"
+
+            GIT_EXTS=("git" "git-base" "github" "github-authentication" "tunnel-forwarding")
+
+            for ext in "${GIT_EXTS[@]}"; do
+              OFFICIAL_EXT="$OFFICIAL_DIR/resources/app/extensions/$ext"
+              TARGET_EXT="$BUILD_DIR/resources/app/extensions/$ext"
+
+              if [ -d "$OFFICIAL_EXT" ]; then
+                echo "   Processing $ext..."
+                rm -rf "$TARGET_EXT" 2>/dev/null
+                cp -r "$OFFICIAL_EXT" "$TARGET_EXT"
+                echo "      ✅ $ext copied"
+              fi
+            done
+          fi
+
+          # ============================================
+          # 4. 清理临时文件
+          # ============================================
+          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
+
+          echo ""
+          echo "✅ Extensions preparation complete"
+
+      # ============================================================
+      # 调试：检查文件结构
+      # ============================================================
+      - name: 🔍 Debug build structure
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "🔍 Debug build structure"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+
+          echo ""
+          echo "📁 resources/app/ contents:"
+          ls -la "$BUILD_DIR/resources/app/" | head -20
+
+          echo ""
+          echo "📁 node_modules in resources/app/:"
+          if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+            echo "   ✅ node_modules exists"
+            echo "   Size: $(du -sh $BUILD_DIR/resources/app/node_modules 2>/dev/null | cut -f1)"
+            echo "   Top modules:"
+            ls -la "$BUILD_DIR/resources/app/node_modules" | head -15
+          else
+            echo "   ❌ node_modules NOT found!"
+          fi
+
+          echo ""
+          echo "📁 Extensions count:"
+          ls -la "$BUILD_DIR/resources/app/extensions" | wc -l
+
+      # ============================================================
+      # 复制配置文件到根目录
+      # ============================================================
+      - name: 📄 Copy config files to root
+        run: |
+          echo "=========================================="
+          echo "📄 Copy config files to root"
+          echo "=========================================="
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           cd "$BUILD_DIR"
 
-          # 查找真正的二进制文件
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
+
+      # ============================================================
+      # 创建启动脚本
+      # ============================================================
+      - name: 🚀 Create startup scripts
+        run: |
+          echo "=========================================="
+          echo "🚀 Create startup scripts"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          cd "$BUILD_DIR"
+
           REAL_EXEC=""
-          for name in tscode code-oss code; do
+          for name in code code-oss; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
-              break
-            elif [ -f "./bin/$name" ]; then
-              REAL_EXEC="./bin/$name"
               break
             fi
           done
 
           if [ -z "$REAL_EXEC" ]; then
-            REAL_EXEC=$(find . -maxdepth 2 -type f -executable 2>/dev/null | head -1)
+            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
           fi
 
-          if [ -z "$REAL_EXEC" ] || [ ! -f "$REAL_EXEC" ]; then
-            echo "❌ 找不到可执行文件！"
-            echo "当前目录内容:"
-            ls -la
-            echo "查找可执行文件:"
-            find . -maxdepth 2 -type f -executable 2>/dev/null
+          if [ -z "$REAL_EXEC" ]; then
+            echo "❌ No executable found!"
             exit 1
           fi
 
-          echo "✅ 真实可执行文件: $REAL_EXEC"
-          mv "$REAL_EXEC" "${REAL_EXEC}.real"
+          echo "✅ Found executable: $REAL_EXEC"
+          mv "$REAL_EXEC" "tscode.real"
 
-          # 2. 创建 tscode 包装器
-          cat > "$REAL_EXEC" << 'WRAPPER_EOF'
+          cat > tscode << 'WRAPPER_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -279,31 +436,36 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
+          # 设置 VSCode 环境
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="1.116.0"
+
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
-          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode.real"
-          elif [ -f "$SCRIPT_DIR/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/code-oss.real"
-          elif [ -f "$SCRIPT_DIR/bin/code-oss.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/code-oss.real"
           else
-              echo "❌ 找不到 VSCode 可执行文件！"
+              echo "VSCode executable not found!"
               exit 1
           fi
 
+          USER_DATA_DIR="$SCRIPT_DIR/user-data"
+          mkdir -p "$USER_DATA_DIR"
+
+          # 启动 VSCode
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
+              --user-data-dir="$USER_DATA_DIR" \
+              --enable-extensions \
+              --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
+              --extensions-dir="$USER_DATA_DIR/extensions" \
               "$@"
           WRAPPER_EOF
 
-          chmod +x "$REAL_EXEC"
+          chmod +x tscode
+          chmod +x tscode.real
 
-          # 3. 创建 start-vscode.sh 备用启动脚本
           cat > start-vscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -318,90 +480,92 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="1.116.0"
 
           if [ -f "$SCRIPT_DIR/tscode.real" ]; then
               EXEC="$SCRIPT_DIR/tscode.real"
-          elif [ -f "$SCRIPT_DIR/bin/tscode.real" ]; then
-              EXEC="$SCRIPT_DIR/bin/tscode.real"
           else
-              echo "❌ 找不到 VSCode 可执行文件！"
+              echo "VSCode executable not found!"
               exit 1
           fi
 
-          echo "=== VSCode for UOS ==="
+          echo "=== TSCode for UOS ==="
+          USER_DATA_DIR="$SCRIPT_DIR/user-data"
+          mkdir -p "$USER_DATA_DIR"
+
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
-              --user-data-dir="$SCRIPT_DIR/user-data" \
+              --user-data-dir="$USER_DATA_DIR" \
+              --enable-extensions \
+              --builtin-extensions-dir="$SCRIPT_DIR/resources/app/extensions" \
+              --extensions-dir="$USER_DATA_DIR/extensions" \
               "$@"
           START_EOF
 
           chmod +x start-vscode.sh
 
-          # 4. 创建桌面快捷方式
           cat > vscode-uos.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
-          Name=VSCode for UOS
+          Name=TSCode
           Comment=Visual Studio Code for UOS
           Exec=./tscode %F
           Icon=./resources/app/resources/linux/code.png
           Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
+          Categories=Development;IDE
+          MimeType=text/plain;inode/directory
           StartupNotify=true
           StartupWMClass=Code
           EOF
 
-          # 5. 创建使用说明
-          cat > 使用说明.txt << 'EOF'
-          ==========================================
-          VSCode for UOS - 使用说明
-          ==========================================
-
-          🖱️ 双击运行：
-          直接双击 tscode 文件即可启动 VSCode！
-
-          📌 备用启动方式：
-          在终端中执行: ./start-vscode.sh
-
-          📌 桌面快捷方式：
-          将 vscode-uos.desktop 复制到桌面，双击即可
-
-          📌 配置文件：
-          所有配置保存在 ./user-data 目录
-
-          📌 首次运行：
-          如果提示权限，右键 tscode → 属性 → 勾选"允许执行"
-          ==========================================
-          EOF
-
-          echo "✅ 双击运行版本创建完成"
-          echo ""
-          echo "📁 目录内容:"
-          ls -la
+          echo "✅ Startup scripts created"
 
       # ============================================================
-      # 12. 打包
+      # 打包
       # ============================================================
       - name: 📦 Package
         run: |
+          echo "=========================================="
+          echo "📦 Package"
+          echo "=========================================="
+
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
+          # 确保所有文件有正确权限
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
-          chmod +x $BUILD_DIR/*.desktop 2>/dev/null || true
+          chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
+          chmod +x $BUILD_DIR/tscode.real 2>/dev/null || true
 
-          tar -czf "vscode-uos-${VERSION}-双击运行.tar.gz" \
+          echo ""
+          echo "📌 Pre-package validation:"
+          echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
+          echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+
+          # 检查关键文件
+          echo ""
+          echo "📌 Critical files:"
+          for f in "resources/app/package.json" "resources/app/product.json" "resources/app/node_modules"; do
+            if [ -e "$BUILD_DIR/$f" ]; then
+              echo "   ✅ $f"
+            else
+              echo "   ❌ $f"
+            fi
+          done
+
+          tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" \
             --preserve-permissions \
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          echo "✅ 打包完成:"
+          echo ""
+          echo "✅ Package created:"
           ls -lh vscode-uos-*.tar.gz
 
       - name: 📤 Upload artifacts
@@ -415,27 +579,21 @@ jobs:
         if: always()
         run: |
           echo "=========================================="
-          echo "📊 BUILD SUMMARY"
+          echo "BUILD SUMMARY"
           echo "=========================================="
-          echo "🟢 Status: ${{ job.status }}"
-          echo "📦 Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "=========================================="
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "🎉 Build completed!"
+          if [ "${{ job.status }}" = "success" ]; then
             echo ""
-            echo "📥 Download: vscode-uos-*-双击运行.tar.gz"
+            echo "✅ Build completed successfully!"
             echo ""
-            echo "📌 On UOS (no root needed):"
-            echo "  1. 解压到任意目录"
-            echo "  2. 双击 tscode 即可运行！"
+            echo "📁 node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo '✅ OK'; else echo '❌ MISSING'; fi)"
+            echo "📁 Extensions: $(ls -1 $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l)"
             echo ""
-            echo "📁 解压后产物:"
-            echo "  ├── tscode              # 双击运行"
-            echo "  ├── tscode.real         # 真实二进制文件"
-            echo "  ├── start-vscode.sh     # 备用启动脚本"
-            echo "  ├── vscode-uos.desktop  # 桌面快捷方式"
-            echo "  ├── 使用说明.txt        # 使用说明"
-            echo "  ├── user-data/          # 用户配置目录"
-            echo "  └── ..."
+            echo "On UOS:"
+            echo "  1. tar -xzf vscode-uos-*.tar.gz"
+            echo "  2. cd VSCode-linux-x64"
+            echo "  3. ./tscode"
           fi
           echo "=========================================="
