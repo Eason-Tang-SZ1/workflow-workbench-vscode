@@ -221,7 +221,6 @@ jobs:
           echo "📥 Download official VSCode"
           echo "=========================================="
 
-          # 下载与构建版本相同的官方 VSCode
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
           echo "Downloading VSCode $VERSION..."
           wget -q --show-progress "https://update.code.visualstudio.com/${VERSION}/linux-x64/stable" -O /tmp/vscode-official.tar.gz
@@ -298,137 +297,43 @@ jobs:
           # 1. 先复制官方内置扩展（基础功能）
           echo "📌 Copying official built-in extensions..."
           if [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            # 官方扩展列表（基础功能）
-            OFFICIAL_EXTS=(
-              "bat"
-              "clojure"
-              "coffeescript"
-              "configuration-editing"
-              "cpp"
-              "csharp"
-              "css"
-              "css-language-features"
-              "dart"
-              "debug-auto-launch"
-              "debug-server-ready"
-              "diff"
-              "docker"
-              "dotenv"
-              "emmet"
-              "extension-editing"
-              "fsharp"
-              "git"
-              "git-base"
-              "github"
-              "github-authentication"
-              "go"
-              "groovy"
-              "grunt"
-              "gulp"
-              "handlebars"
-              "hlsl"
-              "html"
-              "html-language-features"
-              "ini"
-              "ipynb"
-              "jake"
-              "java"
-              "javascript"
-              "json"
-              "json-language-features"
-              "julia"
-              "latex"
-              "less"
-              "log"
-              "lua"
-              "make"
-              "markdown-basics"
-              "markdown-language-features"
-              "markdown-math"
-              "media-preview"
-              "merge-conflict"
-              "microsoft-authentication"
-              "ms-vscode.js-debug"
-              "ms-vscode.js-debug-companion"
-              "ms-vscode.vscode-js-profile-table"
-              "notebook-renderers"
-              "npm"
-              "objective-c"
-              "perl"
-              "php"
-              "php-language-features"
-              "powershell"
-              "prompt-basics"
-              "pug"
-              "python"
-              "r"
-              "razor"
-              "references-view"
-              "restructuredtext"
-              "ruby"
-              "rust"
-              "scss"
-              "search-result"
-              "shaderlab"
-              "shellscript"
-              "simple-browser"
-              "sql"
-              "swift"
-              "terminal-suggest"
-              "theme-abyss"
-              "theme-defaults"
-              "theme-kimbie-dark"
-              "theme-monokai"
-              "theme-monokai-dimmed"
-              "theme-quietlight"
-              "theme-red"
-              "theme-seti"
-              "theme-solarized-dark"
-              "theme-solarized-light"
-              "theme-tomorrow-night-blue"
-              "tunnel-forwarding"
-              "typescript-basics"
-              "typescript-language-features"
-              "vb"
-              "xml"
-              "yaml"
-            )
-
-            for ext in "${OFFICIAL_EXTS[@]}"; do
-              if [ -d "$OFFICIAL_DIR/resources/app/extensions/$ext" ]; then
-                # 如果自定义扩展存在，跳过（保留自定义版本）
-                if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-                  echo "   ⏭️ $ext (custom version exists, keeping custom)"
+            # 复制所有官方扩展，但跳过 test-tech 开头的（保留自定义版本）
+            for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
+              if [ -d "$ext" ]; then
+                EXT_NAME=$(basename "$ext")
+                # 如果扩展名以 test-tech 开头，跳过（保留自定义版本）
+                if [[ "$EXT_NAME" == test-tech.* ]]; then
+                  echo "   ⏭️ $EXT_NAME (custom version, skipping official)"
                 else
-                  echo "   📥 $ext (from official)"
-                  cp -r "$OFFICIAL_DIR/resources/app/extensions/$ext" "$BUILD_DIR/resources/app/extensions/"
+                  echo "   📥 $EXT_NAME (from official)"
+                  cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
                 fi
               fi
             done
-            echo "   ✅ Official extensions merged"
+            echo "   ✅ Official extensions copied"
           fi
 
-          # 2. 复制你的自定义扩展（优先保留）
+          # 2. 复制你的自定义扩展（强制覆盖官方版本）
           echo ""
           echo "📌 Copying custom extensions from source..."
           if [ -d "./extensions" ]; then
-            # 只复制你的自定义扩展（跳过官方同名的）
             for dir in ./extensions/*; do
               if [ -d "$dir" ]; then
                 EXT_NAME=$(basename "$dir")
-                # 检查是否是你的自定义扩展（通过扩展名或文件内容判断）
-                # 这里假设你的自定义扩展有特定的标识
+                # 检查是否是你的自定义扩展
                 if [ -f "$dir/package.json" ]; then
                   PUBLISHER=$(jq -r '.publisher // ""' "$dir/package.json" 2>/dev/null)
                   # 如果是你的扩展（publisher 为 test-tech 或其他自定义标识），强制覆盖
-                  if [[ "$PUBLISHER" == "test-tech"* ]] || [[ "$EXT_NAME" == "test-tech"* ]] || [[ "$EXT_NAME" == "cweijan"* ]]; then
-                    echo "   📥 $EXT_NAME (custom - overwriting official if exists)"
+                  if [[ "$PUBLISHER" == test-tech* ]] || [[ "$EXT_NAME" == test-tech.* ]] || [[ "$EXT_NAME" == cweijan* ]]; then
+                    echo "   📥 $EXT_NAME (custom - overwriting official)"
                     rm -rf "$BUILD_DIR/resources/app/extensions/$EXT_NAME"
                     cp -r "$dir" "$BUILD_DIR/resources/app/extensions/"
                   elif [ ! -d "$BUILD_DIR/resources/app/extensions/$EXT_NAME" ]; then
                     # 如果是未识别的扩展且官方没有，也复制
                     echo "   📥 $EXT_NAME (new extension)"
                     cp -r "$dir" "$BUILD_DIR/resources/app/extensions/"
+                  else
+                    echo "   ⏭️ $EXT_NAME (official version kept)"
                   fi
                 fi
               fi
@@ -444,11 +349,9 @@ jobs:
               if [ -f "$vsix" ]; then
                 EXT_NAME=$(basename "$vsix" .vsix)
                 echo "   📥 $EXT_NAME (from VSIX)"
-                # 先删除可能存在的同名扩展（保留自定义版本优先）
                 rm -rf "$BUILD_DIR/resources/app/extensions/$EXT_NAME" 2>/dev/null
                 mkdir -p "$BUILD_DIR/resources/app/extensions/$EXT_NAME"
                 unzip -q "$vsix" -d "$BUILD_DIR/resources/app/extensions/$EXT_NAME"
-                # 如果有 extension 子目录，移动内容到上层
                 if [ -d "$BUILD_DIR/resources/app/extensions/$EXT_NAME/extension" ]; then
                   mv "$BUILD_DIR/resources/app/extensions/$EXT_NAME/extension"/* "$BUILD_DIR/resources/app/extensions/$EXT_NAME/"
                   rm -rf "$BUILD_DIR/resources/app/extensions/$EXT_NAME/extension"
@@ -635,7 +538,7 @@ jobs:
           echo "✅ Startup scripts created"
 
       # ============================================================
-      # 16. 打包
+      # 16. 打包（修复语法错误）
       # ============================================================
       - name: 📦 Package
         run: |
@@ -677,11 +580,29 @@ jobs:
 
           echo ""
           echo "📌 Custom extensions (test-tech.*):"
-          for ext in $BUILD_DIR/resources/app/extensions/test-tech.* 2>/dev/null; do
+          # 修复：使用 find 命令并正确处理
+          find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d -name "test-tech.*" 2>/dev/null | while read ext; do
             if [ -d "$ext" ]; then
-              echo "   ✅ $(basename $ext)"
+              echo "   ✅ $(basename "$ext")"
             fi
           done
+
+          # 如果没有找到任何 test-tech 扩展，显示提示
+          if [ -z "$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d -name "test-tech.*" 2>/dev/null | head -1)" ]; then
+            echo "   ℹ️ No test-tech.* extensions found"
+          fi
+
+          echo ""
+          echo "📌 Custom extensions (cweijan.*):"
+          find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d -name "cweijan.*" 2>/dev/null | while read ext; do
+            if [ -d "$ext" ]; then
+              echo "   ✅ $(basename "$ext")"
+            fi
+          done
+
+          if [ -z "$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d -name "cweijan.*" 2>/dev/null | head -1)" ]; then
+            echo "   ℹ️ No cweijan.* extensions found"
+          fi
 
           tar -czf "vscode-uos-${VERSION}-double-click.tar.gz" \
             --preserve-permissions \
@@ -721,9 +642,6 @@ jobs:
             echo "            ├── extensions/  (official + custom merged)"
             echo "            ├── node_modules/ (from official, Debian 10 compatible)"
             echo "            └── out/ (from official)"
-            echo ""
-            echo "Custom extensions preserved:"
-            find $BUILD_DIR/resources/app/extensions -name "test-tech.*" -type d 2>/dev/null || echo "  No custom extensions found"
             echo ""
             echo "On UOS:"
             echo "  1. tar -xzf vscode-uos-*.tar.gz"
