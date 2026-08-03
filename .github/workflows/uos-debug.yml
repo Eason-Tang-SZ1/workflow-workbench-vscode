@@ -223,38 +223,219 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
 
-          # 检查 node_modules 是否存在
           if [ ! -d "./node_modules" ]; then
             echo "❌ node_modules not found in root!"
             echo "Installing node_modules..."
             npm install --legacy-peer-deps
           fi
 
-          # 复制 node_modules 到 resources/app
           echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
           rm -rf "$BUILD_DIR/resources/app/node_modules"
           cp -r ./node_modules "$BUILD_DIR/resources/app/"
 
+          echo "✅ node_modules copied"
+
+      # ============================================================
+      # 🔥 关键修复：用官方 1.116.0 版本的 node-pty 覆盖
+      # ============================================================
+      - name: 🔥 Replace node-pty with official 1.116.0 version
+        run: |
+          echo "=========================================="
+          echo "🔥 Replacing node-pty with official 1.116.0 version"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          echo "📌 Target version: $VERSION"
+
+          # 从官方下载指定版本的 VSCode
+          echo "📌 Downloading official VSCode $VERSION for Linux x64..."
+          wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
+
+          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
+            echo "⚠️ Failed to download version $VERSION, trying latest..."
+            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+          fi
+
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+
+          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          if [ -z "$OFFICIAL_DIR" ]; then
+            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          fi
+
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/node_modules/node-pty" ]; then
+            echo "❌ Could not find official node-pty!"
+            echo "   OFFICIAL_DIR: $OFFICIAL_DIR"
+            echo "   Contents of /tmp:"
+            ls -la /tmp/
+            exit 1
+          fi
+
+          echo "✅ Official VSCode found at: $OFFICIAL_DIR"
+
+          # 显示官方版本信息
+          echo ""
+          echo "📌 Official version info:"
+          if [ -f "$OFFICIAL_DIR/resources/app/product.json" ]; then
+            cat "$OFFICIAL_DIR/resources/app/product.json" | grep -E '"version"|"date"' || echo "   ⚠️ Version info not found"
+          fi
+
+          # 显示官方 node-pty 信息
+          echo ""
+          echo "📌 Official node-pty info:"
+          ls -la "$OFFICIAL_DIR/resources/app/node_modules/node-pty/"
+
+          if [ -f "$OFFICIAL_DIR/resources/app/node_modules/node-pty/package.json" ]; then
+            echo "   node-pty version:"
+            cat "$OFFICIAL_DIR/resources/app/node_modules/node-pty/package.json" | grep '"version"' || echo "   ⚠️ Version not found"
+          fi
+
+          if [ -f "$OFFICIAL_DIR/resources/app/node_modules/node-pty/build/Release/pty.node" ]; then
+            echo "   ✅ pty.node exists"
+            file "$OFFICIAL_DIR/resources/app/node_modules/node-pty/build/Release/pty.node"
+            ls -la "$OFFICIAL_DIR/resources/app/node_modules/node-pty/build/Release/pty.node"
+          else
+            echo "   ⚠️ pty.node not found in official build"
+          fi
+
+          # 备份当前 node-pty
+          echo ""
+          echo "📌 Backing up current node-pty..."
+          if [ -d "$BUILD_DIR/resources/app/node_modules/node-pty" ]; then
+            mv "$BUILD_DIR/resources/app/node_modules/node-pty" \
+               "$BUILD_DIR/resources/app/node_modules/node-pty.bak"
+            echo "   ✅ Backed up to node-pty.bak"
+          fi
+
+          # 复制官方 node-pty
+          echo ""
+          echo "📌 Copying official node-pty..."
+          rm -rf "$BUILD_DIR/resources/app/node_modules/node-pty"
+          cp -r "$OFFICIAL_DIR/resources/app/node_modules/node-pty" \
+                "$BUILD_DIR/resources/app/node_modules/"
+          echo "   ✅ node-pty replaced with official $VERSION version"
+
           # 验证复制结果
           echo ""
-          echo "📌 Verifying node_modules:"
-          for module in @vscode/spdlog @vscode/sqlite3 native-keymap node-pty; do
-            if [ -d "$BUILD_DIR/resources/app/node_modules/$module" ]; then
-              echo "   ✅ $module"
+          echo "📌 Verifying replaced node-pty:"
+          if [ -d "$BUILD_DIR/resources/app/node_modules/node-pty" ]; then
+            echo "   ✅ node-pty directory exists"
+
+            if [ -f "$BUILD_DIR/resources/app/node_modules/node-pty/package.json" ]; then
+              echo "   node-pty version after replacement:"
+              cat "$BUILD_DIR/resources/app/node_modules/node-pty/package.json" | grep '"version"' || echo "   ⚠️ Version not found"
+            fi
+
+            if [ -f "$BUILD_DIR/resources/app/node_modules/node-pty/build/Release/pty.node" ]; then
+              echo "   ✅ pty.node exists"
+              file "$BUILD_DIR/resources/app/node_modules/node-pty/build/Release/pty.node"
+              ls -la "$BUILD_DIR/resources/app/node_modules/node-pty/build/Release/pty.node"
+
+              # 检查文件大小以确保完整
+              PTY_SIZE=$(stat -c%s "$BUILD_DIR/resources/app/node_modules/node-pty/build/Release/pty.node" 2>/dev/null || stat -f%z "$BUILD_DIR/resources/app/node_modules/node-pty/build/Release/pty.node" 2>/dev/null)
+              if [ -n "$PTY_SIZE" ] && [ "$PTY_SIZE" -gt 100000 ]; then
+                echo "   ✅ pty.node size: $PTY_SIZE bytes (valid)"
+              else
+                echo "   ⚠️ pty.node size seems small: $PTY_SIZE bytes"
+              fi
             else
-              echo "   ⚠️ $module (missing)"
+              echo "   ❌ pty.node missing after replacement!"
+              exit 1
+            fi
+          else
+            echo "   ❌ node-pty not found after copy!"
+            exit 1
+          fi
+
+          # 清理临时文件
+          rm -rf /tmp/official.tar.gz
+          rm -rf "$OFFICIAL_DIR"
+          echo ""
+          echo "✅ node-pty replacement completed for version $VERSION"
+
+      # ============================================================
+      # 🔥 替换其他关键原生模块（使用官方 1.116.0 版本）
+      # ============================================================
+      - name: 🔥 Replace other native modules with official 1.116.0 version
+        run: |
+          echo "=========================================="
+          echo "🔥 Replacing other native modules with official 1.116.0 version"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          # 下载官方 VSCode（如果还没有下载）
+          if [ ! -d "/tmp/VSCode-linux-x64" ]; then
+            echo "📌 Downloading official VSCode $VERSION for Linux x64..."
+            wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
+
+            if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
+              echo "⚠️ Failed to download version $VERSION, trying latest..."
+              wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+            fi
+
+            tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          fi
+
+          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          if [ -z "$OFFICIAL_DIR" ]; then
+            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          fi
+
+          # 需要替换的原生模块列表
+          NATIVE_MODULES=(
+            "@vscode/spdlog"
+            "@vscode/sqlite3"
+            "native-keymap"
+            "vscode-ripgrep"
+            "vscode-textmate"
+          )
+
+          echo ""
+          echo "📌 Replacing native modules from official $VERSION build..."
+
+          for module in "${NATIVE_MODULES[@]}"; do
+            OFFICIAL_MODULE="$OFFICIAL_DIR/resources/app/node_modules/$module"
+            TARGET_MODULE="$BUILD_DIR/resources/app/node_modules/$module"
+
+            if [ -d "$OFFICIAL_MODULE" ]; then
+              echo ""
+              echo "📌 Replacing $module..."
+
+              # 备份
+              if [ -d "$TARGET_MODULE" ]; then
+                rm -rf "$TARGET_MODULE.bak"
+                mv "$TARGET_MODULE" "$TARGET_MODULE.bak"
+                echo "   ✅ Backed up to ${module}.bak"
+              fi
+
+              # 复制官方版本
+              cp -r "$OFFICIAL_MODULE" "$TARGET_MODULE"
+              echo "   ✅ $module replaced"
+
+              # 检查 .node 文件
+              NODE_FILES=$(find "$TARGET_MODULE" -name "*.node" 2>/dev/null)
+              if [ -n "$NODE_FILES" ]; then
+                echo "   📎 Native files found:"
+                echo "$NODE_FILES" | while read f; do
+                  SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
+                  echo "      $(basename $f) ($SIZE bytes)"
+                done
+              else
+                echo "   ℹ️ No .node files found in this module"
+              fi
+            else
+              echo "   ⚠️ $module not found in official build"
             fi
           done
 
-          # 检查关键原生模块
+          # 清理
+          rm -rf /tmp/official.tar.gz
           echo ""
-          echo "📌 Checking native modules:"
-          find "$BUILD_DIR/resources/app/node_modules" -name "*.node" 2>/dev/null | head -10 | while read f; do
-            echo "   ✅ $(basename $f)"
-          done
-
-          echo ""
-          echo "   Total size: $(du -sh $BUILD_DIR/resources/app/node_modules 2>/dev/null | cut -f1)"
+          echo "✅ Native modules replacement completed for version $VERSION"
 
       # ============================================================
       # 复制 extensions 并编译
@@ -268,9 +449,7 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # ============================================
           # 1. 从源码复制 extensions
-          # ============================================
           if [ -d "./extensions" ]; then
             echo "📌 Copying extensions from source..."
             for dir in ./extensions/*; do
@@ -283,9 +462,7 @@ jobs:
             echo "   ✅ extensions copied"
           fi
 
-          # ============================================
           # 2. 复制预构建扩展 (VSIX)
-          # ============================================
           if [ -d "./prebuilt-extensions" ]; then
             echo ""
             echo "📌 Installing prebuilt extensions..."
@@ -307,9 +484,7 @@ jobs:
             echo "   ✅ prebuilt extensions installed"
           fi
 
-          # ============================================
           # 3. 从官方下载 Git 扩展
-          # ============================================
           echo ""
           echo "📌 Downloading official VSCode for Git extensions..."
           wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
@@ -334,9 +509,7 @@ jobs:
             done
           fi
 
-          # ============================================
           # 4. 清理临时文件
-          # ============================================
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
           echo ""
@@ -424,7 +597,6 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -436,7 +608,6 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # 设置 VSCode 环境
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="1.116.0"
 
@@ -450,7 +621,6 @@ jobs:
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
 
-          # 启动 VSCode
           exec "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -537,7 +707,6 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 确保所有文件有正确权限
           chmod +x $BUILD_DIR/tscode 2>/dev/null || true
           chmod +x $BUILD_DIR/start-vscode.sh 2>/dev/null || true
           chmod +x $BUILD_DIR/chrome-sandbox 2>/dev/null || true
@@ -548,7 +717,6 @@ jobs:
           echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
           echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
 
-          # 检查关键文件
           echo ""
           echo "📌 Critical files:"
           for f in "resources/app/package.json" "resources/app/product.json" "resources/app/node_modules"; do
