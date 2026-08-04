@@ -1,4 +1,4 @@
-name: Build Custom VSCode for UOS (debug unzip uos-terminnal.yml)
+name: Build Custom VSCode for UOS (unzip uos-terminnal.yml)
 
 on:
   workflow_dispatch:
@@ -236,94 +236,6 @@ jobs:
           echo "✅ node_modules copied"
 
       # ============================================================
-      # 🔥 激进清理：删除所有非必需模块
-      # ============================================================
-      - name: 🔥 Aggressive node_modules pruning
-        run: |
-          echo "=========================================="
-          echo "🔥 Aggressive node_modules pruning"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-
-          echo "📌 Size before aggressive pruning:"
-          du -sh "$BUILD_DIR/resources/app/node_modules"
-
-          cd "$BUILD_DIR/resources/app"
-
-          # 定义必需保留的模块（运行时真正需要的）
-          ESSENTIAL_MODULES=(
-            "node-pty"
-            "@vscode/spdlog"
-            "@vscode/sqlite3"
-            "native-keymap"
-            "vscode-ripgrep"
-            "vscode-textmate"
-            "vscode-oniguruma"
-            "vscode-nls"
-            "vscode-languageclient"
-            "vscode-languageserver"
-            "vscode-languageserver-protocol"
-            "vscode-languageserver-textdocument"
-            "vscode-jsonrpc"
-            "vscode-uri"
-            "applicationinsights"
-            "jsonc-parser"
-            "semver"
-            "minimist"
-          )
-
-          # 备份必需模块
-          echo ""
-          echo "📌 Backing up essential modules..."
-          mkdir -p /tmp/essential_modules
-          for module in "${ESSENTIAL_MODULES[@]}"; do
-            if [ -d "node_modules/$module" ]; then
-              echo "   ✅ Keeping: $module"
-              cp -r "node_modules/$module" "/tmp/essential_modules/" 2>/dev/null || true
-            fi
-          done
-
-          # 保留 @vscode 命名空间下的所有模块
-          if [ -d "node_modules/@vscode" ]; then
-            echo "   ✅ Keeping: @vscode namespace"
-            mkdir -p "/tmp/essential_modules/@vscode"
-            cp -r "node_modules/@vscode" "/tmp/essential_modules/" 2>/dev/null || true
-          fi
-
-          # 删除整个 node_modules
-          echo ""
-          echo "📌 Removing node_modules..."
-          rm -rf node_modules
-
-          # 恢复必需模块
-          echo ""
-          echo "📌 Restoring essential modules..."
-          mkdir -p node_modules
-          cp -r /tmp/essential_modules/* node_modules/ 2>/dev/null || true
-
-          # 清理每个保留模块中的冗余文件
-          echo ""
-          echo "📌 Cleaning essential modules..."
-          find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" -o -name "example" -o -name "examples" -o -name "docs" -o -name ".git" \) -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-
-          # 清理空目录
-          find node_modules -type d -empty -delete 2>/dev/null || true
-
-          rm -rf /tmp/essential_modules
-
-          echo ""
-          echo "📌 Size after aggressive pruning:"
-          du -sh node_modules
-          cd -
-
-      # ============================================================
       # 🔥 关键修复：用官方 1.116.0 版本的 node-pty 覆盖
       # ============================================================
       - name: 🔥 Replace node-pty with official 1.116.0 version
@@ -512,22 +424,94 @@ jobs:
           echo "✅ Native modules replacement completed for version $VERSION"
 
       # ============================================================
-      # 🧹 删除备份文件
+      # 🧹 清理与瘦身（移除开发依赖和冗余文件）
       # ============================================================
-      - name: 🧹 Remove backup files
+      - name: 🧹 Strip down build for release
         run: |
           echo "=========================================="
-          echo "🧹 Removing backup files"
+          echo "🧹 Stripping down build for release"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
+          cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Removing .bak directories and files..."
-          find "$BUILD_DIR" -name "*.bak" -type d -exec rm -rf {} + 2>/dev/null || true
-          find "$BUILD_DIR" -name "*.bak" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR" -name "*~" -type f -delete 2>/dev/null || true
+          echo "📌 Current size before cleanup:"
+          du -sh .
 
-          echo "✅ Backup files removed"
+          # 1. 删除所有开发依赖 (devDependencies)
+          echo ""
+          echo "📌 Removing devDependencies..."
+          if command -v json &> /dev/null; then
+            npx json -I -f package.json -e 'this.devDependencies={}'
+          else
+            npm install -g json
+            npx json -I -f package.json -e 'this.devDependencies={}'
+          fi
+
+          # 2. 删除 node_modules 中不必要的文件
+          echo ""
+          echo "📌 Cleaning node_modules..."
+
+          # 删除所有类型定义文件 (.d.ts)
+          echo "   Removing .d.ts files..."
+          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+
+          # 删除所有 Markdown 文档
+          echo "   Removing .md files..."
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+
+          # 删除所有许可证文件
+          echo "   Removing LICENSE files..."
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGES*" -type f -delete 2>/dev/null || true
+
+          # 删除所有测试目录
+          echo "   Removing test directories..."
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "test-data" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "testdata" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除所有示例目录
+          echo "   Removing example directories..."
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除所有 .ts 源文件（保留 .js 和 .node）
+          echo "   Removing .ts source files..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+
+          # 删除 .map 文件
+          echo "   Removing .map files..."
+          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+
+          # 删除 .git 目录
+          echo "   Removing .git directories..."
+          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+
+          # 3. 删除构建过程中产生的临时目录
+          echo ""
+          echo "📌 Removing build temp directories..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
+
+          # 4. 删除部分大型不必要的模块（如果存在）
+          echo ""
+          echo "📌 Removing unnecessary large modules..."
+          rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
+
+          # 5. 可选：对 node_modules 进行去重
+          echo ""
+          echo "📌 Running node-prune for additional optimization..."
+          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune not available, skipping"
+
+          echo ""
+          echo "📌 Final size after cleanup:"
+          du -sh .
+          cd -
 
       # ============================================================
       # 复制 extensions 并编译
@@ -601,18 +585,7 @@ jobs:
             done
           fi
 
-          # 4. 清理 extensions 中的冗余文件
-          echo ""
-          echo "📌 Cleaning extensions..."
-          find "$BUILD_DIR/resources/app/extensions" -name "*.d.ts" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -name "*.md" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -name "*.map" -type f -delete 2>/dev/null || true
-          find "$BUILD_DIR/resources/app/extensions" -type d \( -name "test" -o -name "tests" -o -name "__tests__" -o -name "example" -o -name "examples" -o -name "docs" \) -exec rm -rf {} + 2>/dev/null || true
-
-          # 5. 清理临时文件
+          # 4. 清理临时文件
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
           echo ""
