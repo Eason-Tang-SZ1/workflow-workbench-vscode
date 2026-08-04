@@ -424,7 +424,7 @@ jobs:
           echo "✅ Native modules replacement completed for version $VERSION"
 
       # ============================================================
-      # 🧹 清理与瘦身（移除开发依赖和冗余文件）
+      # 🧹 清理与瘦身（彻底移除开发依赖和冗余文件）
       # ============================================================
       - name: 🧹 Strip down build for release
         run: |
@@ -433,85 +433,93 @@ jobs:
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./VSCode-linux-x64}"
-          cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Current size before cleanup:"
-          du -sh .
+          echo "📌 Before cleanup:"
+          du -sh "$BUILD_DIR"
+          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "node_modules not found"
+
+          cd "$BUILD_DIR/resources/app"
 
           # 1. 删除所有开发依赖 (devDependencies)
           echo ""
           echo "📌 Removing devDependencies..."
-          if command -v json &> /dev/null; then
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          else
-            npm install -g json
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          fi
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || echo "   ⚠️ json tool not available"
 
-          # 2. 删除 node_modules 中不必要的文件
+          # 2. 彻底清理 node_modules
           echo ""
-          echo "📌 Cleaning node_modules..."
+          echo "📌 Aggressively cleaning node_modules..."
 
-          # 删除所有类型定义文件 (.d.ts)
-          echo "   Removing .d.ts files..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+          # 删除所有类型定义文件
+          echo "   Removing TypeScript definitions..."
+          find node_modules -type f -name "*.d.ts" -delete 2>/dev/null || true
 
-          # 删除所有 Markdown 文档
-          echo "   Removing .md files..."
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          # 删除所有源文件 (ts, coffee, etc.)
+          echo "   Removing source files..."
+          find node_modules -type f \( -name "*.ts" -o -name "*.coffee" -o -name "*.scss" -o -name "*.less" \) ! -path "*/node_modules/*" -delete 2>/dev/null || true
 
-          # 删除所有许可证文件
-          echo "   Removing LICENSE files..."
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGES*" -type f -delete 2>/dev/null || true
+          # 删除文档和许可证
+          echo "   Removing documentation..."
+          find node_modules -type f \( -name "*.md" -o -name "*.markdown" -o -name "LICENSE*" -o -name "CHANGELOG*" -o -name "CHANGES*" -o -name "AUTHORS*" \) -delete 2>/dev/null || true
 
-          # 删除所有测试目录
-          echo "   Removing test directories..."
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "test-data" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "testdata" -exec rm -rf {} + 2>/dev/null || true
+          # 删除测试目录
+          echo "   Removing tests..."
+          find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" -o -name "test-data" -o -name "testdata" -o -name "spec" -o -name "specs" \) -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除所有示例目录
-          echo "   Removing example directories..."
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          # 删除示例目录
+          echo "   Removing examples..."
+          find node_modules -type d \( -name "example" -o -name "examples" -o -name "demo" -o -name "demos" \) -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除所有 .ts 源文件（保留 .js 和 .node）
-          echo "   Removing .ts source files..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          # 删除二进制文件（非 .node 文件）
+          echo "   Removing unnecessary binaries..."
+          find node_modules -type f -name "*.exe" -delete 2>/dev/null || true
+          find node_modules -type f -name "*.dll" -delete 2>/dev/null || true
+          find node_modules -type f -name "*.so" ! -name "*.node" -delete 2>/dev/null || true
+          find node_modules -type f -name "*.dylib" ! -name "*.node" -delete 2>/dev/null || true
 
           # 删除 .map 文件
-          echo "   Removing .map files..."
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+          echo "   Removing source maps..."
+          find node_modules -type f -name "*.map" -delete 2>/dev/null || true
 
           # 删除 .git 目录
           echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 3. 删除构建过程中产生的临时目录
-          echo ""
-          echo "📌 Removing build temp directories..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
+          # 删除 .github 目录
+          echo "   Removing .github directories..."
+          find node_modules -type d -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
-          # 4. 删除部分大型不必要的模块（如果存在）
+          # 删除 .vscode 目录
+          echo "   Removing .vscode directories..."
+          find node_modules -type d -name ".vscode" -exec rm -rf {} + 2>/dev/null || true
+
+          # 3. 删除特定的大型无用模块
           echo ""
           echo "📌 Removing unnecessary large modules..."
           rm -rf node_modules/@types 2>/dev/null || true
           rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/eslint 2>/dev/null || true
+          rm -rf node_modules/*/node_modules/eslint 2>/dev/null || true
+          rm -rf node_modules/prettier 2>/dev/null || true
+          rm -rf node_modules/*/node_modules/prettier 2>/dev/null || true
 
-          # 5. 可选：对 node_modules 进行去重
+          # 4. 使用 node-prune 进行额外优化
           echo ""
-          echo "📌 Running node-prune for additional optimization..."
-          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune not available, skipping"
+          echo "📌 Running node-prune..."
+          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune not available"
+
+          # 5. 递归删除空目录
+          echo ""
+          echo "📌 Removing empty directories..."
+          find node_modules -type d -empty -delete 2>/dev/null || true
 
           echo ""
-          echo "📌 Final size after cleanup:"
+          echo "📌 After cleanup:"
           du -sh .
           cd -
+
+          echo ""
+          echo "📌 Total after cleanup:"
+          du -sh "$BUILD_DIR"
 
       # ============================================================
       # 复制 extensions 并编译
