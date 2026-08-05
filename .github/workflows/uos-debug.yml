@@ -275,9 +275,6 @@ jobs:
           echo "📌 Replacing native modules from official build..."
 
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            # 复制整个 node_modules（但保留我们需要的）
-            echo "   Copying official node_modules..."
-
             # 备份当前的 node_modules
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
               mv "$BUILD_DIR/resources/app/node_modules" \
@@ -434,28 +431,53 @@ jobs:
           [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
           [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
 
-          # 找到可执行文件
+          # 查找可执行文件
           REAL_EXEC=""
+
+          # 先检查常见的可执行文件名
           for name in code code-oss; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
+              echo "Found executable: $REAL_EXEC"
               break
             fi
           done
 
+          # 如果没找到，查找所有可执行文件（排除 .so, .sh, chrome-*, 以及已存在的 tscode）
           if [ -z "$REAL_EXEC" ]; then
-            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
+            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" ! -name "tscode" 2>/dev/null | head -1)
+            if [ -n "$REAL_EXEC" ]; then
+              REAL_EXEC=$(basename "$REAL_EXEC")
+              echo "Found executable: $REAL_EXEC"
+            fi
           fi
 
+          # 如果没找到任何可执行文件，检查是否已经有 tscode
           if [ -z "$REAL_EXEC" ]; then
-            echo "❌ No executable found!"
-            exit 1
+            if [ -f "./tscode" ]; then
+              REAL_EXEC="tscode"
+              echo "✅ Using existing tscode"
+            else
+              echo "❌ No executable found!"
+              echo "Directory contents:"
+              ls -la
+              exit 1
+            fi
           fi
 
-          echo "✅ Found executable: $REAL_EXEC"
-          mv "$REAL_EXEC" "tscode"
+          echo "✅ Final executable: $REAL_EXEC"
 
-          # 创建启动脚本（直接使用可执行文件）
+          # 如果不是 tscode，重命名为 tscode
+          if [ "$REAL_EXEC" != "tscode" ] && [ -f "./$REAL_EXEC" ]; then
+            echo "Renaming $REAL_EXEC to tscode"
+            mv "$REAL_EXEC" "tscode"
+          fi
+
+          # 确保可执行权限
+          chmod +x tscode 2>/dev/null || true
+          chmod +x chrome-sandbox 2>/dev/null || true
+
+          # 创建启动脚本
           cat > start-tscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -470,7 +492,7 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
-          export VSCODE_APP_VERSION="1.116.0"
+          export VSCODE_APP_VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           if [ -f "$SCRIPT_DIR/tscode" ]; then
               EXEC="$SCRIPT_DIR/tscode"
@@ -492,8 +514,6 @@ jobs:
           START_EOF
 
           chmod +x start-tscode.sh
-          chmod +x tscode
-          chmod +x chrome-sandbox 2>/dev/null || true
 
           # 创建桌面文件
           cat > tscode.desktop << 'EOF'
@@ -512,6 +532,10 @@ jobs:
           EOF
 
           echo "✅ Launcher and config created"
+
+          echo ""
+          echo "📁 Final directory contents:"
+          ls -la
 
       - name: 📦 Package (official style)
         run: |
