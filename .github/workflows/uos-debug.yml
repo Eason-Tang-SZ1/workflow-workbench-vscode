@@ -239,35 +239,29 @@ jobs:
 
           echo "✅ node_modules copied"
 
-      - name: 🔥 Replace native modules with official version (optimized)
+      - name: 🔥 Replace only critical native modules
         run: |
           echo "=========================================="
-          echo "🔥 Replacing native modules with official version (optimized)"
+          echo "🔥 Replacing critical native modules only"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 需要从官方版本获取的原生模块列表
-          NATIVE_MODULES=(
+          # 只替换最关键的模块（减少体积）
+          CRITICAL_MODULES=(
             "node-pty"
-            "@vscode/spdlog"
-            "@vscode/sqlite3"
             "native-keymap"
-            "vscode-ripgrep"
-            "vscode-textmate"
-            "vscode-oniguruma"
           )
 
-          echo "📌 Downloading official VSCode $VERSION for Linux x64..."
+          echo "📌 Downloading official VSCode $VERSION..."
           wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
 
           if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
-            echo "⚠️ Failed to download version $VERSION, trying latest..."
+            echo "⚠️ Failed, trying latest..."
             wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
           fi
 
-          # 只提取 node_modules 目录（减少解压时间）
           mkdir -p /tmp/official_extract
           tar -xzf /tmp/official.tar.gz -C /tmp/official_extract \
             "VSCode-linux-x64/resources/app/node_modules" 2>/dev/null
@@ -275,7 +269,6 @@ jobs:
           OFFICIAL_DIR="/tmp/official_extract/VSCode-linux-x64"
 
           if [ ! -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            echo "⚠️ Selective extraction failed, trying full extraction..."
             tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
             OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
           fi
@@ -285,171 +278,149 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Official VSCode found at: $OFFICIAL_DIR"
+          echo "✅ Official VSCode found"
 
-          # 替换原生模块
-          echo ""
-          echo "📌 Replacing necessary native modules..."
-
-          for module in "${NATIVE_MODULES[@]}"; do
+          for module in "${CRITICAL_MODULES[@]}"; do
             OFFICIAL_MODULE="$OFFICIAL_DIR/resources/app/node_modules/$module"
             TARGET_MODULE="$BUILD_DIR/resources/app/node_modules/$module"
 
             if [ -d "$OFFICIAL_MODULE" ]; then
               echo ""
               echo "📌 Replacing $module..."
-
-              # 如果目标存在，删除
-              if [ -d "$TARGET_MODULE" ]; then
-                rm -rf "$TARGET_MODULE"
-              fi
-
-              # 复制官方版本
+              rm -rf "$TARGET_MODULE"
               cp -r "$OFFICIAL_MODULE" "$TARGET_MODULE"
-
-              # 清理模块中的冗余文件
-              echo "   Cleaning $module..."
-              find "$TARGET_MODULE" -name "*.d.ts" -type f -delete 2>/dev/null || true
-              find "$TARGET_MODULE" -name "*.md" -type f -delete 2>/dev/null || true
-              find "$TARGET_MODULE" -name "LICENSE*" -type f -delete 2>/dev/null || true
-              find "$TARGET_MODULE" -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-              find "$TARGET_MODULE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-              find "$TARGET_MODULE" -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-              find "$TARGET_MODULE" -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-              find "$TARGET_MODULE" -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-
               echo "   ✅ $module replaced"
-            else
-              echo "   ⚠️ $module not found in official build"
             fi
           done
 
-          # 清理临时文件
-          rm -rf /tmp/official.tar.gz
-          rm -rf /tmp/official_extract
-          rm -rf /tmp/VSCode-linux-x64
+          rm -rf /tmp/official.tar.gz /tmp/official_extract /tmp/VSCode-linux-x64
+          echo "✅ Critical modules replaced"
 
-          echo ""
-          echo "✅ Native modules replacement completed"
-
-          # 显示体积信息
-          echo ""
-          echo "📊 Build size after native module replacement:"
-          du -sh "$BUILD_DIR" 2>/dev/null || echo "   Build dir not found"
-          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "   node_modules not found"
-
-      - name: 🧹 Strip down build for release
+      - name: 🧹 Aggressive cleanup (reduce size significantly)
         run: |
           echo "=========================================="
-          echo "🧹 Stripping down build for release"
+          echo "🧹 AGGRESSIVE CLEANUP"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Current size before cleanup:"
+          echo "📌 Before cleanup:"
           du -sh .
-          du -sh node_modules
 
-          # 1. 删除所有开发依赖
+          # 1. 删除所有 devDependencies
           echo ""
           echo "📌 Removing devDependencies..."
-          if command -v json &> /dev/null; then
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          else
-            npm install -g json
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          fi
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # 2. 清理 node_modules
+          # 2. 删除大型不必要的包
           echo ""
-          echo "📌 Cleaning node_modules..."
+          echo "📌 Removing large unnecessary packages..."
+          rm -rf node_modules/electron 2>/dev/null || true
+          rm -rf node_modules/playwright 2>/dev/null || true
+          rm -rf node_modules/puppeteer 2>/dev/null || true
+          rm -rf node_modules/webpack 2>/dev/null || true
+          rm -rf node_modules/rollup 2>/dev/null || true
+          rm -rf node_modules/vite 2>/dev/null || true
+          rm -rf node_modules/esbuild 2>/dev/null || true
+          rm -rf node_modules/typescript 2>/dev/null || true
+          rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/@babel 2>/dev/null || true
+          rm -rf node_modules/@swc 2>/dev/null || true
+          rm -rf node_modules/prettier 2>/dev/null || true
+          rm -rf node_modules/eslint 2>/dev/null || true
+          rm -rf node_modules/stylelint 2>/dev/null || true
+          rm -rf node_modules/mocha 2>/dev/null || true
+          rm -rf node_modules/chai 2>/dev/null || true
+          rm -rf node_modules/jest 2>/dev/null || true
+          rm -rf node_modules/nyc 2>/dev/null || true
+          rm -rf node_modules/istanbul 2>/dev/null || true
+          rm -rf node_modules/benchmark 2>/dev/null || true
+          rm -rf node_modules/grunt 2>/dev/null || true
+          rm -rf node_modules/gulp 2>/dev/null || true
+          rm -rf node_modules/webdriverio 2>/dev/null || true
+          rm -rf node_modules/selenium-webdriver 2>/dev/null || true
 
-          # 删除类型定义文件
-          echo "   Removing .d.ts files..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+          # 3. 删除所有测试和示例
+          echo ""
+          echo "📌 Removing tests and examples..."
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "test-*" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除文档
-          echo "   Removing documentation files..."
+          # 4. 删除所有文档
+          echo ""
+          echo "📌 Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.txt" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGES*" -type f -delete 2>/dev/null || true
           find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CONTRIBUTING*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CODE_OF_CONDUCT*" -type f -delete 2>/dev/null || true
 
-          # 删除测试目录
-          echo "   Removing test directories..."
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "test-data" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "testdata" -exec rm -rf {} + 2>/dev/null || true
+          # 5. 删除类型定义
+          echo ""
+          echo "📌 Removing type definitions..."
+          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.ts" -type f ! -name "*.js" -delete 2>/dev/null || true
 
-          # 删除示例目录
-          echo "   Removing example directories..."
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除 .ts 源文件（保留 .js 和 .node）
-          echo "   Removing .ts source files..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          # 删除 .map 文件
-          echo "   Removing .map files..."
+          # 6. 删除源码映射
+          echo ""
+          echo "📌 Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
 
-          # 删除 .git 目录
-          echo "   Removing .git directories..."
+          # 7. 删除 .git 和 .github
+          echo ""
+          echo "📌 Removing git files..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除 .github 目录
-          echo "   Removing .github directories..."
           find node_modules -type d -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除构建临时目录
+          # 8. 使用 node-prune
           echo ""
-          echo "📌 Removing build temp directories..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
+          echo "📌 Running node-prune..."
+          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune skipped"
 
-          # 删除不必要的顶层模块
+          # 9. 删除空的 node_modules 目录
           echo ""
-          echo "📌 Removing unnecessary large modules..."
-          rm -rf node_modules/@types 2>/dev/null || true
-          rm -rf node_modules/electron 2>/dev/null || true
-          rm -rf node_modules/playwright 2>/dev/null || true
-          rm -rf node_modules/puppeteer 2>/dev/null || true
-          rm -rf node_modules/selenium-* 2>/dev/null || true
-          rm -rf node_modules/webpack 2>/dev/null || true
-          rm -rf node_modules/rollup 2>/dev/null || true
-          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
-
-          # 使用 node-prune 进一步优化
-          echo ""
-          echo "📌 Running node-prune for additional optimization..."
-          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune not available, skipping"
+          echo "📌 Removing empty directories..."
+          find node_modules -type d -empty -delete 2>/dev/null || true
 
           echo ""
-          echo "📌 Final size after cleanup:"
+          echo "📌 After cleanup:"
           du -sh .
-          du -sh node_modules
           cd -
 
-      - name: 📂 Prepare extensions
+      - name: 📂 Prepare extensions (minimal)
         run: |
           echo "=========================================="
-          echo "📂 Preparing extensions"
+          echo "📂 Preparing extensions (minimal)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 下载官方VSCode获取扩展
-          echo "📌 Downloading official VSCode for extensions..."
+          # 只保留核心扩展
+          CORE_EXTS=(
+            "git"
+            "git-base"
+            "github"
+            "github-authentication"
+            "markdown-language-features"
+            "json-language-features"
+            "typescript-language-features"
+          )
+
+          echo "📌 Downloading official VSCode..."
           wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
 
           if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
-            echo "⚠️ Failed to download version $VERSION, trying latest..."
             wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
           fi
 
@@ -457,93 +428,64 @@ jobs:
           OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "✅ Found official extensions directory"
-
-            # 创建扩展目录
             mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-            # 复制官方所有扩展
-            echo "📌 Copying official extensions..."
-            cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
+            echo "📌 Copying core extensions only..."
+            for ext in "${CORE_EXTS[@]}"; do
+              if [ -d "$OFFICIAL_DIR/resources/app/extensions/$ext" ]; then
+                echo "   Copying $ext..."
+                cp -r "$OFFICIAL_DIR/resources/app/extensions/$ext" \
+                      "$BUILD_DIR/resources/app/extensions/"
+              fi
+            done
 
-            echo "✅ Extensions copied from official build"
-
-            # 显示扩展数量
-            echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
-          else
-            echo "⚠️ Could not find official extensions, using source extensions"
-
-            # 使用源码扩展
-            if [ -d "./extensions" ]; then
-              mkdir -p "$BUILD_DIR/resources/app/extensions"
-              cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/"
-              echo "✅ Extensions copied from source"
-            fi
+            echo "✅ Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
           fi
 
-          # 清理临时文件
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
-      - name: 📄 Copy config files and create launcher
+      - name: 📄 Create launcher
         run: |
           echo "=========================================="
-          echo "📄 Creating launcher and config"
+          echo "📄 Creating launcher"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           cd "$BUILD_DIR"
 
           # 复制配置文件
-          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
-          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . 2>/dev/null || true
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . 2>/dev/null || true
 
           # 查找可执行文件
           REAL_EXEC=""
-
-          # 先检查常见的可执行文件名
           for name in code code-oss; do
             if [ -f "./$name" ]; then
               REAL_EXEC="$name"
-              echo "Found executable: $REAL_EXEC"
               break
             fi
           done
 
-          # 如果没找到，查找所有可执行文件（排除 .so, .sh, chrome-*, 以及已存在的 tscode）
           if [ -z "$REAL_EXEC" ]; then
             REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" ! -name "tscode" 2>/dev/null | head -1)
-            if [ -n "$REAL_EXEC" ]; then
-              REAL_EXEC=$(basename "$REAL_EXEC")
-              echo "Found executable: $REAL_EXEC"
-            fi
+            [ -n "$REAL_EXEC" ] && REAL_EXEC=$(basename "$REAL_EXEC")
           fi
 
-          # 如果没找到任何可执行文件，检查是否已经有 tscode
+          if [ -z "$REAL_EXEC" ] && [ -f "./tscode" ]; then
+            REAL_EXEC="tscode"
+          fi
+
           if [ -z "$REAL_EXEC" ]; then
-            if [ -f "./tscode" ]; then
-              REAL_EXEC="tscode"
-              echo "✅ Using existing tscode"
-            else
-              echo "❌ No executable found!"
-              echo "Directory contents:"
-              ls -la
-              exit 1
-            fi
+            echo "❌ No executable found!"
+            exit 1
           fi
 
-          echo "✅ Final executable: $REAL_EXEC"
-
-          # 如果不是 tscode，重命名为 tscode
           if [ "$REAL_EXEC" != "tscode" ] && [ -f "./$REAL_EXEC" ]; then
-            echo "Renaming $REAL_EXEC to tscode"
             mv "$REAL_EXEC" "tscode"
           fi
 
-          # 确保可执行权限
           chmod +x tscode 2>/dev/null || true
-          chmod +x chrome-sandbox 2>/dev/null || true
 
-          # 创建启动脚本
           cat > start-tscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -568,76 +510,33 @@ jobs:
           fi
 
           echo "=== TSCode for UOS ==="
-          echo "Starting TSCode..."
-
-          # 使用系统默认用户数据目录（像官方一样）
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              "$@"
+          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu "$@"
           START_EOF
 
           chmod +x start-tscode.sh
+          echo "✅ Launcher created"
 
-          # 创建桌面文件
-          cat > tscode.desktop << 'EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          Comment=Code Editing. Redefined.
-          Exec=./tscode %F
-          Icon=./resources/app/resources/linux/code.png
-          Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupNotify=true
-          StartupWMClass=Code
-          EOF
-
-          echo "✅ Launcher and config created"
-
-          echo ""
-          echo "📁 Final directory contents:"
-          ls -la
-
-      - name: 📦 Package (official style)
+      - name: 📦 Package (minimal size)
         run: |
           echo "=========================================="
-          echo "📦 Package (official style)"
+          echo "📦 Package (minimal size)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 修复所有权限（关键步骤）
-          echo "📌 Fixing permissions..."
-          find "$BUILD_DIR" -type f -exec chmod 644 {} \;
-          find "$BUILD_DIR" -type d -exec chmod 755 {} \;
-
-          # 设置可执行权限
+          # 修复权限
+          find "$BUILD_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
+          find "$BUILD_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
           chmod +x "$BUILD_DIR/tscode" 2>/dev/null || true
           chmod +x "$BUILD_DIR/start-tscode.sh" 2>/dev/null || true
-          chmod +x "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
-
-          # 设置 .node 文件权限
-          find "$BUILD_DIR" -name "*.node" -exec chmod 644 {} \;
 
           echo ""
-          echo "📌 Pre-package validation:"
-          echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
-          echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
-
-          echo ""
-          echo "📌 Total size before packaging:"
+          echo "📌 Final size:"
           du -sh "$BUILD_DIR"
 
           echo ""
-          echo "📌 Creating package with standard permissions..."
-
-          # 使用官方方式打包（不保留所有者和权限信息）
+          echo "📌 Creating package..."
           tar -czf "tscode-${VERSION}.tar.gz" \
             --no-same-owner \
             --no-same-permissions \
@@ -647,41 +546,14 @@ jobs:
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          # 同时创建 xz 格式（更小）
-          echo ""
-          echo "📌 Creating optimized package..."
-          tar -cJf "tscode-${VERSION}.tar.xz" \
-            --no-same-owner \
-            --no-same-permissions \
-            --owner=0 \
-            --group=0 \
-            --numeric-owner \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          # 创建校验文件
-          echo ""
-          echo "📌 Creating checksums..."
-          sha256sum "tscode-${VERSION}.tar.gz" > "tscode-${VERSION}.tar.gz.sha256"
-          sha256sum "tscode-${VERSION}.tar.xz" > "tscode-${VERSION}.tar.xz.sha256"
-
-          echo ""
-          echo "✅ Packages created:"
-          ls -lh tscode-${VERSION}.*
-
-          echo ""
-          echo "📌 Package verification:"
-          echo "   tar.gz: $(file tscode-${VERSION}.tar.gz)"
-          echo "   tar.xz: $(file tscode-${VERSION}.tar.xz)"
+          echo "✅ Package created:"
+          ls -lh tscode-${VERSION}.tar.gz
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: tscode-uos
-          path: |
-            tscode-*.tar.gz
-            tscode-*.tar.xz
-            tscode-*.sha256
+          path: tscode-*.tar.gz
           retention-days: 30
 
       - name: 📊 Build summary
@@ -695,16 +567,12 @@ jobs:
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
-            echo "✅ Build completed successfully!"
+            echo "✅ Build completed!"
+            ls -lh tscode-*.tar.gz
             echo ""
-            echo "📦 Packages available:"
-            ls -lh tscode-*.*
-            echo ""
-            echo "📖 On UOS:"
-            echo "  1. tar -xzf tscode-*.tar.gz"
-            echo "  2. cd tscode-uos-x64"
-            echo "  3. ./tscode"
-            echo ""
-            echo "  或使用 start-tscode.sh"
+            echo "📖 Usage:"
+            echo "  tar -xzf tscode-*.tar.gz"
+            echo "  cd tscode-uos-x64"
+            echo "  ./tscode"
             echo "=========================================="
           fi
