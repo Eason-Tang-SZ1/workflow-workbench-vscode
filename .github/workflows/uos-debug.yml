@@ -239,14 +239,25 @@ jobs:
 
           echo "✅ node_modules copied"
 
-      - name: 🔥 Replace native modules with official version
+      - name: 🔥 Replace native modules with official version (optimized)
         run: |
           echo "=========================================="
-          echo "🔥 Replacing native modules with official version"
+          echo "🔥 Replacing native modules with official version (optimized)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          # 需要从官方版本获取的原生模块列表
+          NATIVE_MODULES=(
+            "node-pty"
+            "@vscode/spdlog"
+            "@vscode/sqlite3"
+            "native-keymap"
+            "vscode-ripgrep"
+            "vscode-textmate"
+            "vscode-oniguruma"
+          )
 
           echo "📌 Downloading official VSCode $VERSION for Linux x64..."
           wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
@@ -256,42 +267,76 @@ jobs:
             wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
           fi
 
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          # 只提取 node_modules 目录（减少解压时间）
+          mkdir -p /tmp/official_extract
+          tar -xzf /tmp/official.tar.gz -C /tmp/official_extract \
+            "VSCode-linux-x64/resources/app/node_modules" 2>/dev/null
 
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-          if [ -z "$OFFICIAL_DIR" ]; then
-            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          OFFICIAL_DIR="/tmp/official_extract/VSCode-linux-x64"
+
+          if [ ! -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
+            echo "⚠️ Selective extraction failed, trying full extraction..."
+            tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+            OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
           fi
 
-          if [ -z "$OFFICIAL_DIR" ]; then
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
             echo "❌ Could not find official VSCode!"
             exit 1
           fi
 
           echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
-          # 替换所有原生模块
+          # 替换原生模块
           echo ""
-          echo "📌 Replacing native modules from official build..."
+          echo "📌 Replacing necessary native modules..."
 
-          if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            # 备份当前的 node_modules
-            if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
-              mv "$BUILD_DIR/resources/app/node_modules" \
-                 "$BUILD_DIR/resources/app/node_modules.bak"
+          for module in "${NATIVE_MODULES[@]}"; do
+            OFFICIAL_MODULE="$OFFICIAL_DIR/resources/app/node_modules/$module"
+            TARGET_MODULE="$BUILD_DIR/resources/app/node_modules/$module"
+
+            if [ -d "$OFFICIAL_MODULE" ]; then
+              echo ""
+              echo "📌 Replacing $module..."
+
+              # 如果目标存在，删除
+              if [ -d "$TARGET_MODULE" ]; then
+                rm -rf "$TARGET_MODULE"
+              fi
+
+              # 复制官方版本
+              cp -r "$OFFICIAL_MODULE" "$TARGET_MODULE"
+
+              # 清理模块中的冗余文件
+              echo "   Cleaning $module..."
+              find "$TARGET_MODULE" -name "*.d.ts" -type f -delete 2>/dev/null || true
+              find "$TARGET_MODULE" -name "*.md" -type f -delete 2>/dev/null || true
+              find "$TARGET_MODULE" -name "LICENSE*" -type f -delete 2>/dev/null || true
+              find "$TARGET_MODULE" -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+              find "$TARGET_MODULE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+              find "$TARGET_MODULE" -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+              find "$TARGET_MODULE" -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+              find "$TARGET_MODULE" -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+
+              echo "   ✅ $module replaced"
+            else
+              echo "   ⚠️ $module not found in official build"
             fi
+          done
 
-            # 复制官方 node_modules
-            cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
-                  "$BUILD_DIR/resources/app/"
-
-            echo "   ✅ node_modules replaced with official version"
-          fi
-
+          # 清理临时文件
           rm -rf /tmp/official.tar.gz
-          rm -rf "$OFFICIAL_DIR"
+          rm -rf /tmp/official_extract
+          rm -rf /tmp/VSCode-linux-x64
+
           echo ""
           echo "✅ Native modules replacement completed"
+
+          # 显示体积信息
+          echo ""
+          echo "📊 Build size after native module replacement:"
+          du -sh "$BUILD_DIR" 2>/dev/null || echo "   Build dir not found"
+          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "   node_modules not found"
 
       - name: 🧹 Strip down build for release
         run: |
@@ -304,6 +349,7 @@ jobs:
 
           echo "📌 Current size before cleanup:"
           du -sh .
+          du -sh node_modules
 
           # 1. 删除所有开发依赖
           echo ""
@@ -324,23 +370,27 @@ jobs:
           find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
 
           # 删除文档
-          echo "   Removing .md files..."
+          echo "   Removing documentation files..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGES*" -type f -delete 2>/dev/null || true
+          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
 
           # 删除测试目录
           echo "   Removing test directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "test-data" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "testdata" -exec rm -rf {} + 2>/dev/null || true
 
           # 删除示例目录
           echo "   Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除 .ts 源文件
+          # 删除 .ts 源文件（保留 .js 和 .node）
           echo "   Removing .ts source files..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
 
@@ -352,21 +402,37 @@ jobs:
           echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 3. 删除构建临时目录
+          # 删除 .github 目录
+          echo "   Removing .github directories..."
+          find node_modules -type d -name ".github" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除构建临时目录
           echo ""
           echo "📌 Removing build temp directories..."
           rm -rf .cache 2>/dev/null || true
           rm -rf build 2>/dev/null || true
 
-          # 4. 删除不必要的模块
+          # 删除不必要的顶层模块
           echo ""
           echo "📌 Removing unnecessary large modules..."
           rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/electron 2>/dev/null || true
+          rm -rf node_modules/playwright 2>/dev/null || true
+          rm -rf node_modules/puppeteer 2>/dev/null || true
+          rm -rf node_modules/selenium-* 2>/dev/null || true
+          rm -rf node_modules/webpack 2>/dev/null || true
+          rm -rf node_modules/rollup 2>/dev/null || true
           rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
+
+          # 使用 node-prune 进一步优化
+          echo ""
+          echo "📌 Running node-prune for additional optimization..."
+          npx -y node-prune@1.0.2 ./node_modules 2>/dev/null || echo "   ⚠️ node-prune not available, skipping"
 
           echo ""
           echo "📌 Final size after cleanup:"
           du -sh .
+          du -sh node_modules
           cd -
 
       - name: 📂 Prepare extensions
@@ -563,6 +629,10 @@ jobs:
           echo "📌 Pre-package validation:"
           echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
           echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
+
+          echo ""
+          echo "📌 Total size before packaging:"
+          du -sh "$BUILD_DIR"
 
           echo ""
           echo "📌 Creating package with standard permissions..."
