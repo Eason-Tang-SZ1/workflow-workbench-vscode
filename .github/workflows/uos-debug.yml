@@ -255,24 +255,21 @@ jobs:
           echo "✅ Customization complete"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      - name: 📦 Create self-contained .deb package (all dependencies included)
+      - name: 📦 Create .deb package (supports both install and extract)
         run: |
           echo "=========================================="
-          echo "📦 Creating self-contained .deb package"
+          echo "📦 Creating .deb package"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
           ARCH="amd64"
 
-          # 创建临时目录
           DEB_ROOT="/tmp/tscode-deb"
           mkdir -p "$DEB_ROOT"
-
-          # 创建 DEBIAN 目录
           mkdir -p "$DEB_ROOT/DEBIAN"
 
-          # 创建 control 文件 - 不声明依赖（所有依赖都已包含）
+          # Create control file
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROL_EOF'
           Package: tscode
           Version: VERSION_PLACEHOLDER
@@ -282,46 +279,44 @@ jobs:
           Maintainer: TSCode Team <tscode@example.com>
           Depends:
           Recommends:
-          Description: TSCode - Custom Code Editor for UOS (Self-contained)
+          Description: TSCode - Custom Code Editor for UOS
            TSCode is a custom build of Visual Studio Code optimized for UOS.
-           This package includes all dependencies and requires no network access.
+           This package can be installed with apt or extracted and run directly.
           CONTROL_EOF
 
-          # 替换版本号
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/DEBIAN/control"
 
-          # 创建 postinst 脚本
+          # Create postinst script
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINST_EOF'
           #!/bin/bash
           set -e
 
-          # 设置 chrome-sandbox 权限
-          if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
-              chown root:root /usr/share/tscode/chrome-sandbox
-              chmod 4755 /usr/share/tscode/chrome-sandbox
+          # Only run system-level operations if installed to system
+          if [ -d "/usr/share/tscode" ]; then
+              if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
+                  chown root:root /usr/share/tscode/chrome-sandbox 2>/dev/null || true
+                  chmod 4755 /usr/share/tscode/chrome-sandbox 2>/dev/null || true
+              fi
+              if command -v update-desktop-database > /dev/null 2>&1; then
+                  update-desktop-database /usr/share/applications/ 2>/dev/null || true
+              fi
+              echo ""
+              echo "=========================================="
+              echo "✅ TSCode installed successfully!"
+              echo "=========================================="
+              echo ""
+              echo "📖 Usage:"
+              echo "  tscode"
+              echo ""
+              echo "📖 Uninstall:"
+              echo "  sudo apt remove tscode"
+              echo "=========================================="
           fi
-
-          # 更新桌面数据库
-          if command -v update-desktop-database > /dev/null 2>&1; then
-              update-desktop-database /usr/share/applications/
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "✅ TSCode installed successfully!"
-          echo "=========================================="
-          echo ""
-          echo "📖 Usage:"
-          echo "  tscode"
-          echo ""
-          echo "📖 Uninstall:"
-          echo "  sudo apt remove tscode"
-          echo "=========================================="
           POSTINST_EOF
 
           chmod 755 "$DEB_ROOT/DEBIAN/postinst"
 
-          # 创建 prerm 脚本
+          # Create prerm script
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERM_EOF'
           #!/bin/bash
           set -e
@@ -330,17 +325,64 @@ jobs:
 
           chmod 755 "$DEB_ROOT/DEBIAN/prerm"
 
-          # 复制构建文件
-          echo "📌 Copying build files to package directory..."
+          # Copy build files
+          echo "📌 Copying build files..."
           mkdir -p "$DEB_ROOT/usr/share/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/usr/share/tscode/"
 
-          # 创建符号链接
+          # Create smart startup script
+          cat > "$DEB_ROOT/usr/share/tscode/tscode.sh" << 'RUN_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
+
+          # Detect if running from extracted directory
+          if [[ "$SCRIPT_DIR" == *"/usr/share/"* ]] || [[ "$SCRIPT_DIR" == *"/opt/"* ]]; then
+              # System installed mode
+              USER_DATA_DIR="$HOME/.config/tscode"
+              EXEC="$SCRIPT_DIR/tscode"
+              echo "=== TSCode (System Mode) ==="
+          else
+              # Portable mode (extracted from .deb)
+              USER_DATA_DIR="$SCRIPT_DIR/user-data"
+              mkdir -p "$USER_DATA_DIR"
+              EXEC="$SCRIPT_DIR/tscode"
+              echo "=== TSCode (Portable Mode) ==="
+              echo "User data: $USER_DATA_DIR"
+          fi
+
+          mkdir -p "$USER_DATA_DIR/extensions"
+
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$USER_DATA_DIR" \
+              --extensions-dir="$USER_DATA_DIR/extensions" \
+              "$@"
+          RUN_EOF
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/usr/share/tscode/tscode.sh"
+          chmod +x "$DEB_ROOT/usr/share/tscode/tscode.sh"
+
+          # Create symlink
           echo "📌 Creating symlinks..."
           mkdir -p "$DEB_ROOT/usr/bin"
-          ln -s "/usr/share/tscode/tscode" "$DEB_ROOT/usr/bin/tscode"
+          ln -s "/usr/share/tscode/tscode.sh" "$DEB_ROOT/usr/bin/tscode"
 
-          # 创建桌面文件
+          # Create desktop file
           echo "📌 Creating desktop file..."
           mkdir -p "$DEB_ROOT/usr/share/applications"
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOP_EOF'
@@ -358,202 +400,91 @@ jobs:
           StartupWMClass=TSCode
           DESKTOP_EOF
 
-          # 创建图标
+          # Create icon
           if [ -f "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" ]; then
               mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
               cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" \
                  "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
           fi
 
-          # 创建软链接到图标
           mkdir -p "$DEB_ROOT/usr/share/pixmaps"
           ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" \
                 "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
 
-          # 获取总大小
-          echo "📌 Calculating package size..."
+          # Calculate installed size
           INSTALLED_SIZE=$(du -s "$DEB_ROOT/usr" | cut -f1)
           echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_ROOT/DEBIAN/control"
 
-          # 构建 .deb 包
+          # Build .deb package
           echo "📌 Building .deb package..."
           cd /tmp
           fakeroot dpkg-deb --build tscode-deb
           cd -
 
-          # 复制到工作目录
           cp "/tmp/tscode-deb.deb" "./tscode_${VERSION}_${ARCH}.deb"
 
-          echo "✅ Self-contained .deb package created successfully!"
+          echo "✅ .deb package created successfully!"
           echo "📦 Package: tscode_${VERSION}_${ARCH}.deb"
           echo "📏 Size: $(du -h ./tscode_${VERSION}_${ARCH}.deb | cut -f1)"
 
-      - name: 📦 Create minimal .deb package (with external dependencies)
+      - name: 📦 Create standalone portable version
         run: |
           echo "=========================================="
-          echo "📦 Creating minimal .deb package"
+          echo "📦 Creating standalone portable version"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          ARCH="amd64"
 
-          # 创建临时目录
-          DEB_ROOT="/tmp/tscode-minimal-deb"
-          mkdir -p "$DEB_ROOT"
+          PORTABLE_DIR="tscode-portable-${VERSION}"
+          mkdir -p "$PORTABLE_DIR"
 
-          # 创建 DEBIAN 目录
-          mkdir -p "$DEB_ROOT/DEBIAN"
+          echo "📌 Copying build files..."
+          cp -r "$BUILD_DIR"/* "$PORTABLE_DIR/"
 
-          # 创建 control 文件 - 声明依赖
-          cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROL_EOF'
-          Package: tscode
-          Version: VERSION_PLACEHOLDER
-          Section: devel
-          Priority: optional
-          Architecture: amd64
-          Maintainer: TSCode Team <tscode@example.com>
-          Depends: libgtk-3-0 (>= 3.9.0), libnss3 (>= 2:3.26), libxss1, libxtst6, libx11-6, libasound2 (>= 1.0.27), libgbm1 (>= 17.1.0), libglib2.0-0 (>= 2.39.4), libcairo2 (>= 1.14.0), libpango-1.0-0 (>= 1.22.0), libatk1.0-0 (>= 2.9.4), libgdk-pixbuf2.0-0 (>= 2.30.0)
-          Recommends: git
-          Description: TSCode - Custom Code Editor for UOS
-           TSCode is a custom build of Visual Studio Code optimized for UOS.
-           It includes all the features of VS Code with custom enhancements.
-          CONTROL_EOF
-
-          # 替换版本号
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/DEBIAN/control"
-
-          # 创建 postinst 脚本
-          cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINST_EOF'
+          # Create startup script
+          cat > "$PORTABLE_DIR/start-tscode.sh" << 'START_EOF'
           #!/bin/bash
-          set -e
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 设置 chrome-sandbox 权限
-          if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
-              chown root:root /usr/share/tscode/chrome-sandbox
-              chmod 4755 /usr/share/tscode/chrome-sandbox
-          fi
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 更新桌面数据库
-          if command -v update-desktop-database > /dev/null 2>&1; then
-              update-desktop-database /usr/share/applications/
-          fi
+          USER_DATA_DIR="$SCRIPT_DIR/user-data"
+          mkdir -p "$USER_DATA_DIR"
 
+          echo "=== TSCode Portable ==="
+          echo "User data: $USER_DATA_DIR"
           echo ""
-          echo "=========================================="
-          echo "✅ TSCode installed successfully!"
-          echo "=========================================="
-          echo ""
-          echo "📖 Usage:"
-          echo "  tscode"
-          echo ""
-          echo "📖 Uninstall:"
-          echo "  sudo apt remove tscode"
-          echo "=========================================="
-          POSTINST_EOF
 
-          chmod 755 "$DEB_ROOT/DEBIAN/postinst"
+          exec "$SCRIPT_DIR/tscode" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$USER_DATA_DIR" \
+              --extensions-dir="$USER_DATA_DIR/extensions" \
+              "$@"
+          START_EOF
 
-          # 创建 prerm 脚本
-          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERM_EOF'
-          #!/bin/bash
-          set -e
-          echo "Removing TSCode..."
-          PRERM_EOF
+          chmod +x "$PORTABLE_DIR/start-tscode.sh"
+          chmod +x "$PORTABLE_DIR/tscode"
 
-          chmod 755 "$DEB_ROOT/DEBIAN/prerm"
+          # Create README
+          cat > "$PORTABLE_DIR/README.md" << 'README_EOF'
+          # TSCode Portable
 
-          # 复制构建文件
-          echo "📌 Copying build files to package directory..."
-          mkdir -p "$DEB_ROOT/usr/share/tscode"
-          cp -r "$BUILD_DIR"/* "$DEB_ROOT/usr/share/tscode/"
+          ## 无需 sudo 权限即可运行
 
-          # 创建符号链接
-          echo "📌 Creating symlinks..."
-          mkdir -p "$DEB_ROOT/usr/bin"
-          ln -s "/usr/share/tscode/tscode" "$DEB_ROOT/usr/bin/tscode"
-
-          # 创建桌面文件
-          echo "📌 Creating desktop file..."
-          mkdir -p "$DEB_ROOT/usr/share/applications"
-          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOP_EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          Comment=Code Editing. Redefined.
-          Exec=tscode %F
-          Icon=tscode
-          Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupNotify=true
-          StartupWMClass=TSCode
-          DESKTOP_EOF
-
-          # 创建图标
-          if [ -f "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" ]; then
-              mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
-              cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" \
-                 "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-          fi
-
-          # 创建软链接到图标
-          mkdir -p "$DEB_ROOT/usr/share/pixmaps"
-          ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" \
-                "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
-
-          # 获取总大小
-          echo "📌 Calculating package size..."
-          INSTALLED_SIZE=$(du -s "$DEB_ROOT/usr" | cut -f1)
-          echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_ROOT/DEBIAN/control"
-
-          # 构建 .deb 包
-          echo "📌 Building .deb package..."
-          cd /tmp
-          fakeroot dpkg-deb --build tscode-minimal-deb
-          cd -
-
-          # 复制到工作目录
-          cp "/tmp/tscode-minimal-deb.deb" "./tscode-minimal_${VERSION}_${ARCH}.deb"
-
-          echo "✅ Minimal .deb package created successfully!"
-          echo "📦 Package: tscode-minimal_${VERSION}_${ARCH}.deb"
-          echo "📏 Size: $(du -h ./tscode-minimal_${VERSION}_${ARCH}.deb | cut -f1)"
-
-      - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: tscode-packages
-          path: |
-            tscode_*.deb
-            tscode-minimal_*.deb
-          retention-days: 30
-
-      - name: 📊 Build summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "📊 BUILD SUMMARY"
-          echo "=========================================="
-          echo "Status: ${{ job.status }}"
-          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "=========================================="
-          if [ "${{ job.status }}" = "success" ]; then
-            echo ""
-            echo "✅ Build completed successfully!"
-            echo ""
-            echo "📦 Packages available:"
-            ls -lh tscode_*.deb
-            echo ""
-            echo "📖 Installation:"
-            echo ""
-            echo "  【自包含版本 - 无需网络】"
-            echo "  sudo apt install ./tscode_${VERSION}_amd64.deb"
-            echo "  (所有依赖已包含，完全离线安装)"
-            echo ""
-            echo "  【精简版本 - 需要网络】"
-            echo "  sudo apt install ./tscode-minimal_${VERSION}_amd64.deb"
-            echo "  (自动从仓库下载依赖)"
-            echo "=========================================="
-          fi
+          ### 启动
+          ```bash
+          ./start-tscode.sh
