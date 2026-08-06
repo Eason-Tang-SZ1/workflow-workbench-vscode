@@ -255,15 +255,14 @@ jobs:
           echo "✅ Customization complete"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      - name: 📦 Create .deb package manually
+      - name: 📦 Create self-contained .deb package (all dependencies included)
         run: |
           echo "=========================================="
-          echo "📦 Creating .deb package manually"
+          echo "📦 Creating self-contained .deb package"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          PACKAGE_NAME="tscode"
           ARCH="amd64"
 
           # 创建临时目录
@@ -273,7 +272,7 @@ jobs:
           # 创建 DEBIAN 目录
           mkdir -p "$DEB_ROOT/DEBIAN"
 
-          # 创建 control 文件
+          # 创建 control 文件 - 不声明依赖（所有依赖都已包含）
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROL_EOF'
           Package: tscode
           Version: VERSION_PLACEHOLDER
@@ -281,11 +280,11 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: TSCode Team <tscode@example.com>
-          Depends: libgtk-3-0 (>= 3.9.0), libnss3 (>= 2:3.26), libxss1, libxtst6, libx11-6, libasound2 (>= 1.0.27), libgbm1 (>= 17.1.0), libglib2.0-0 (>= 2.39.4), libcairo2 (>= 1.14.0), libpango-1.0-0 (>= 1.22.0), libatk1.0-0 (>= 2.9.4), libgdk-pixbuf2.0-0 (>= 2.30.0)
-          Recommends: git
-          Description: TSCode - Custom Code Editor for UOS
+          Depends:
+          Recommends:
+          Description: TSCode - Custom Code Editor for UOS (Self-contained)
            TSCode is a custom build of Visual Studio Code optimized for UOS.
-           It includes all the features of VS Code with custom enhancements.
+           This package includes all dependencies and requires no network access.
           CONTROL_EOF
 
           # 替换版本号
@@ -307,7 +306,17 @@ jobs:
               update-desktop-database /usr/share/applications/
           fi
 
-          echo "TSCode installed successfully!"
+          echo ""
+          echo "=========================================="
+          echo "✅ TSCode installed successfully!"
+          echo "=========================================="
+          echo ""
+          echo "📖 Usage:"
+          echo "  tscode"
+          echo ""
+          echo "📖 Uninstall:"
+          echo "  sudo apt remove tscode"
+          echo "=========================================="
           POSTINST_EOF
 
           chmod 755 "$DEB_ROOT/DEBIAN/postinst"
@@ -375,94 +384,176 @@ jobs:
           # 复制到工作目录
           cp "/tmp/tscode-deb.deb" "./tscode_${VERSION}_${ARCH}.deb"
 
-          echo "✅ .deb package created successfully!"
+          echo "✅ Self-contained .deb package created successfully!"
           echo "📦 Package: tscode_${VERSION}_${ARCH}.deb"
+          echo "📏 Size: $(du -h ./tscode_${VERSION}_${ARCH}.deb | cut -f1)"
 
-      - name: 📦 Create offline installation package
+      - name: 📦 Create minimal .deb package (with external dependencies)
         run: |
           echo "=========================================="
-          echo "📦 Creating offline installation package"
+          echo "📦 Creating minimal .deb package"
           echo "=========================================="
 
+          BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          OFFLINE_DIR="tscode-offline-${VERSION}"
+          ARCH="amd64"
 
-          mkdir -p "$OFFLINE_DIR/packages"
+          # 创建临时目录
+          DEB_ROOT="/tmp/tscode-minimal-deb"
+          mkdir -p "$DEB_ROOT"
 
-          # 1. 复制主包
-          cp "./tscode_${VERSION}_amd64.deb" "$OFFLINE_DIR/packages/"
+          # 创建 DEBIAN 目录
+          mkdir -p "$DEB_ROOT/DEBIAN"
 
-          # 2. 下载依赖
-          echo "📌 Downloading dependencies..."
-          cd "$OFFLINE_DIR/packages"
+          # 创建 control 文件 - 声明依赖
+          cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROL_EOF'
+          Package: tscode
+          Version: VERSION_PLACEHOLDER
+          Section: devel
+          Priority: optional
+          Architecture: amd64
+          Maintainer: TSCode Team <tscode@example.com>
+          Depends: libgtk-3-0 (>= 3.9.0), libnss3 (>= 2:3.26), libxss1, libxtst6, libx11-6, libasound2 (>= 1.0.27), libgbm1 (>= 17.1.0), libglib2.0-0 (>= 2.39.4), libcairo2 (>= 1.14.0), libpango-1.0-0 (>= 1.22.0), libatk1.0-0 (>= 2.9.4), libgdk-pixbuf2.0-0 (>= 2.30.0)
+          Recommends: git
+          Description: TSCode - Custom Code Editor for UOS
+           TSCode is a custom build of Visual Studio Code optimized for UOS.
+           It includes all the features of VS Code with custom enhancements.
+          CONTROL_EOF
 
-          apt-get download \
-            libgtk-3-0 \
-            libnss3 \
-            libxss1 \
-            libxtst6 \
-            libasound2 \
-            libgbm1 \
-            libglib2.0-0 \
-            libcairo2 \
-            libpango-1.0-0 \
-            libatk1.0-0 \
-            libgdk-pixbuf2.0-0 \
-            git \
-            2>/dev/null || echo "   ⚠️ Some dependencies may be missing"
+          # 替换版本号
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/DEBIAN/control"
 
-          cd -
-
-          # 3. 创建安装脚本
-          cat > "$OFFLINE_DIR/install.sh" << 'INSTALL_EOF'
+          # 创建 postinst 脚本
+          cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINST_EOF'
           #!/bin/bash
           set -e
 
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          # 设置 chrome-sandbox 权限
+          if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
+              chown root:root /usr/share/tscode/chrome-sandbox
+              chmod 4755 /usr/share/tscode/chrome-sandbox
+          fi
 
-          echo "=========================================="
-          echo "📦 TSCode Offline Installation"
-          echo "=========================================="
-          echo ""
-
-          # 检查是否有网络
-          if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-              echo "✅ Network detected, using online installation..."
-              sudo apt install -y ./packages/tscode_*.deb
-          else
-              echo "🌐 No network detected, using offline installation..."
-
-              echo "📌 Installing dependencies offline..."
-              sudo dpkg -i packages/*.deb 2>/dev/null || true
-
-              echo ""
-              echo "📌 Fixing missing dependencies..."
-              sudo apt --fix-broken install -y 2>/dev/null || echo "   ⚠️ Some dependencies may be missing"
-
-              echo ""
-              echo "📌 Installing TSCode..."
-              sudo dpkg -i packages/tscode_*.deb
+          # 更新桌面数据库
+          if command -v update-desktop-database > /dev/null 2>&1; then
+              update-desktop-database /usr/share/applications/
           fi
 
           echo ""
+          echo "=========================================="
           echo "✅ TSCode installed successfully!"
+          echo "=========================================="
           echo ""
           echo "📖 Usage:"
           echo "  tscode"
           echo ""
           echo "📖 Uninstall:"
           echo "  sudo apt remove tscode"
-          INSTALL_EOF
+          echo "=========================================="
+          POSTINST_EOF
 
-          chmod +x "$OFFLINE_DIR/install.sh"
+          chmod 755 "$DEB_ROOT/DEBIAN/postinst"
 
-          # 4. 创建 README
-          cat > "$OFFLINE_DIR/README.md" << 'README_EOF'
-          # TSCode Offline Installation Package
+          # 创建 prerm 脚本
+          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERM_EOF'
+          #!/bin/bash
+          set -e
+          echo "Removing TSCode..."
+          PRERM_EOF
 
-          ## 安装方法
+          chmod 755 "$DEB_ROOT/DEBIAN/prerm"
 
-          ### 方法一：自动安装（推荐）
-          ```bash
-          cd tscode-offline-*
-          ./install.sh
+          # 复制构建文件
+          echo "📌 Copying build files to package directory..."
+          mkdir -p "$DEB_ROOT/usr/share/tscode"
+          cp -r "$BUILD_DIR"/* "$DEB_ROOT/usr/share/tscode/"
+
+          # 创建符号链接
+          echo "📌 Creating symlinks..."
+          mkdir -p "$DEB_ROOT/usr/bin"
+          ln -s "/usr/share/tscode/tscode" "$DEB_ROOT/usr/bin/tscode"
+
+          # 创建桌面文件
+          echo "📌 Creating desktop file..."
+          mkdir -p "$DEB_ROOT/usr/share/applications"
+          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOP_EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          Comment=Code Editing. Redefined.
+          Exec=tscode %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=TSCode
+          DESKTOP_EOF
+
+          # 创建图标
+          if [ -f "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" ]; then
+              mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
+              cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" \
+                 "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+          fi
+
+          # 创建软链接到图标
+          mkdir -p "$DEB_ROOT/usr/share/pixmaps"
+          ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" \
+                "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
+
+          # 获取总大小
+          echo "📌 Calculating package size..."
+          INSTALLED_SIZE=$(du -s "$DEB_ROOT/usr" | cut -f1)
+          echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_ROOT/DEBIAN/control"
+
+          # 构建 .deb 包
+          echo "📌 Building .deb package..."
+          cd /tmp
+          fakeroot dpkg-deb --build tscode-minimal-deb
+          cd -
+
+          # 复制到工作目录
+          cp "/tmp/tscode-minimal-deb.deb" "./tscode-minimal_${VERSION}_${ARCH}.deb"
+
+          echo "✅ Minimal .deb package created successfully!"
+          echo "📦 Package: tscode-minimal_${VERSION}_${ARCH}.deb"
+          echo "📏 Size: $(du -h ./tscode-minimal_${VERSION}_${ARCH}.deb | cut -f1)"
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tscode-packages
+          path: |
+            tscode_*.deb
+            tscode-minimal_*.deb
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" = "success" ]; then
+            echo ""
+            echo "✅ Build completed successfully!"
+            echo ""
+            echo "📦 Packages available:"
+            ls -lh tscode_*.deb
+            echo ""
+            echo "📖 Installation:"
+            echo ""
+            echo "  【自包含版本 - 无需网络】"
+            echo "  sudo apt install ./tscode_${VERSION}_amd64.deb"
+            echo "  (所有依赖已包含，完全离线安装)"
+            echo ""
+            echo "  【精简版本 - 需要网络】"
+            echo "  sudo apt install ./tscode-minimal_${VERSION}_amd64.deb"
+            echo "  (自动从仓库下载依赖)"
+            echo "=========================================="
+          fi
