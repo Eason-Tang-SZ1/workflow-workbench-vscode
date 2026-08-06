@@ -291,7 +291,7 @@ jobs:
           # 替换版本号
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/DEBIAN/control"
 
-          # 创建 postinst 脚本（安装后执行）
+          # 创建 postinst 脚本
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINST_EOF'
           #!/bin/bash
           set -e
@@ -307,12 +307,12 @@ jobs:
               update-desktop-database /usr/share/applications/
           fi
 
-          echo "TSCode ${VERSION} installed successfully!"
+          echo "TSCode installed successfully!"
           POSTINST_EOF
 
           chmod 755 "$DEB_ROOT/DEBIAN/postinst"
 
-          # 创建 prerm 脚本（卸载前执行）
+          # 创建 prerm 脚本
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERM_EOF'
           #!/bin/bash
           set -e
@@ -349,7 +349,7 @@ jobs:
           StartupWMClass=TSCode
           DESKTOP_EOF
 
-          # 创建图标（如果没有的话，使用默认）
+          # 创建图标
           if [ -f "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" ]; then
               mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
               cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" \
@@ -361,7 +361,7 @@ jobs:
           ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" \
                 "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
 
-          # 获取总大小用于 control 文件
+          # 获取总大小
           echo "📌 Calculating package size..."
           INSTALLED_SIZE=$(du -s "$DEB_ROOT/usr" | cut -f1)
           echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_ROOT/DEBIAN/control"
@@ -377,39 +377,92 @@ jobs:
 
           echo "✅ .deb package created successfully!"
           echo "📦 Package: tscode_${VERSION}_${ARCH}.deb"
-          echo "📏 Size: $(du -h ./tscode_${VERSION}_${ARCH}.deb | cut -f1)"
 
-      - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: tscode-uos
-          path: tscode_*.deb
-          retention-days: 30
-
-      - name: 📊 Build summary
-        if: always()
+      - name: 📦 Create offline installation package
         run: |
           echo "=========================================="
-          echo "📊 BUILD SUMMARY"
+          echo "📦 Creating offline installation package"
           echo "=========================================="
-          echo "Status: ${{ job.status }}"
-          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          OFFLINE_DIR="tscode-offline-${VERSION}"
+
+          mkdir -p "$OFFLINE_DIR/packages"
+
+          # 1. 复制主包
+          cp "./tscode_${VERSION}_amd64.deb" "$OFFLINE_DIR/packages/"
+
+          # 2. 下载依赖
+          echo "📌 Downloading dependencies..."
+          cd "$OFFLINE_DIR/packages"
+
+          apt-get download \
+            libgtk-3-0 \
+            libnss3 \
+            libxss1 \
+            libxtst6 \
+            libasound2 \
+            libgbm1 \
+            libglib2.0-0 \
+            libcairo2 \
+            libpango-1.0-0 \
+            libatk1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            git \
+            2>/dev/null || echo "   ⚠️ Some dependencies may be missing"
+
+          cd -
+
+          # 3. 创建安装脚本
+          cat > "$OFFLINE_DIR/install.sh" << 'INSTALL_EOF'
+          #!/bin/bash
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
           echo "=========================================="
-          if [ "${{ job.status }}" = "success" ]; then
-            echo ""
-            echo "✅ Build completed successfully!"
-            echo ""
-            echo "📦 Package available:"
-            ls -lh tscode_*.deb
-            echo ""
-            echo "📖 Installation on UOS/Debian:"
-            echo "  sudo apt install ./tscode_${VERSION}_amd64.deb"
-            echo ""
-            echo "  Or:"
-            echo "  sudo dpkg -i tscode_${VERSION}_amd64.deb"
-            echo "  sudo apt --fix-broken install"
-            echo ""
-            echo "  After installation, run:"
-            echo "  tscode"
-            echo "=========================================="
+          echo "📦 TSCode Offline Installation"
+          echo "=========================================="
+          echo ""
+
+          # 检查是否有网络
+          if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+              echo "✅ Network detected, using online installation..."
+              sudo apt install -y ./packages/tscode_*.deb
+          else
+              echo "🌐 No network detected, using offline installation..."
+
+              echo "📌 Installing dependencies offline..."
+              sudo dpkg -i packages/*.deb 2>/dev/null || true
+
+              echo ""
+              echo "📌 Fixing missing dependencies..."
+              sudo apt --fix-broken install -y 2>/dev/null || echo "   ⚠️ Some dependencies may be missing"
+
+              echo ""
+              echo "📌 Installing TSCode..."
+              sudo dpkg -i packages/tscode_*.deb
           fi
+
+          echo ""
+          echo "✅ TSCode installed successfully!"
+          echo ""
+          echo "📖 Usage:"
+          echo "  tscode"
+          echo ""
+          echo "📖 Uninstall:"
+          echo "  sudo apt remove tscode"
+          INSTALL_EOF
+
+          chmod +x "$OFFLINE_DIR/install.sh"
+
+          # 4. 创建 README
+          cat > "$OFFLINE_DIR/README.md" << 'README_EOF'
+          # TSCode Offline Installation Package
+
+          ## 安装方法
+
+          ### 方法一：自动安装（推荐）
+          ```bash
+          cd tscode-offline-*
+          ./install.sh
