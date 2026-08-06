@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package)
+name: Build for UOS (DEB Package - Optimized)
 
 on:
   workflow_dispatch:
@@ -220,6 +220,9 @@ jobs:
           BUILD_DIR="$TARGET_DIR"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
+          echo "Initial build size:"
+          du -sh "$BUILD_DIR"
+
       - name: 📦 Copy node_modules to resources/app
         run: |
           echo "=========================================="
@@ -274,8 +277,7 @@ jobs:
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
             echo "   Copying official node_modules..."
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
-              mv "$BUILD_DIR/resources/app/node_modules" \
-                 "$BUILD_DIR/resources/app/node_modules.bak"
+              rm -rf "$BUILD_DIR/resources/app/node_modules"
             fi
             cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
                   "$BUILD_DIR/resources/app/"
@@ -287,61 +289,71 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 🧹 Strip down build for release
+      - name: 🧹 Safe cleanup
         run: |
           echo "=========================================="
-          echo "🧹 Stripping down build for release"
+          echo "🧹 Safe cleanup (preserving runtime files)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+
+          echo "Before cleanup:"
+          du -sh "$BUILD_DIR"
+
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Current size before cleanup:"
-          du -sh .
+          echo ""
+          echo "📌 Removing devDependencies from package.json..."
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
           echo ""
-          echo "📌 Removing devDependencies..."
-          if command -v json &> /dev/null; then
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          else
-            npm install -g json
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          fi
+          echo "📌 Safe node_modules cleanup..."
 
-          echo ""
-          echo "📌 Cleaning node_modules..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          # 只删除明确的开发文件，保留运行时需要的
+          echo "   Removing TypeScript source files (keeping .d.ts for types)..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+
+          echo "   Removing markdown documentation..."
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
+
+          echo "   Removing test directories..."
+          find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" \) -exec rm -rf {} + 2>/dev/null || true
+
+          echo "   Removing example directories..."
+          find node_modules -type d \( -name "example" -o -name "examples" -o -name "demo" -o -name "demos" \) -exec rm -rf {} + 2>/dev/null || true
+
+          echo "   Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+
+          echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
+          # 清理extensions中的开发文件
           echo ""
-          echo "📌 Removing build temp directories..."
+          echo "📌 Cleaning extensions..."
+          if [ -d "extensions" ]; then
+            find extensions -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+            find extensions -name "*.md" -delete 2>/dev/null || true
+            find extensions -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+            find extensions -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
+          fi
+
+          # 删除构建临时文件
+          echo ""
+          echo "📌 Removing build temp files..."
           rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
 
-          echo ""
-          echo "📌 Removing unnecessary large modules..."
-          rm -rf node_modules/@types 2>/dev/null || true
-          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
-
-          echo ""
-          echo "📌 Final size after cleanup:"
-          du -sh .
           cd -
 
-      - name: 📂 Prepare extensions
+          echo ""
+          echo "After cleanup:"
+          du -sh "$BUILD_DIR"
+
+      - name: 📂 Prepare extensions (all from official)
         run: |
           echo "=========================================="
-          echo "📂 Preparing extensions"
+          echo "📂 Preparing extensions from official build"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -388,14 +400,15 @@ jobs:
           DEB_ARCH="amd64"
           DEB_ROOT="$(pwd)/deb_root"
 
-          # 创建DEB目录结构
           mkdir -p "$DEB_ROOT/DEBIAN"
           mkdir -p "$DEB_ROOT/opt/tscode"
           mkdir -p "$DEB_ROOT/usr/bin"
           mkdir -p "$DEB_ROOT/usr/share/applications"
           mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps"
 
-          # 复制应用文件到 /opt/tscode
+          echo "📌 Size before copying to DEB:"
+          du -sh "$BUILD_DIR"
+
           echo "📌 Copying application files to $DEB_ROOT/opt/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
@@ -403,12 +416,10 @@ jobs:
           find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
           find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
-          chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
 
-          # 创建符号链接 - 使用相对路径
-          echo "📌 Creating symlink..."
+          # 创建符号链接
           cd "$DEB_ROOT/usr/bin"
           ln -sf /opt/tscode/tscode tscode
           cd -
@@ -432,10 +443,6 @@ jobs:
           # 复制图标
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-          else
-            # 创建简单图标
-            echo "Creating simple icon..."
-            convert -size 256x256 xc:blue -fill white -gravity center -pointsize 48 -annotate 0 "TSC" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png" 2>/dev/null || true
           fi
 
           # 创建 DEBIAN/control 文件
@@ -459,12 +466,10 @@ jobs:
           #!/bin/bash
           set -e
 
-          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database /usr/share/applications/
           fi
 
-          # 更新图标缓存
           if command -v update-icon-caches >/dev/null 2>&1; then
             update-icon-caches /usr/share/icons/hicolor/
           fi
@@ -477,22 +482,20 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # 创建 prerm 脚本（卸载前清理）
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'EOF'
           #!/bin/bash
           set -e
-
-          # 清理用户配置？（保留）
           echo "TSCode is being removed..."
-
           exit 0
           EOF
 
           chmod +x "$DEB_ROOT/DEBIAN/prerm"
 
           echo "✅ DEB package structure created"
+          echo "DEB root size:"
+          du -sh "$DEB_ROOT"
 
-      - name: 📦 Build DEB package
+      - name: 📦 Build DEB package with compression
         run: |
           echo "=========================================="
           echo "📦 Building DEB package"
@@ -504,21 +507,15 @@ jobs:
           DEB_ROOT="$(pwd)/deb_root"
           DEB_OUTPUT="$(pwd)/tscode-${DEB_VERSION}_amd64.deb"
 
-          # 检查并修复符号链接
-          echo "📌 Checking symlinks..."
-          find "$DEB_ROOT" -type l -exec test -e {} \; -exec echo "✅ {} is valid" \; \
-            -o -type l -exec echo "⚠️ Broken symlink: {}" \;
-
           echo ""
-          echo "📌 Building DEB package with fakeroot..."
+          echo "📌 Building DEB package..."
           echo "   Package: $DEB_NAME"
           echo "   Version: $DEB_VERSION"
           echo "   Architecture: amd64"
-          echo "   Output: $DEB_OUTPUT"
+          echo "   Compression: xz (better compression)"
 
-          # 构建DEB包
-          cd "$(pwd)"
-          fakeroot dpkg-deb --build "$DEB_ROOT" "$DEB_OUTPUT"
+          # 使用xz压缩以获得更小的包
+          fakeroot dpkg-deb -Zxz --build "$DEB_ROOT" "$DEB_OUTPUT"
 
           if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
             echo ""
@@ -526,8 +523,13 @@ jobs:
             echo "📦 Package: $(basename $DEB_OUTPUT)"
             ls -lh "$DEB_OUTPUT"
 
-            # 创建校验和
             sha256sum "$DEB_OUTPUT" > "$DEB_OUTPUT.sha256"
+
+            echo ""
+            echo "Size comparison:"
+            echo "  Source directory: $(du -sh $BUILD_DIR 2>/dev/null | cut -f1 || echo 'N/A')"
+            echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
+            echo "  Compression ratio: $(echo "scale=1; $(stat -c%s $DEB_OUTPUT) * 100 / $(du -sb $DEB_ROOT 2>/dev/null | cut -f1)" | bc 2>/dev/null || echo 'N/A')%"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -535,14 +537,8 @@ jobs:
 
       - name: 📄 Create installation script
         run: |
-          echo "=========================================="
-          echo "📄 Creating offline installation script"
-          echo "=========================================="
-
           cat > install-tscode.sh << 'EOF'
           #!/bin/bash
-          # TSCode Offline Installation Script for UOS
-
           set -e
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -553,12 +549,12 @@ jobs:
           echo "=========================================="
 
           if [ -z "$DEB_FILE" ]; then
-            echo "❌ No DEB package found in current directory!"
-            echo "Please make sure the .deb file is present."
+            echo "❌ No DEB package found!"
             exit 1
           fi
 
           echo "📦 Found package: $(basename $DEB_FILE)"
+          echo "   Size: $(du -h $DEB_FILE | cut -f1)"
           echo ""
           echo "This will install TSCode system-wide."
           echo "Root privileges required."
@@ -579,46 +575,11 @@ jobs:
 
           echo ""
           echo "✅ Installation complete!"
-          echo ""
           echo "Run 'tscode' to start TSCode."
-          echo "Or find TSCode in your application menu."
           echo "=========================================="
           EOF
 
           chmod +x install-tscode.sh
-
-      - name: 📊 Verify DEB package
-        run: |
-          echo "=========================================="
-          echo "📊 Verifying DEB package"
-          echo "=========================================="
-
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_FILE="tscode-${VERSION}-1_amd64.deb"
-
-          if [ ! -f "$DEB_FILE" ]; then
-            echo "❌ DEB package not found: $DEB_FILE"
-            exit 1
-          fi
-
-          echo "📌 Package information:"
-          dpkg-deb --info "$DEB_FILE"
-
-          echo ""
-          echo "📌 Package contents (first 30 lines):"
-          dpkg-deb --contents "$DEB_FILE" | head -30
-
-          echo ""
-          echo "📌 Package size:"
-          ls -lh "$DEB_FILE"
-
-          echo ""
-          echo "📌 Checking package integrity..."
-          dpkg-deb --validate "$DEB_FILE" && echo "✅ Package is valid" || echo "⚠️ Package validation issues"
-
-          echo ""
-          echo "📌 Checking symlinks in package:"
-          dpkg-deb --contents "$DEB_FILE" | grep "^l" || echo "No symlinks found"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -638,20 +599,18 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "Package: DEB (Debian/UOS)"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "📦 DEB Package available:"
+            echo "📦 DEB Package:"
             ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
             echo ""
-            echo "📖 Offline Installation on UOS:"
-            echo "  1. Download the DEB package"
-            echo "  2. sudo dpkg -i tscode-*.deb"
-            echo "  3. sudo apt-get install -f  (if needed)"
+            echo "📖 Installation on UOS:"
+            echo "  sudo dpkg -i tscode-*.deb"
+            echo "  sudo apt-get install -f"
             echo ""
-            echo "  Or run the included install-tscode.sh script."
+            echo "Or run: ./install-tscode.sh"
             echo "=========================================="
           fi
