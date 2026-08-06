@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package)
+name: Build for UOS
 
 on:
   workflow_dispatch:
@@ -37,8 +37,7 @@ jobs:
             libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian
+            python3 git wget curl tree xz-utils
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -271,14 +270,24 @@ jobs:
 
           echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
+          # 替换所有原生模块
+          echo ""
+          echo "📌 Replacing native modules from official build..."
+
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
+            # 复制整个 node_modules（但保留我们需要的）
             echo "   Copying official node_modules..."
+
+            # 备份当前的 node_modules
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
               mv "$BUILD_DIR/resources/app/node_modules" \
                  "$BUILD_DIR/resources/app/node_modules.bak"
             fi
+
+            # 复制官方 node_modules
             cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
                   "$BUILD_DIR/resources/app/"
+
             echo "   ✅ node_modules replaced with official version"
           fi
 
@@ -299,6 +308,7 @@ jobs:
           echo "📌 Current size before cleanup:"
           du -sh .
 
+          # 1. 删除所有开发依赖
           echo ""
           echo "📌 Removing devDependencies..."
           if command -v json &> /dev/null; then
@@ -308,26 +318,50 @@ jobs:
             npx json -I -f package.json -e 'this.devDependencies={}'
           fi
 
+          # 2. 清理 node_modules
           echo ""
           echo "📌 Cleaning node_modules..."
+
+          # 删除类型定义文件
+          echo "   Removing .d.ts files..."
           find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+
+          # 删除文档
+          echo "   Removing .md files..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+
+          # 删除测试目录
+          echo "   Removing test directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除示例目录
+          echo "   Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除 .ts 源文件
+          echo "   Removing .ts source files..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+
+          # 删除 .map 文件
+          echo "   Removing .map files..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+
+          # 删除 .git 目录
+          echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
+          # 3. 删除构建临时目录
           echo ""
           echo "📌 Removing build temp directories..."
           rm -rf .cache 2>/dev/null || true
           rm -rf build 2>/dev/null || true
 
+          # 4. 删除不必要的模块
           echo ""
           echo "📌 Removing unnecessary large modules..."
           rm -rf node_modules/@types 2>/dev/null || true
@@ -347,6 +381,7 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
+          # 下载官方VSCode获取扩展
           echo "📌 Downloading official VSCode for extensions..."
           wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
 
@@ -360,12 +395,22 @@ jobs:
 
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "✅ Found official extensions directory"
+
+            # 创建扩展目录
             mkdir -p "$BUILD_DIR/resources/app/extensions"
+
+            # 复制官方所有扩展
+            echo "📌 Copying official extensions..."
             cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
+
             echo "✅ Extensions copied from official build"
+
+            # 显示扩展数量
             echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
           else
             echo "⚠️ Could not find official extensions, using source extensions"
+
+            # 使用源码扩展
             if [ -d "./extensions" ]; then
               mkdir -p "$BUILD_DIR/resources/app/extensions"
               cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/"
@@ -373,52 +418,92 @@ jobs:
             fi
           fi
 
+          # 清理临时文件
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
-      - name: 📄 Create DEB package structure
+      - name: 📄 Copy config files and create launcher
         run: |
           echo "=========================================="
-          echo "📄 Creating DEB package structure"
+          echo "📄 Creating launcher and config"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_NAME="tscode"
-          DEB_VERSION="${VERSION}-1"
-          DEB_ARCH="amd64"
-          DEB_ROOT="$(pwd)/deb_root"
+          cd "$BUILD_DIR"
 
-          # 创建DEB目录结构
-          mkdir -p "$DEB_ROOT/DEBIAN"
-          mkdir -p "$DEB_ROOT/opt/tscode"
-          mkdir -p "$DEB_ROOT/usr/bin"
-          mkdir -p "$DEB_ROOT/usr/share/applications"
-          mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps"
+          # 复制配置文件
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
 
-          # 复制应用文件到 /opt/tscode
-          echo "📌 Copying application files to $DEB_ROOT/opt/tscode"
-          cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
+          # 找到可执行文件
+          REAL_EXEC=""
+          for name in code code-oss; do
+            if [ -f "./$name" ]; then
+              REAL_EXEC="$name"
+              break
+            fi
+          done
 
-          # 修复权限
-          find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
-          find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
-          chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
-          chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
-          chmod +x "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
-          find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
+          if [ -z "$REAL_EXEC" ]; then
+            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
+          fi
 
-          # 创建符号链接
-          ln -s /opt/tscode/tscode "$DEB_ROOT/usr/bin/tscode"
+          if [ -z "$REAL_EXEC" ]; then
+            echo "❌ No executable found!"
+            exit 1
+          fi
+
+          echo "✅ Found executable: $REAL_EXEC"
+          mv "$REAL_EXEC" "tscode"
+
+          # 创建启动脚本（直接使用可执行文件）
+          cat > start-tscode.sh << 'START_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="1.116.0"
+
+          if [ -f "$SCRIPT_DIR/tscode" ]; then
+              EXEC="$SCRIPT_DIR/tscode"
+          else
+              echo "VSCode executable not found!"
+              exit 1
+          fi
+
+          echo "=== TSCode for UOS ==="
+          echo "Starting TSCode..."
+
+          # 使用系统默认用户数据目录（像官方一样）
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              "$@"
+          START_EOF
+
+          chmod +x start-tscode.sh
+          chmod +x tscode
+          chmod +x chrome-sandbox 2>/dev/null || true
 
           # 创建桌面文件
-          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
+          cat > tscode.desktop << 'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
           Name=TSCode
           Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/tscode %F
-          Icon=tscode
+          Exec=./tscode %F
+          Icon=./resources/app/resources/linux/code.png
           Terminal=false
           Categories=Development;IDE;
           MimeType=text/plain;inode/directory;
@@ -426,205 +511,83 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # 复制图标
-          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
-            cp "$BUILD_DIR/resources/app/resources/linux/code.png" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-          else
-            # 创建简单图标
-            echo "Creating simple icon..."
-            convert -size 256x256 xc:blue -fill white -gravity center -pointsize 48 -annotate 0 "TSC" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png" 2>/dev/null || true
-          fi
+          echo "✅ Launcher and config created"
 
-          # 创建 DEBIAN/control 文件
-          cat > "$DEB_ROOT/DEBIAN/control" << EOF
-          Package: tscode
-          Version: $DEB_VERSION
-          Architecture: $DEB_ARCH
-          Maintainer: TSCode Team <tscode@example.com>
-          Description: TSCode - Code Editing. Redefined.
-           TSCode is a code editor redefined and optimized for building
-           and debugging modern web and cloud applications.
-          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
-          Recommends: git, python3
-          Homepage: https://github.com/tscode
-          Section: devel
-          Priority: optional
-          EOF
-
-          # 创建 postinst 脚本
-          cat > "$DEB_ROOT/DEBIAN/postinst" << 'EOF'
-          #!/bin/bash
-          set -e
-
-          # 更新桌面数据库
-          if command -v update-desktop-database >/dev/null 2>&1; then
-            update-desktop-database /usr/share/applications/
-          fi
-
-          # 更新图标缓存
-          if command -v update-icon-caches >/dev/null 2>&1; then
-            update-icon-caches /usr/share/icons/hicolor/
-          fi
-
-          echo "TSCode installed successfully!"
-          echo "Run 'tscode' to start the application."
-
-          exit 0
-          EOF
-
-          chmod +x "$DEB_ROOT/DEBIAN/postinst"
-
-          # 创建 prerm 脚本（卸载前清理）
-          cat > "$DEB_ROOT/DEBIAN/prerm" << 'EOF'
-          #!/bin/bash
-          set -e
-
-          # 清理用户配置？（保留）
-          echo "TSCode is being removed..."
-
-          exit 0
-          EOF
-
-          chmod +x "$DEB_ROOT/DEBIAN/prerm"
-
-          echo "✅ DEB package structure created"
-
-      - name: 📦 Build DEB package
+      - name: 📦 Package (official style)
         run: |
           echo "=========================================="
-          echo "📦 Building DEB package"
+          echo "📦 Package (official style)"
           echo "=========================================="
 
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_NAME="tscode"
-          DEB_VERSION="${VERSION}-1"
-          DEB_ROOT="$(pwd)/deb_root"
-
-          # 检查并修复符号链接
-          echo "📌 Checking symlinks..."
-          find "$DEB_ROOT" -type l -exec test -e {} \; -exec echo "✅ {} is valid" \; \
-            -o -type l -exec echo "⚠️ Broken symlink: {}" \;
-
-          echo ""
-          echo "📌 Building DEB package with fakeroot..."
-          echo "   Package: $DEB_NAME"
-          echo "   Version: $DEB_VERSION"
-          echo "   Architecture: amd64"
-
-          cd "$(dirname "$DEB_ROOT")"
-          fakeroot dpkg-deb --build "$DEB_ROOT" "$DEB_NAME-${DEB_VERSION}_amd64.deb"
-
-          if [ $? -eq 0 ] && [ -f "$DEB_NAME-${DEB_VERSION}_amd64.deb" ]; then
-            echo ""
-            echo "✅ DEB package built successfully!"
-            echo "📦 Package: $DEB_NAME-${DEB_VERSION}_amd64.deb"
-            ls -lh "$DEB_NAME-${DEB_VERSION}_amd64.deb"
-          else
-            echo "❌ Failed to build DEB package"
-            exit 1
-          fi
-
-          # 移动DEB文件到工作目录
-          mv "$DEB_NAME-${DEB_VERSION}_amd64.deb" "$GITHUB_WORKSPACE/"
-
-          cd "$GITHUB_WORKSPACE"
-
-      - name: 📄 Create installation script (backup)
-        run: |
-          echo "=========================================="
-          echo "📄 Creating offline installation script"
-          echo "=========================================="
-
+          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          cat > install-tscode.sh << 'EOF'
-          #!/bin/bash
-          # TSCode Offline Installation Script for UOS
+          # 修复所有权限（关键步骤）
+          echo "📌 Fixing permissions..."
+          find "$BUILD_DIR" -type f -exec chmod 644 {} \;
+          find "$BUILD_DIR" -type d -exec chmod 755 {} \;
 
-          set -e
+          # 设置可执行权限
+          chmod +x "$BUILD_DIR/tscode" 2>/dev/null || true
+          chmod +x "$BUILD_DIR/start-tscode.sh" 2>/dev/null || true
+          chmod +x "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
 
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          DEB_FILE="$(ls -1 $SCRIPT_DIR/tscode-*.deb 2>/dev/null | head -1)"
-
-          echo "=========================================="
-          echo "TSCode Offline Installer for UOS"
-          echo "=========================================="
-
-          if [ -z "$DEB_FILE" ]; then
-            echo "❌ No DEB package found in current directory!"
-            echo "Please make sure the .deb file is present."
-            exit 1
-          fi
-
-          echo "📦 Found package: $(basename $DEB_FILE)"
-          echo ""
-          echo "This will install TSCode system-wide."
-          echo "Root privileges required."
-          echo ""
-
-          read -p "Continue? [y/N] " -n 1 -r
-          echo
-          if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Installation cancelled."
-            exit 0
-          fi
-
-          echo "📌 Installing TSCode..."
-          sudo dpkg -i "$DEB_FILE"
-
-          echo "📌 Fixing dependencies..."
-          sudo apt-get install -f -y
+          # 设置 .node 文件权限
+          find "$BUILD_DIR" -name "*.node" -exec chmod 644 {} \;
 
           echo ""
-          echo "✅ Installation complete!"
-          echo ""
-          echo "Run 'tscode' to start TSCode."
-          echo "Or find TSCode in your application menu."
-          echo "=========================================="
-          EOF
-
-          chmod +x install-tscode.sh
-
-      - name: 📊 Verify DEB package
-        run: |
-          echo "=========================================="
-          echo "📊 Verifying DEB package"
-          echo "=========================================="
-
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_FILE="tscode-${VERSION}-1_amd64.deb"
-
-          if [ ! -f "$DEB_FILE" ]; then
-            echo "❌ DEB package not found: $DEB_FILE"
-            exit 1
-          fi
-
-          echo "📌 Package information:"
-          dpkg-deb --info "$DEB_FILE"
+          echo "📌 Pre-package validation:"
+          echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
+          echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
 
           echo ""
-          echo "📌 Package contents (first 30 lines):"
-          dpkg-deb --contents "$DEB_FILE" | head -30
+          echo "📌 Creating package with standard permissions..."
+
+          # 使用官方方式打包（不保留所有者和权限信息）
+          tar -czf "tscode-${VERSION}.tar.gz" \
+            --no-same-owner \
+            --no-same-permissions \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
+
+          # 同时创建 xz 格式（更小）
+          echo ""
+          echo "📌 Creating optimized package..."
+          tar -cJf "tscode-${VERSION}.tar.xz" \
+            --no-same-owner \
+            --no-same-permissions \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$(dirname "$BUILD_DIR")" \
+            "$(basename "$BUILD_DIR")"
+
+          # 创建校验文件
+          echo ""
+          echo "📌 Creating checksums..."
+          sha256sum "tscode-${VERSION}.tar.gz" > "tscode-${VERSION}.tar.gz.sha256"
+          sha256sum "tscode-${VERSION}.tar.xz" > "tscode-${VERSION}.tar.xz.sha256"
 
           echo ""
-          echo "📌 Package size:"
-          ls -lh "$DEB_FILE"
+          echo "✅ Packages created:"
+          ls -lh tscode-${VERSION}.*
 
           echo ""
-          echo "📌 Checking package integrity..."
-          dpkg-deb --validate "$DEB_FILE" && echo "✅ Package is valid" || echo "⚠️ Package validation issues"
-
-          # 创建校验和
-          sha256sum "$DEB_FILE" > "$DEB_FILE.sha256"
+          echo "📌 Package verification:"
+          echo "   tar.gz: $(file tscode-${VERSION}.tar.gz)"
+          echo "   tar.xz: $(file tscode-${VERSION}.tar.xz)"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: tscode-uos-deb
+          name: tscode-uos
           path: |
-            *.deb
-            *.deb.sha256
-            install-tscode.sh
+            tscode-*.tar.gz
+            tscode-*.tar.xz
+            tscode-*.sha256
           retention-days: 30
 
       - name: 📊 Build summary
@@ -635,20 +598,19 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "Package: DEB (Debian/UOS)"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "📦 DEB Package available:"
-            ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
+            echo "📦 Packages available:"
+            ls -lh tscode-*.*
             echo ""
-            echo "📖 Offline Installation on UOS:"
-            echo "  1. Download the DEB package"
-            echo "  2. sudo dpkg -i tscode-*.deb"
-            echo "  3. sudo apt-get install -f  (if needed)"
+            echo "📖 On UOS:"
+            echo "  1. tar -xzf tscode-*.tar.gz"
+            echo "  2. cd tscode-uos-x64"
+            echo "  3. ./tscode"
             echo ""
-            echo "  Or run the included install-tscode.sh script."
+            echo "  或使用 start-tscode.sh"
             echo "=========================================="
           fi
