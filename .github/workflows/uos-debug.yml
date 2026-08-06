@@ -18,18 +18,18 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      - name: 📦 Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '20.x'
 
-      - name: 🔧 Install system dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -39,21 +39,17 @@ jobs:
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils fakeroot dpkg-dev
 
-      - name: 🔧 Fix TypeScript scripts
+      - name: Fix TypeScript scripts
         run: |
           echo 'console.log("Preinstall OK");' > build/npm/preinstall.js
           sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
           echo 'console.log("Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-      - name: 📦 Install dependencies
-        run: |
-          echo "=========================================="
-          echo "📦 Installing dependencies"
-          echo "=========================================="
-          npm install --legacy-peer-deps
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
 
-      - name: 📦 Install build tools
+      - name: Install build tools
         run: |
           npm install -g tsx
           npm install --legacy-peer-deps \
@@ -61,7 +57,7 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      - name: 🔧 Fix extensions.ts
+      - name: Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           import { Stream } from "stream";
@@ -105,7 +101,7 @@ jobs:
             return Promise.resolve();
           }' > build/lib/fetch.ts
 
-      - name: 🔧 Fix gulpfile spawn calls
+      - name: Fix gulpfile spawn calls
         run: |
           python3 << 'PY_END'
           import re
@@ -119,7 +115,7 @@ jobs:
           print("spawn calls fixed")
           PY_END
 
-      - name: 🔧 Replace copilot.ts
+      - name: Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
           export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
@@ -134,7 +130,7 @@ jobs:
           }
           EOF
 
-      - name: 🔧 Disable Crashpad
+      - name: Disable Crashpad
         run: |
           echo "Disabling Crashpad"
           python3 << 'PY_JSON_END'
@@ -154,10 +150,6 @@ jobs:
 
           mkdir -p src/vs/platform/crash/common
           cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
           import { createDecorator } from '../../../base/common/instantiation.js';
           export const ICrashService = createDecorator<ICrashService>('crashService');
           export interface ICrashService { _serviceBrand: undefined; }
@@ -166,9 +158,8 @@ jobs:
               constructor() { console.log('Crash service disabled for UOS build'); }
           }
           CRASH_EOF
-          echo "crashService.ts created"
 
-      - name: ⚙️ Set env
+      - name: Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
@@ -177,7 +168,7 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
-      - name: 🔨 Build VSCode core
+      - name: Build VSCode core
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
@@ -186,52 +177,33 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
-
           echo "Start: $(date)"
-          echo "📌 Building VSCode core..."
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
 
-      - name: 🔧 Customize build for TSCode
+      - name: Customize build for TSCode
         run: |
-          echo "=========================================="
-          echo "🔧 Customizing build for TSCode"
-          echo "=========================================="
-
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
               BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
               break
             fi
           done
-
           if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
+            echo "Build directory not found!"
             exit 1
           fi
-
-          # 重命名可执行文件
           if [ -f "$BUILD_DIR/code" ]; then
-            echo "📌 Renaming code to tscode..."
             mv "$BUILD_DIR/code" "$BUILD_DIR/tscode"
           fi
-
-          # 修改 product.json
-          echo "📌 Updating product.json..."
           cat > /tmp/update_product.py << 'PY_PRODUCT_EOF'
-          import json
-          import os
-          import sys
-
+          import json, os, sys
           build_dir = sys.argv[1]
           product_file = os.path.join(build_dir, 'resources/app/product.json')
-
           if os.path.exists(product_file):
               with open(product_file, 'r') as f:
                   data = json.load(f)
-
               data['nameShort'] = 'TSCode'
               data['nameLong'] = 'TSCode - Code Editing. Redefined.'
               data['applicationName'] = 'tscode'
@@ -241,35 +213,19 @@ jobs:
               data['win32NameVersion'] = 'TSCode'
               data['urlProtocol'] = 'tscode'
               data['extensionAllowedProposedApi'] = []
-
               with open(product_file, 'w') as f:
                   json.dump(data, f, indent=2)
-              print("✅ product.json updated")
-          else:
-              print(f"❌ product.json not found at {product_file}")
-              sys.exit(1)
+              print("product.json updated")
           PY_PRODUCT_EOF
-
           python3 /tmp/update_product.py "$BUILD_DIR"
-
-          echo "✅ Customization complete"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      - name: 📦 Create .deb package
+      - name: Create .deb package
         run: |
-          echo "=========================================="
-          echo "📦 Creating .deb package"
-          echo "=========================================="
-
           BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          ARCH="amd64"
-
           DEB_ROOT="/tmp/tscode-deb"
-          mkdir -p "$DEB_ROOT"
           mkdir -p "$DEB_ROOT/DEBIAN"
-
-          # Create control file
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROL_EOF'
           Package: tscode
           Version: VERSION_PLACEHOLDER
@@ -280,17 +236,11 @@ jobs:
           Depends:
           Recommends:
           Description: TSCode - Custom Code Editor for UOS
-           TSCode is a custom build of Visual Studio Code optimized for UOS.
-           This package can be installed with apt or extracted and run directly.
           CONTROL_EOF
-
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/DEBIAN/control"
-
-          # Create postinst script
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINST_EOF'
           #!/bin/bash
           set -e
-
           if [ -d "/usr/share/tscode" ]; then
               if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
                   chown root:root /usr/share/tscode/chrome-sandbox 2>/dev/null || true
@@ -299,41 +249,21 @@ jobs:
               if command -v update-desktop-database > /dev/null 2>&1; then
                   update-desktop-database /usr/share/applications/ 2>/dev/null || true
               fi
-              echo ""
-              echo "=========================================="
-              echo "✅ TSCode installed successfully!"
-              echo "=========================================="
-              echo ""
-              echo "📖 Usage:"
-              echo "  tscode"
-              echo ""
-              echo "📖 Uninstall:"
-              echo "  sudo apt remove tscode"
-              echo "=========================================="
+              echo "TSCode installed successfully!"
           fi
           POSTINST_EOF
-
           chmod 755 "$DEB_ROOT/DEBIAN/postinst"
-
-          # Create prerm script
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERM_EOF'
           #!/bin/bash
           set -e
           echo "Removing TSCode..."
           PRERM_EOF
-
           chmod 755 "$DEB_ROOT/DEBIAN/prerm"
-
-          # Copy build files
-          echo "📌 Copying build files..."
           mkdir -p "$DEB_ROOT/usr/share/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/usr/share/tscode/"
-
-          # Create smart startup script
           cat > "$DEB_ROOT/usr/share/tscode/tscode.sh" << 'RUN_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -345,41 +275,21 @@ jobs:
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
-
           if [[ "$SCRIPT_DIR" == *"/usr/share/"* ]] || [[ "$SCRIPT_DIR" == *"/opt/"* ]]; then
               USER_DATA_DIR="$HOME/.config/tscode"
               EXEC="$SCRIPT_DIR/tscode"
-              echo "=== TSCode (System Mode) ==="
           else
               USER_DATA_DIR="$SCRIPT_DIR/user-data"
               mkdir -p "$USER_DATA_DIR"
               EXEC="$SCRIPT_DIR/tscode"
-              echo "=== TSCode (Portable Mode) ==="
-              echo "User data: $USER_DATA_DIR"
           fi
-
           mkdir -p "$USER_DATA_DIR/extensions"
-
-          exec "$EXEC" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$USER_DATA_DIR" \
-              --extensions-dir="$USER_DATA_DIR/extensions" \
-              "$@"
+          exec "$EXEC" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" --extensions-dir="$USER_DATA_DIR/extensions" "$@"
           RUN_EOF
-
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$DEB_ROOT/usr/share/tscode/tscode.sh"
           chmod +x "$DEB_ROOT/usr/share/tscode/tscode.sh"
-
-          # Create symlink
-          echo "📌 Creating symlinks..."
           mkdir -p "$DEB_ROOT/usr/bin"
           ln -s "/usr/share/tscode/tscode.sh" "$DEB_ROOT/usr/bin/tscode"
-
-          # Create desktop file
-          echo "📌 Creating desktop file..."
           mkdir -p "$DEB_ROOT/usr/share/applications"
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOP_EOF'
           [Desktop Entry]
@@ -395,54 +305,30 @@ jobs:
           StartupNotify=true
           StartupWMClass=TSCode
           DESKTOP_EOF
-
-          # Create icon
           if [ -f "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" ]; then
               mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
-              cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" \
-                 "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+              cp "$DEB_ROOT/usr/share/tscode/resources/app/resources/linux/code.png" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
           fi
-
           mkdir -p "$DEB_ROOT/usr/share/pixmaps"
-          ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" \
-                "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
-
-          # Calculate installed size
+          ln -s "/usr/share/icons/hicolor/256x256/apps/tscode.png" "$DEB_ROOT/usr/share/pixmaps/tscode.png" 2>/dev/null || true
           INSTALLED_SIZE=$(du -s "$DEB_ROOT/usr" | cut -f1)
           echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_ROOT/DEBIAN/control"
-
-          # Build .deb package
-          echo "📌 Building .deb package..."
           cd /tmp
           fakeroot dpkg-deb --build tscode-deb
           cd -
+          cp "/tmp/tscode-deb.deb" "./tscode_${VERSION}_amd64.deb"
+          echo "deb package created"
 
-          cp "/tmp/tscode-deb.deb" "./tscode_${VERSION}_${ARCH}.deb"
-
-          echo "✅ .deb package created successfully!"
-          echo "📦 Package: tscode_${VERSION}_${ARCH}.deb"
-          echo "📏 Size: $(du -h ./tscode_${VERSION}_${ARCH}.deb | cut -f1)"
-
-      - name: 📦 Create standalone portable version
+      - name: Create portable version
         run: |
-          echo "=========================================="
-          echo "📦 Creating standalone portable version"
-          echo "=========================================="
-
           BUILD_DIR="${BUILD_DIR}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
           PORTABLE_DIR="tscode-portable-${VERSION}"
           mkdir -p "$PORTABLE_DIR"
-
-          echo "📌 Copying build files..."
           cp -r "$BUILD_DIR"/* "$PORTABLE_DIR/"
-
-          # Create startup script
           cat > "$PORTABLE_DIR/start-tscode.sh" << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -454,34 +340,49 @@ jobs:
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
-
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
-
           echo "=== TSCode Portable ==="
           echo "User data: $USER_DATA_DIR"
-          echo ""
-
-          exec "$SCRIPT_DIR/tscode" \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --user-data-dir="$USER_DATA_DIR" \
-              --extensions-dir="$USER_DATA_DIR/extensions" \
-              "$@"
+          exec "$SCRIPT_DIR/tscode" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" --extensions-dir="$USER_DATA_DIR/extensions" "$@"
           START_EOF
-
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$PORTABLE_DIR/start-tscode.sh"
           chmod +x "$PORTABLE_DIR/start-tscode.sh"
           chmod +x "$PORTABLE_DIR/tscode"
+          tar -czf "tscode-portable-${VERSION}.tar.gz" "$PORTABLE_DIR"
+          echo "portable version created"
 
-          # Create README
-          cat > "$PORTABLE_DIR/README.md" << 'README_EOF'
-          # TSCode Portable
+      - name: List packages
+        run: |
+          echo "Generated packages:"
+          ls -lh *.deb *.tar.gz 2>/dev/null || echo "No packages found"
 
-          ## 无需 sudo 权限即可运行
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tscode-packages
+          path: |
+            tscode_*.deb
+            tscode-portable-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
 
-          ### 启动
-          ```bash
-          ./start-tscode.sh
+      - name: Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "BUILD SUMMARY"
+          echo "=========================================="
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" = "success" ]; then
+            echo ""
+            echo "Build completed successfully!"
+            echo ""
+            echo "Packages available in Artifacts:"
+            ls -lh *.deb *.tar.gz 2>/dev/null
+            echo ""
+            echo "Download from Artifacts section at the bottom"
+            echo "=========================================="
+          fi
