@@ -407,8 +407,11 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
 
-          # 创建符号链接
-          ln -s /opt/tscode/tscode "$DEB_ROOT/usr/bin/tscode"
+          # 创建符号链接 - 使用相对路径
+          echo "📌 Creating symlink..."
+          cd "$DEB_ROOT/usr/bin"
+          ln -sf /opt/tscode/tscode tscode
+          cd -
 
           # 创建桌面文件
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
@@ -499,6 +502,7 @@ jobs:
           DEB_NAME="tscode"
           DEB_VERSION="${VERSION}-1"
           DEB_ROOT="$(pwd)/deb_root"
+          DEB_OUTPUT="$(pwd)/tscode-${DEB_VERSION}_amd64.deb"
 
           # 检查并修复符号链接
           echo "📌 Checking symlinks..."
@@ -510,32 +514,30 @@ jobs:
           echo "   Package: $DEB_NAME"
           echo "   Version: $DEB_VERSION"
           echo "   Architecture: amd64"
+          echo "   Output: $DEB_OUTPUT"
 
-          cd "$(dirname "$DEB_ROOT")"
-          fakeroot dpkg-deb --build "$DEB_ROOT" "$DEB_NAME-${DEB_VERSION}_amd64.deb"
+          # 构建DEB包
+          cd "$(pwd)"
+          fakeroot dpkg-deb --build "$DEB_ROOT" "$DEB_OUTPUT"
 
-          if [ $? -eq 0 ] && [ -f "$DEB_NAME-${DEB_VERSION}_amd64.deb" ]; then
+          if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
             echo ""
             echo "✅ DEB package built successfully!"
-            echo "📦 Package: $DEB_NAME-${DEB_VERSION}_amd64.deb"
-            ls -lh "$DEB_NAME-${DEB_VERSION}_amd64.deb"
+            echo "📦 Package: $(basename $DEB_OUTPUT)"
+            ls -lh "$DEB_OUTPUT"
+
+            # 创建校验和
+            sha256sum "$DEB_OUTPUT" > "$DEB_OUTPUT.sha256"
           else
             echo "❌ Failed to build DEB package"
             exit 1
           fi
 
-          # 移动DEB文件到工作目录
-          mv "$DEB_NAME-${DEB_VERSION}_amd64.deb" "$GITHUB_WORKSPACE/"
-
-          cd "$GITHUB_WORKSPACE"
-
-      - name: 📄 Create installation script (backup)
+      - name: 📄 Create installation script
         run: |
           echo "=========================================="
           echo "📄 Creating offline installation script"
           echo "=========================================="
-
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           cat > install-tscode.sh << 'EOF'
           #!/bin/bash
@@ -614,8 +616,9 @@ jobs:
           echo "📌 Checking package integrity..."
           dpkg-deb --validate "$DEB_FILE" && echo "✅ Package is valid" || echo "⚠️ Package validation issues"
 
-          # 创建校验和
-          sha256sum "$DEB_FILE" > "$DEB_FILE.sha256"
+          echo ""
+          echo "📌 Checking symlinks in package:"
+          dpkg-deb --contents "$DEB_FILE" | grep "^l" || echo "No symlinks found"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
