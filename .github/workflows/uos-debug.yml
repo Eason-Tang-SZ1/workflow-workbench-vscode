@@ -255,7 +255,7 @@ jobs:
           echo "✅ Customization complete"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-      - name: 📦 Create .deb package (supports both install and extract)
+      - name: 📦 Create .deb package
         run: |
           echo "=========================================="
           echo "📦 Creating .deb package"
@@ -291,7 +291,6 @@ jobs:
           #!/bin/bash
           set -e
 
-          # Only run system-level operations if installed to system
           if [ -d "/usr/share/tscode" ]; then
               if [ -f "/usr/share/tscode/chrome-sandbox" ]; then
                   chown root:root /usr/share/tscode/chrome-sandbox 2>/dev/null || true
@@ -347,14 +346,11 @@ jobs:
           export VSCODE_APP_NAME="TSCode"
           export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
 
-          # Detect if running from extracted directory
           if [[ "$SCRIPT_DIR" == *"/usr/share/"* ]] || [[ "$SCRIPT_DIR" == *"/opt/"* ]]; then
-              # System installed mode
               USER_DATA_DIR="$HOME/.config/tscode"
               EXEC="$SCRIPT_DIR/tscode"
               echo "=== TSCode (System Mode) ==="
           else
-              # Portable mode (extracted from .deb)
               USER_DATA_DIR="$SCRIPT_DIR/user-data"
               mkdir -p "$USER_DATA_DIR"
               EXEC="$SCRIPT_DIR/tscode"
@@ -457,7 +453,7 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
-          export VSCODE_APP_VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
 
           USER_DATA_DIR="$SCRIPT_DIR/user-data"
           mkdir -p "$USER_DATA_DIR"
@@ -476,6 +472,7 @@ jobs:
               "$@"
           START_EOF
 
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$PORTABLE_DIR/start-tscode.sh"
           chmod +x "$PORTABLE_DIR/start-tscode.sh"
           chmod +x "$PORTABLE_DIR/tscode"
 
