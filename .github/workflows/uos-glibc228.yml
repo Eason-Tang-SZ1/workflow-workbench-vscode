@@ -14,28 +14,50 @@ on:
 
 jobs:
   build:
-    # 使用 ubuntu-22.04 作为宿主机，在 ubuntu:20.04 容器中构建以确保 glibc 2.28 兼容性
+    # 使用 ubuntu-22.04 作为宿主机，在 ubuntu:20.04 容器中构建
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
     timeout-minutes: 120
 
     steps:
-      - name: Configure Git safe directory
-        run: |
-          git config --global --add safe.directory /__w/workflow-workbench-vscode/workflow-workbench-vscode
-          apt-get update
-          apt-get install -y git
-
-      - name: Install system dependencies
+      # 第一步：安装基础工具（包括 Git）
+      - name: Install base tools
         run: |
           apt-get update
           apt-get install -y \
-            build-essential pkg-config libgtk-3-dev libxkbfile-dev \
-            libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
-            libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
-            libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
-            python3 python3-pip git wget curl tree xz-utils fakeroot dpkg-dev
+            git \
+            curl \
+            wget \
+            python3 \
+            python3-pip \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libxkbfile-dev \
+            libkrb5-dev \
+            libgbm-dev \
+            rpm \
+            libx11-dev \
+            libxss-dev \
+            libxtst-dev \
+            libnss3-dev \
+            libasound2-dev \
+            libglib2.0-dev \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libatk1.0-dev \
+            libgdk-pixbuf2.0-dev \
+            tree \
+            xz-utils \
+            fakeroot \
+            dpkg-dev
+
+      # 配置 Git safe directory（现在 Git 已安装）
+      - name: Configure Git safe directory
+        run: |
+          git config --global --add safe.directory /__w/workflow-workbench-vscode/workflow-workbench-vscode
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Setup Node.js
         run: |
