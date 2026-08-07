@@ -1,0 +1,66 @@
+# 1. 构建 VSCode 核心
+- name: Build VSCode core
+  run: |
+    export NODE_OPTIONS="--max-old-space-size=8192"
+    # ... (你原有的环境变量) ...
+    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+
+# 2. 注入你的自定义插件和修改（关键步骤）
+- name: Customize and inject plugins for TSCode
+  run: |
+    # 定位到官方构建的目录
+    BUILD_DIR="./VSCode-linux-x64"
+
+    # --- 添加你的自定义插件 ---
+    # 1. 将你的插件源码或打包好的插件文件夹复制到指定位置
+    #    假设你的插件在 ./my-extensions/ 目录下
+    if [ -d "./my-extensions" ]; then
+      echo "Copying custom extensions..."
+      mkdir -p "$BUILD_DIR/resources/app/extensions/"
+      cp -r ./my-extensions/* "$BUILD_DIR/resources/app/extensions/"
+    fi
+
+    # --- 重命名可执行文件 ---
+    if [ -f "$BUILD_DIR/code" ]; then
+      mv "$BUILD_DIR/code" "$BUILD_DIR/tscode"
+    fi
+
+    # --- 修改 product.json ---
+    cat > /tmp/update_product.py << 'PY_PRODUCT_EOF'
+  import json, os, sys
+  build_dir = sys.argv[1]
+  product_file = os.path.join(build_dir, 'resources/app/product.json')
+if os.path.exists(product_file):
+  with open(product_file, 'r') as f:
+    data = json.load(f)
+  data['nameShort'] = 'TSCode'
+  data['nameLong'] = 'TSCode - Code Editor'
+  data['applicationName'] = 'tscode'
+  # ... 其他自定义配置 ...
+  with open(product_file, 'w') as f:
+    json.dump(data, f, indent=2)
+  print("✅ product.json updated")
+  PY_PRODUCT_EOF
+
+  python3 /tmp/update_product.py "$BUILD_DIR"
+  echo "✅ Customization and plugins injection complete"
+
+# 3. 使用官方 Gulp 任务构建 .deb 包
+- name: Build .deb package using official Gulp task
+  run: |
+    # 官方任务会自动打包当前 VSCode-linux-x64 目录的内容
+    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-prepare-deb --no-color
+    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-build-deb --no-color
+    echo "Official .deb package built with custom plugins!"
+
+# 4. 定位并重命名最终的 .deb 包
+- name: Locate and rename .deb package
+  run: |
+    DEB_FILE=$(find .build/linux/deb/ -name "*.deb" -type f | head -1)
+    if [ -z "$DEB_FILE" ]; then
+      echo "::error::No .deb file found!"
+      exit 1
+    fi
+    VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+    cp "$DEB_FILE" "./tscode_${VERSION}_amd64.deb"
+    echo "✅ Final .deb package: tscode_${VERSION}_amd64.deb"
