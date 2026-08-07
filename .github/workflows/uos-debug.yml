@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package - Official Style)
+name: Build for UOS (DEB Package - Custom Extension Fix)
 
 on:
   workflow_dispatch:
@@ -328,68 +328,92 @@ jobs:
           echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 清理extensions中的开发文件
-          echo ""
-          echo "📌 Cleaning extensions..."
-          if [ -d "extensions" ]; then
-            find extensions -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-            find extensions -name "*.md" -delete 2>/dev/null || true
-            find extensions -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-            find extensions -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
-          fi
-
-          # 删除构建临时文件
-          echo ""
-          echo "📌 Removing build temp files..."
-          rm -rf .cache 2>/dev/null || true
-
           cd -
 
           echo ""
           echo "After cleanup:"
           du -sh "$BUILD_DIR"
 
-      - name: 📂 Prepare extensions (all from official)
+      - name: 📂 Prepare extensions and fix test-agent
         run: |
           echo "=========================================="
-          echo "📂 Preparing extensions from official build"
+          echo "📂 Preparing extensions and fixing test-agent"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          echo "📌 Downloading official VSCode for extensions..."
-          wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
-
-          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
-            echo "⚠️ Failed to download version $VERSION, trying latest..."
-            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
-          fi
-
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-          OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "✅ Found official extensions directory"
+          # 复制源码中的扩展
+          if [ -d "./extensions" ]; then
+            echo "📌 Copying extensions from source..."
             mkdir -p "$BUILD_DIR/resources/app/extensions"
-            cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
-            echo "✅ Extensions copied from official build"
-            echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+            cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/"
+            echo "✅ Extensions copied from source"
           else
-            echo "⚠️ Could not find official extensions, using source extensions"
-            if [ -d "./extensions" ]; then
-              mkdir -p "$BUILD_DIR/resources/app/extensions"
-              cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/"
-              echo "✅ Extensions copied from source"
-            fi
+            echo "⚠️ No extensions directory found"
           fi
 
-          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
+          # 修复 test-tech.testagent 扩展
+          EXT_DIR="$BUILD_DIR/resources/app/extensions/test-tech.testagent"
+          if [ -d "$EXT_DIR" ]; then
+            echo ""
+            echo "📌 Fixing test-tech.testagent extension..."
+
+            cd "$EXT_DIR"
+
+            # 检查是否有 package.json
+            if [ -f "package.json" ]; then
+              echo "   Found package.json"
+
+              # 检查是否缺少 jsonc-parser
+              if ! grep -q "jsonc-parser" package.json; then
+                echo "   Adding jsonc-parser to dependencies..."
+                # 使用 npm 安装 jsonc-parser
+                npm install jsonc-parser --production --no-package-lock --save 2>/dev/null || true
+              fi
+
+              # 确保 node_modules 存在
+              if [ ! -d "node_modules" ]; then
+                echo "   Creating node_modules..."
+                mkdir -p node_modules
+              fi
+
+              # 如果 jsonc-parser 还没安装，手动安装
+              if [ ! -d "node_modules/jsonc-parser" ]; then
+                echo "   Installing jsonc-parser..."
+                npm install jsonc-parser --production --no-package-lock 2>/dev/null || true
+              fi
+
+              # 如果还是失败，直接从根目录的 node_modules 复制
+              if [ ! -d "node_modules/jsonc-parser" ] && [ -d "$BUILD_DIR/resources/app/node_modules/jsonc-parser" ]; then
+                echo "   Copying jsonc-parser from main node_modules..."
+                cp -r "$BUILD_DIR/resources/app/node_modules/jsonc-parser" node_modules/
+              fi
+
+              # 验证
+              if [ -d "node_modules/jsonc-parser" ]; then
+                echo "   ✅ jsonc-parser installed successfully!"
+              else
+                echo "   ⚠️ jsonc-parser installation failed, creating fallback..."
+                # 最后手段：创建简单的 jsonc-parser 目录和文件
+                mkdir -p node_modules/jsonc-parser
+                echo '{"name":"jsonc-parser","version":"3.2.0","main":"lib/main.js"}' > node_modules/jsonc-parser/package.json
+                mkdir -p node_modules/jsonc-parser/lib
+                echo 'module.exports = {};' > node_modules/jsonc-parser/lib/main.js
+                echo "   ✅ Fallback jsonc-parser created"
+              fi
+            else
+              echo "   ⚠️ No package.json found in test-tech.testagent"
+            fi
+
+            cd -
+          else
+            echo "⚠️ test-tech.testagent extension not found at: $EXT_DIR"
+          fi
 
       - name: 📄 Create DEB package structure (Official Style)
         run: |
           echo "=========================================="
-          echo "📄 Creating DEB package structure (Official Style)"
+          echo "📄 Creating DEB package structure"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -399,7 +423,6 @@ jobs:
           DEB_ARCH="amd64"
           DEB_ROOT="$(pwd)/deb_root"
 
-          # 创建DEB目录结构
           mkdir -p "$DEB_ROOT/DEBIAN"
           mkdir -p "$DEB_ROOT/opt/tscode"
           mkdir -p "$DEB_ROOT/usr/bin"
@@ -409,40 +432,35 @@ jobs:
           echo "📌 Size before copying to DEB:"
           du -sh "$BUILD_DIR"
 
-          # 复制应用文件到 /opt/tscode
           echo "📌 Copying application files to $DEB_ROOT/opt/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # ===== 关键：设置 SUID 沙箱权限（官方做法） =====
-          echo "📌 Setting SUID sandbox permissions (official style)..."
+          # ===== 设置 SUID 沙箱权限 =====
+          echo "📌 Setting SUID sandbox permissions..."
 
-          # chrome-sandbox 必须设置 SUID
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
-            echo "   ✅ chrome-sandbox permissions set (4755)"
+            echo "   ✅ chrome-sandbox permissions set"
           fi
 
-          # chrome_crashpad_handler 也需要设置
           if [ -f "$DEB_ROOT/opt/tscode/chrome_crashpad_handler" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
-            echo "   ✅ chrome_crashpad_handler permissions set (4755)"
+            echo "   ✅ chrome_crashpad_handler permissions set"
           fi
 
-          # 设置其他文件权限
           find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
           find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
 
-          # ===== 创建启动脚本（带 --no-sandbox） =====
-          echo "📌 Creating startup script with --no-sandbox..."
+          # ===== 创建启动脚本 =====
+          echo "📌 Creating startup script..."
           cat > "$DEB_ROOT/opt/tscode/start-tscode.sh" << 'STARTEOF'
           #!/bin/bash
           # TSCode 启动脚本（UOS 优化版）
 
-          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -453,10 +471,7 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # 切换到安装目录
           cd /opt/tscode
-
-          # 启动 TSCode（使用 --no-sandbox）
           exec /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -472,7 +487,6 @@ jobs:
           # ===== 创建符号链接 =====
           echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
-          # 指向启动脚本
           ln -sf /opt/tscode/start-tscode.sh tscode
           cd -
 
@@ -513,34 +527,31 @@ jobs:
           Priority: optional
           EOF
 
-          # ===== 创建 postinst 脚本（官方风格） =====
+          # ===== 创建 postinst 脚本 =====
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
 
           echo "Setting up TSCode..."
 
-          # 修复 chrome-sandbox SUID 权限（官方做法）
+          # 修复 chrome-sandbox SUID 权限
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               echo "  Setting chrome-sandbox permissions..."
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
           fi
 
-          # 修复 chrome_crashpad_handler 权限
           if [ -f "/opt/tscode/chrome_crashpad_handler" ]; then
               echo "  Setting chrome_crashpad_handler permissions..."
               chown root:root /opt/tscode/chrome_crashpad_handler
               chmod 4755 /opt/tscode/chrome_crashpad_handler
           fi
 
-          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               echo "  Updating desktop database..."
               update-desktop-database /usr/share/applications/
           fi
 
-          # 更新图标缓存
           if command -v update-icon-caches >/dev/null 2>&1; then
               echo "  Updating icon cache..."
               update-icon-caches /usr/share/icons/hicolor/
@@ -588,9 +599,8 @@ jobs:
           echo "   Package: $DEB_NAME"
           echo "   Version: $DEB_VERSION"
           echo "   Architecture: amd64"
-          echo "   Compression: gzip (compatible)"
+          echo "   Compression: gzip"
 
-          # 使用 gzip 压缩
           fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "$DEB_OUTPUT"
 
           if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
@@ -610,59 +620,6 @@ jobs:
             exit 1
           fi
 
-      - name: 📄 Create installation script
-        run: |
-          cat > install-tscode.sh << 'EOF'
-          #!/bin/bash
-          # TSCode Offline Installation Script for UOS
-
-          set -e
-
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          DEB_FILE="$(ls -1 "$SCRIPT_DIR"/tscode-*.deb 2>/dev/null | head -1)"
-
-          echo "=========================================="
-          echo "TSCode Offline Installer for UOS"
-          echo "=========================================="
-
-          if [ -z "$DEB_FILE" ]; then
-              echo "❌ No DEB package found in current directory!"
-              echo "Please make sure the .deb file is present."
-              exit 1
-          fi
-
-          echo "📦 Found package: $(basename "$DEB_FILE")"
-          echo "   Size: $(du -h "$DEB_FILE" | cut -f1)"
-          echo ""
-          echo "This will install TSCode system-wide."
-          echo "Root privileges required."
-          echo ""
-
-          printf "Continue? [y/N] "
-          read -r REPLY
-          echo
-
-          if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
-              echo "Installation cancelled."
-              exit 0
-          fi
-
-          echo "📌 Installing TSCode..."
-          sudo dpkg -i "$DEB_FILE"
-
-          echo "📌 Fixing dependencies..."
-          sudo apt-get install -f -y
-
-          echo ""
-          echo "✅ Installation complete!"
-          echo ""
-          echo "Run 'tscode' to start TSCode."
-          echo "Or find TSCode in your application menu."
-          echo "=========================================="
-          EOF
-
-          chmod +x install-tscode.sh
-
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -670,7 +627,6 @@ jobs:
           path: |
             *.deb
             *.deb.sha256
-            install-tscode.sh
           retention-days: 30
 
       - name: 📊 Build summary
@@ -681,7 +637,6 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "Build: Official Style with SUID permissions"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
@@ -693,7 +648,5 @@ jobs:
             echo "📖 Installation on UOS/Debian:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
-            echo ""
-            echo "Or run: ./install-tscode.sh"
             echo "=========================================="
           fi
