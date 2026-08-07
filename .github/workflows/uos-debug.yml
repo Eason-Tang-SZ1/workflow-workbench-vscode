@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package - Optimized)
+name: Build for UOS (DEB Package - Size Optimized)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian
+            dpkg-dev fakeroot lintian upx-ucl
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -289,10 +289,50 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 🧹 Safe cleanup
+      - name: 📦 Compress binary files with UPX (safe level)
         run: |
           echo "=========================================="
-          echo "🧹 Safe cleanup (preserving runtime files)"
+          echo "📦 Compressing binaries with UPX"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+
+          # 查找并压缩可执行文件
+          echo "📌 Finding binaries to compress..."
+
+          # 压缩主程序（如果存在）
+          if [ -f "$BUILD_DIR/tscode" ]; then
+            echo "   Compressing tscode..."
+            SIZE_BEFORE=$(stat -c%s "$BUILD_DIR/tscode")
+            upx -1 "$BUILD_DIR/tscode" 2>/dev/null || true
+            SIZE_AFTER=$(stat -c%s "$BUILD_DIR/tscode")
+            echo "      Before: $(numfmt --to=iec $SIZE_BEFORE) -> After: $(numfmt --to=iec $SIZE_AFTER)"
+          fi
+
+          # 压缩 chrome-sandbox
+          if [ -f "$BUILD_DIR/chrome-sandbox" ]; then
+            echo "   Compressing chrome-sandbox..."
+            upx -1 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
+          fi
+
+          # 压缩 .node 原生模块（安全压缩，只压缩最大的几个）
+          echo ""
+          echo "📌 Compressing native modules (>10MB)..."
+          find "$BUILD_DIR/resources/app/node_modules" -name "*.node" -type f -size +10M 2>/dev/null | while read -r file; do
+            echo "   Compressing $(basename $file)..."
+            SIZE_BEFORE=$(stat -c%s "$file")
+            upx -1 "$file" 2>/dev/null || true
+            SIZE_AFTER=$(stat -c%s "$file")
+            echo "      Before: $(numfmt --to=iec $SIZE_BEFORE) -> After: $(numfmt --to=iec $SIZE_AFTER)"
+          done
+
+          echo ""
+          echo "✅ Binary compression completed"
+
+      - name: 🧹 Selective cleanup
+        run: |
+          echo "=========================================="
+          echo "🧹 Selective cleanup (safe)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -307,42 +347,43 @@ jobs:
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
           echo ""
-          echo "📌 Safe node_modules cleanup..."
+          echo "📌 Cleaning only non-essential files..."
 
-          # 只删除明确的开发文件，保留运行时需要的
-          echo "   Removing TypeScript source files (keeping .d.ts for types)..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          echo "   Removing markdown documentation..."
+          # 删除文档（这些不影响运行）
+          echo "   Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
 
+          # 删除测试目录（这些不影响运行）
           echo "   Removing test directories..."
-          find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" \) -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
 
+          # 删除示例（这些不影响运行）
           echo "   Removing example directories..."
-          find node_modules -type d \( -name "example" -o -name "examples" -o -name "demo" -o -name "demos" \) -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
 
+          # 删除 source maps（这些不影响运行）
           echo "   Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
 
+          # 删除 .git 目录
           echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 清理extensions中的开发文件
+          # 清理扩展中的类似文件
           echo ""
           echo "📌 Cleaning extensions..."
           if [ -d "extensions" ]; then
-            find extensions -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
             find extensions -name "*.md" -delete 2>/dev/null || true
             find extensions -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
             find extensions -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
+            find extensions -name "*.map" -delete 2>/dev/null || true
           fi
-
-          # 删除构建临时文件
-          echo ""
-          echo "📌 Removing build temp files..."
-          rm -rf .cache 2>/dev/null || true
 
           cd -
 
@@ -495,7 +536,7 @@ jobs:
           echo "DEB root size:"
           du -sh "$DEB_ROOT"
 
-      - name: 📦 Build DEB package with compression
+      - name: 📦 Build DEB package with optimized compression
         run: |
           echo "=========================================="
           echo "📦 Building DEB package"
@@ -512,10 +553,10 @@ jobs:
           echo "   Package: $DEB_NAME"
           echo "   Version: $DEB_VERSION"
           echo "   Architecture: amd64"
-          echo "   Compression: xz (better compression)"
+          echo "   Compression: gzip (compatible)"
 
-          # 使用xz压缩以获得更小的包
-          fakeroot dpkg-deb -Zxz --build "$DEB_ROOT" "$DEB_OUTPUT"
+          # 使用 gzip 最高压缩级别
+          fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "$DEB_OUTPUT"
 
           if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
             echo ""
@@ -527,9 +568,9 @@ jobs:
 
             echo ""
             echo "Size comparison:"
-            echo "  Source directory: $(du -sh $BUILD_DIR 2>/dev/null | cut -f1 || echo 'N/A')"
+            echo "  Source directory: $(du -sh $DEB_ROOT | cut -f1)"
             echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
-            echo "  Compression ratio: $(echo "scale=1; $(stat -c%s $DEB_OUTPUT) * 100 / $(du -sb $DEB_ROOT 2>/dev/null | cut -f1)" | bc 2>/dev/null || echo 'N/A')%"
+            echo "  Compression ratio: $(echo "scale=1; $(stat -c%s $DEB_OUTPUT) * 100 / $(du -sb $DEB_ROOT | cut -f1)" | bc 2>/dev/null || echo 'N/A')%"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -539,6 +580,8 @@ jobs:
         run: |
           cat > install-tscode.sh << 'EOF'
           #!/bin/bash
+          # TSCode Offline Installation Script for UOS
+
           set -e
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -549,22 +592,25 @@ jobs:
           echo "=========================================="
 
           if [ -z "$DEB_FILE" ]; then
-            echo "❌ No DEB package found!"
-            exit 1
+              echo "❌ No DEB package found in current directory!"
+              echo "Please make sure the .deb file is present."
+              exit 1
           fi
 
-          echo "📦 Found package: $(basename $DEB_FILE)"
-          echo "   Size: $(du -h $DEB_FILE | cut -f1)"
+          echo "📦 Found package: $(basename "$DEB_FILE")"
+          echo "   Size: $(du -h "$DEB_FILE" | cut -f1)"
           echo ""
           echo "This will install TSCode system-wide."
           echo "Root privileges required."
           echo ""
 
-          read -p "Continue? [y/N] " -n 1 -r
+          printf "Continue? [y/N] "
+          read -r REPLY
           echo
-          if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Installation cancelled."
-            exit 0
+
+          if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
+              echo "Installation cancelled."
+              exit 0
           fi
 
           echo "📌 Installing TSCode..."
@@ -575,7 +621,9 @@ jobs:
 
           echo ""
           echo "✅ Installation complete!"
+          echo ""
           echo "Run 'tscode' to start TSCode."
+          echo "Or find TSCode in your application menu."
           echo "=========================================="
           EOF
 
@@ -599,6 +647,8 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Compression: gzip level 9 (compatible)"
+          echo "Binary compression: UPX level 1 (safe)"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
@@ -607,7 +657,7 @@ jobs:
             echo "📦 DEB Package:"
             ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
             echo ""
-            echo "📖 Installation on UOS:"
+            echo "📖 Installation on UOS/Debian:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
             echo ""
