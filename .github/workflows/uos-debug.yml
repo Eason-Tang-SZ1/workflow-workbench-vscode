@@ -360,35 +360,29 @@ jobs:
 
             cd "$EXT_DIR"
 
-            # 检查是否有 package.json
             if [ -f "package.json" ]; then
               echo "   Found package.json"
 
-              # 检查是否缺少 jsonc-parser
               if ! grep -q "jsonc-parser" package.json; then
                 echo "   Adding jsonc-parser to dependencies..."
                 npm install jsonc-parser --production --no-package-lock --save 2>/dev/null || true
               fi
 
-              # 确保 node_modules 存在
               if [ ! -d "node_modules" ]; then
                 echo "   Creating node_modules..."
                 mkdir -p node_modules
               fi
 
-              # 如果 jsonc-parser 还没安装，手动安装
               if [ ! -d "node_modules/jsonc-parser" ]; then
                 echo "   Installing jsonc-parser..."
                 npm install jsonc-parser --production --no-package-lock 2>/dev/null || true
               fi
 
-              # 如果还是失败，直接从根目录的 node_modules 复制
               if [ ! -d "node_modules/jsonc-parser" ] && [ -d "$BUILD_DIR/resources/app/node_modules/jsonc-parser" ]; then
                 echo "   Copying jsonc-parser from main node_modules..."
                 cp -r "$BUILD_DIR/resources/app/node_modules/jsonc-parser" node_modules/
               fi
 
-              # 验证
               if [ -d "node_modules/jsonc-parser" ]; then
                 echo "   ✅ jsonc-parser installed successfully!"
               else
@@ -459,11 +453,10 @@ jobs:
           # 3. ripgrep 搜索工具（最关键）
           echo "   🔍 Fixing ripgrep (search)..."
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \;
-          find "$DEB_ROOT/opt/tscode" -name "ripgrep" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
           # 4. 语言服务器和调试适配器
           echo "   🔧 Fixing language servers & debug adapters..."
-          find "$DEB_ROOT/opt/tscode/resources/app/extensions" -type f -executable -exec chmod 755 {} \;
+          find "$DEB_ROOT/opt/tscode/resources/app/extensions" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
 
           # 5. Shell 和 Python 脚本
           echo "   📜 Fixing scripts..."
@@ -478,7 +471,9 @@ jobs:
 
           # 7. 通用：所有二进制文件（.bin 目录）
           echo "   🔧 Fixing .bin directories..."
-          find "$DEB_ROOT/opt/tscode" -type d -name ".bin" -exec find {} -type f -exec chmod 755 {} \; \;
+          find "$DEB_ROOT/opt/tscode" -type d -name ".bin" | while read -r bindir; do
+            find "$bindir" -type f -exec chmod 755 {} \;
+          done
 
           # 8. 最后：任何标记为可执行的文件
           echo "   ⚡ Fixing remaining executables..."
@@ -677,7 +672,6 @@ jobs:
             echo "  DEB root: $(du -sh $DEB_ROOT | cut -f1)"
             echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
 
-            # 验证包内关键文件的权限
             echo ""
             echo "📌 Verifying package permissions..."
             dpkg --contents "$DEB_OUTPUT" | grep -E "rg|chrome-sandbox|tscode" | head -20
