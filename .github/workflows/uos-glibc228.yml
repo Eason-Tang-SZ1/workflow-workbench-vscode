@@ -1,66 +1,474 @@
-# 1. 构建 VSCode 核心
-- name: Build VSCode core
-  run: |
-    export NODE_OPTIONS="--max-old-space-size=8192"
-    # ... (你原有的环境变量) ...
-    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+name: Build TSCode for UOS
 
-# 2. 注入你的自定义插件和修改（关键步骤）
-- name: Customize and inject plugins for TSCode
-  run: |
-    # 定位到官方构建的目录
-    BUILD_DIR="./VSCode-linux-x64"
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+      version:
+        description: 'Package version'
+        required: false
+        default: '1.116.0'
 
-    # --- 添加你的自定义插件 ---
-    # 1. 将你的插件源码或打包好的插件文件夹复制到指定位置
-    #    假设你的插件在 ./my-extensions/ 目录下
-    if [ -d "./my-extensions" ]; then
-      echo "Copying custom extensions..."
-      mkdir -p "$BUILD_DIR/resources/app/extensions/"
-      cp -r ./my-extensions/* "$BUILD_DIR/resources/app/extensions/"
-    fi
+jobs:
+  build:
+    # 使用 Ubuntu 20.04 以确保 glibc 2.28 兼容 Debian 10
+    runs-on: ubuntu-20.04
+    timeout-minutes: 120
 
-    # --- 重命名可执行文件 ---
-    if [ -f "$BUILD_DIR/code" ]; then
-      mv "$BUILD_DIR/code" "$BUILD_DIR/tscode"
-    fi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 1
 
-    # --- 修改 product.json ---
-    cat > /tmp/update_product.py << 'PY_PRODUCT_EOF'
-  import json, os, sys
-  build_dir = sys.argv[1]
-  product_file = os.path.join(build_dir, 'resources/app/product.json')
-if os.path.exists(product_file):
-  with open(product_file, 'r') as f:
-    data = json.load(f)
-  data['nameShort'] = 'TSCode'
-  data['nameLong'] = 'TSCode - Code Editor'
-  data['applicationName'] = 'tscode'
-  # ... 其他自定义配置 ...
-  with open(product_file, 'w') as f:
-    json.dump(data, f, indent=2)
-  print("✅ product.json updated")
-  PY_PRODUCT_EOF
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
 
-  python3 /tmp/update_product.py "$BUILD_DIR"
-  echo "✅ Customization and plugins injection complete"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config libgtk-3-dev libxkbfile-dev \
+            libkrb5-dev libgbm-dev rpm libx11-dev libxss-dev libxtst-dev \
+            libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
+            libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
+            python3 git wget curl tree xz-utils fakeroot dpkg-dev
 
-# 3. 使用官方 Gulp 任务构建 .deb 包
-- name: Build .deb package using official Gulp task
-  run: |
-    # 官方任务会自动打包当前 VSCode-linux-x64 目录的内容
-    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-prepare-deb --no-color
-    npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-build-deb --no-color
-    echo "Official .deb package built with custom plugins!"
+      - name: Fix TypeScript scripts
+        run: |
+          echo 'console.log("Preinstall OK");' > build/npm/preinstall.js
+          sed -i 's/"preinstall": "node build\/npm\/preinstall.ts"/"preinstall": "node build\/npm\/preinstall.js"/' package.json
+          echo 'console.log("Postinstall OK");' > build/npm/postinstall.js
+          sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
-# 4. 定位并重命名最终的 .deb 包
-- name: Locate and rename .deb package
-  run: |
-    DEB_FILE=$(find .build/linux/deb/ -name "*.deb" -type f | head -1)
-    if [ -z "$DEB_FILE" ]; then
-      echo "::error::No .deb file found!"
-      exit 1
-    fi
-    VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-    cp "$DEB_FILE" "./tscode_${VERSION}_amd64.deb"
-    echo "✅ Final .deb package: tscode_${VERSION}_amd64.deb"
+      - name: Install dependencies
+        run: |
+          echo "Installing npm dependencies..."
+          npm install --legacy-peer-deps
+
+      - name: Install build tools
+        run: |
+          npm install -g tsx
+          npm install --legacy-peer-deps \
+            ternary-stream vscode-gulp-watch esbuild jsonc-parser \
+            gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
+            gulp-rename gulp-sort 2>/dev/null || true
+
+      - name: Fix extensions.ts
+        run: |
+          cat > build/lib/extensions.ts << 'EOF'
+          import { Stream } from "stream";
+          const empty: any[] = [];
+          function emptyStream(): Stream {
+            const s = new Stream.Readable();
+            s._read = () => s.push(null);
+            return s;
+          }
+          export function isWebExtension(): boolean { return false; }
+          export function getExtensionStream(): Stream { return emptyStream(); }
+          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageExtensionsStream(): Stream { return emptyStream(); }
+          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+          export function fromMarketplace(): any[] { return empty; }
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
+          }
+          export function buildExtensionMedia(): void {}
+          export function compileExtensionMedia(): void {}
+          export function buildExtensionMediaTask(done: any): void { done(); }
+          export const builtInExtensions = empty;
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions = empty;
+          export const shouldDownloadWebBuiltInExtensions = false;
+          EOF
+          echo 'export const builtInExtensions: any[] = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
+          echo 'import { Stream } from "stream";
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
+          }' > build/lib/fetch.ts
+
+      - name: Fix gulpfile spawn calls
+        run: |
+          python3 << 'PY_END'
+          import re
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
+          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
+          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
+          print("spawn calls fixed")
+          PY_END
+
+      - name: Replace copilot.ts
+        run: |
+          cat > build/lib/copilot.ts << 'EOF'
+          export async function prepareBuiltInCopilotExtensionShims(extRoot: string): Promise<void> {
+              console.log('Copilot extension shims preparation skipped for UOS build');
+              return;
+          }
+          export function copyCopilotNativeDeps(productRoot: string): void {
+              console.log('Copilot native deps copy skipped for UOS build');
+          }
+          export function getCopilotExcludeFilter(): any {
+              return function() { return false; };
+          }
+          EOF
+
+      - name: Disable Crashpad
+        run: |
+          echo "Disabling Crashpad"
+          python3 << 'PY_JSON_END'
+          import json
+          import os
+          if os.path.exists('product.json'):
+              with open('product.json', 'r') as f:
+                  data = json.load(f)
+              data['enableCrashReport'] = False
+              if 'crashReporter' not in data:
+                  data['crashReporter'] = {}
+              data['crashReporter']['disabled'] = True
+              with open('product.json', 'w') as f:
+                  json.dump(data, f, indent=2)
+              print("product.json modified")
+          PY_JSON_END
+
+          mkdir -p src/vs/platform/crash/common
+          cat > src/vs/platform/crash/common/crashService.ts << 'CRASH_EOF'
+          import { createDecorator } from '../../../base/common/instantiation.js';
+          export const ICrashService = createDecorator<ICrashService>('crashService');
+          export interface ICrashService { _serviceBrand: undefined; }
+          export class CrashService implements ICrashService {
+              declare readonly _serviceBrand: undefined;
+              constructor() { console.log('Crash service disabled for UOS build'); }
+          }
+          CRASH_EOF
+
+      - name: Set environment variables
+        run: |
+          echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
+          echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+
+      # ============================================================
+      # 第一步：构建 VSCode 核心
+      # ============================================================
+      - name: Build VSCode core
+        run: |
+          export NODE_OPTIONS="--max-old-space-size=8192"
+          export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
+          export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
+          export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          echo "Start: $(date)"
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
+          echo "Done: $(date)"
+
+      # ============================================================
+      # 第二步：注入自定义插件和修改
+      # ============================================================
+      - name: Customize TSCode with plugins
+        run: |
+          echo "=========================================="
+          echo "Customizing TSCode with plugins"
+          echo "=========================================="
+
+          BUILD_DIR="./VSCode-linux-x64"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "Build directory not found!"
+            exit 1
+          fi
+
+          # --- 1. 添加自定义插件 ---
+          echo "📌 Adding custom plugins..."
+          if [ -d "./custom-extensions" ]; then
+            mkdir -p "$BUILD_DIR/resources/app/extensions/"
+            cp -r ./custom-extensions/* "$BUILD_DIR/resources/app/extensions/"
+            echo "✅ Custom plugins copied"
+            echo "   Plugins count: $(ls -1 ./custom-extensions | wc -l)"
+          else
+            echo "⚠️ No custom-extensions directory found, skipping..."
+          fi
+
+          # --- 2. 重命名可执行文件 ---
+          echo "📌 Renaming executable..."
+          if [ -f "$BUILD_DIR/code" ]; then
+            mv "$BUILD_DIR/code" "$BUILD_DIR/tscode"
+            echo "✅ Renamed code to tscode"
+          fi
+
+          # --- 3. 修改 product.json ---
+          echo "📌 Updating product.json..."
+          cat > /tmp/update_product.py << 'PY_PRODUCT_EOF'
+          import json
+          import os
+          import sys
+
+          build_dir = sys.argv[1]
+          product_file = os.path.join(build_dir, 'resources/app/product.json')
+
+          if os.path.exists(product_file):
+              with open(product_file, 'r') as f:
+                  data = json.load(f)
+
+              # 修改应用名称
+              data['nameShort'] = 'TSCode'
+              data['nameLong'] = 'TSCode - Code Editor'
+              data['applicationName'] = 'tscode'
+              data['win32AppUserModelId'] = 'TSCode.TSCode'
+              data['win32MutexName'] = 'tscode'
+              data['win32DirName'] = 'TSCode'
+              data['win32NameVersion'] = 'TSCode'
+              data['urlProtocol'] = 'tscode'
+              data['extensionAllowedProposedApi'] = []
+
+              with open(product_file, 'w') as f:
+                  json.dump(data, f, indent=2)
+              print("✅ product.json updated")
+          else:
+              print(f"❌ product.json not found at {product_file}")
+              sys.exit(1)
+          PY_PRODUCT_EOF
+
+          python3 /tmp/update_product.py "$BUILD_DIR"
+
+          # --- 4. 创建启动脚本（用于便携模式） ---
+          echo "📌 Creating startup script..."
+          cat > "$BUILD_DIR/tscode.sh" << 'RUN_EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export VSCODE_APP_NAME="TSCode"
+          export VSCODE_APP_VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          if [[ "$SCRIPT_DIR" == *"/usr/share/"* ]] || [[ "$SCRIPT_DIR" == *"/opt/"* ]]; then
+              USER_DATA_DIR="$HOME/.config/tscode"
+              EXEC="$SCRIPT_DIR/tscode"
+          else
+              USER_DATA_DIR="$SCRIPT_DIR/user-data"
+              mkdir -p "$USER_DATA_DIR"
+              EXEC="$SCRIPT_DIR/tscode"
+          fi
+
+          mkdir -p "$USER_DATA_DIR/extensions"
+
+          exec "$EXEC" \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --user-data-dir="$USER_DATA_DIR" \
+              --extensions-dir="$USER_DATA_DIR/extensions" \
+              "$@"
+          RUN_EOF
+
+          chmod +x "$BUILD_DIR/tscode.sh"
+          echo "✅ Startup script created"
+
+          echo ""
+          echo "📁 Build directory contents:"
+          ls -la "$BUILD_DIR" | head -20
+
+      # ============================================================
+      # 第三步：使用官方 Gulp 任务构建 .deb 包
+      # ============================================================
+      - name: Build .deb package using official Gulp task
+        run: |
+          echo "=========================================="
+          echo "Building .deb package with official Gulp task"
+          echo "=========================================="
+
+          export NODE_OPTIONS="--max-old-space-size=8192"
+
+          # 准备 .deb 包
+          echo "📌 Preparing .deb package..."
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-prepare-deb --no-color
+
+          # 构建 .deb 包
+          echo "📌 Building .deb package..."
+          npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64-build-deb --no-color
+
+          echo "✅ Official .deb package built successfully!"
+
+      # ============================================================
+      # 第四步：定位并重命名 .deb 包
+      # ============================================================
+      - name: Locate and rename .deb package
+        run: |
+          echo "=========================================="
+          echo "Locating .deb package"
+          echo "=========================================="
+
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          # 查找官方构建的 .deb 包
+          DEB_FILE=$(find .build/linux/deb/ -name "*.deb" -type f 2>/dev/null | head -1)
+
+          if [ -z "$DEB_FILE" ]; then
+            echo "❌ No .deb file found in .build/linux/deb/"
+            echo "Searching in all locations..."
+            find . -name "*.deb" -type f 2>/dev/null
+            exit 1
+          fi
+
+          echo "✅ Found .deb package: $DEB_FILE"
+          echo "📏 Size: $(du -h "$DEB_FILE" | cut -f1)"
+
+          # 复制到工作目录并重命名
+          cp "$DEB_FILE" "./tscode_${VERSION}_amd64.deb"
+          echo "✅ Copied to: ./tscode_${VERSION}_amd64.deb"
+
+      # ============================================================
+      # 第五步：创建便携版（无需安装）
+      # ============================================================
+      - name: Create portable version
+        run: |
+          echo "=========================================="
+          echo "Creating portable version"
+          echo "=========================================="
+
+          BUILD_DIR="./VSCode-linux-x64"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "⚠️ Build directory not found, skipping portable version"
+            exit 0
+          fi
+
+          PORTABLE_DIR="tscode-portable-${VERSION}"
+          mkdir -p "$PORTABLE_DIR"
+
+          echo "📌 Copying build files..."
+          cp -r "$BUILD_DIR"/* "$PORTABLE_DIR/"
+
+          # 确保启动脚本存在
+          if [ ! -f "$PORTABLE_DIR/tscode.sh" ]; then
+            cat > "$PORTABLE_DIR/tscode.sh" << 'START_EOF'
+            #!/bin/bash
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            export ELECTRON_ENABLE_GPU=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            export ELECTRON_DISABLE_SANDBOX=1
+            export GDK_BACKEND=x11
+            export QT_QPA_PLATFORM=xcb
+            export ELECTRON_DISABLE_CRASH_REPORTER=1
+            export ELECTRON_DISABLE_CRASH_REPORTING=1
+            export CRASHPAD_DISABLE=1
+            export VSCODE_APP_NAME="TSCode"
+            export VSCODE_APP_VERSION="VERSION_PLACEHOLDER"
+            USER_DATA_DIR="$SCRIPT_DIR/user-data"
+            mkdir -p "$USER_DATA_DIR"
+            echo "=== TSCode Portable ==="
+            echo "User data: $USER_DATA_DIR"
+            exec "$SCRIPT_DIR/tscode" --no-sandbox --disable-gpu-sandbox --disable-software-rasterizer --disable-gpu --user-data-dir="$USER_DATA_DIR" --extensions-dir="$USER_DATA_DIR/extensions" "$@"
+            START_EOF
+            sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" "$PORTABLE_DIR/tscode.sh"
+            chmod +x "$PORTABLE_DIR/tscode.sh"
+          fi
+
+          chmod +x "$PORTABLE_DIR/tscode"
+
+          # 打包
+          tar -czf "tscode-portable-${VERSION}.tar.gz" "$PORTABLE_DIR"
+          echo "✅ Portable version created: tscode-portable-${VERSION}.tar.gz"
+
+      # ============================================================
+      # 第六步：列出所有产物
+      # ============================================================
+      - name: List all artifacts
+        run: |
+          echo "=========================================="
+          echo "All generated artifacts"
+          echo "=========================================="
+          echo ""
+          echo "📦 .deb packages:"
+          ls -lh *.deb 2>/dev/null || echo "  No .deb files found"
+          echo ""
+          echo "📦 Portable versions:"
+          ls -lh *.tar.gz 2>/dev/null || echo "  No .tar.gz files found"
+          echo ""
+          echo "📁 Current directory:"
+          ls -la
+
+      # ============================================================
+      # 第七步：上传到 GitHub Actions Artifacts
+      # ============================================================
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tscode-packages
+          path: |
+            tscode_*.deb
+            tscode-portable-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      # ============================================================
+      # 第八步：构建总结
+      # ============================================================
+      - name: Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "BUILD SUMMARY"
+          echo "=========================================="
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Runner: ${{ runner.os }} ${{ runner.arch }}"
+          echo "=========================================="
+          if [ "${{ job.status }}" = "success" ]; then
+            echo ""
+            echo "✅ Build completed successfully!"
+            echo ""
+            echo "📦 Packages available in Artifacts:"
+            ls -lh *.deb *.tar.gz 2>/dev/null
+            echo ""
+            echo "📥 Download from Artifacts section at the bottom"
+            echo ""
+            echo "📖 Installation:"
+            echo "  sudo apt install ./tscode_${VERSION}_amd64.deb"
+            echo ""
+            echo "  Or portable version:"
+            echo "  tar -xzf tscode-portable-${VERSION}.tar.gz"
+            echo "  cd tscode-portable-${VERSION}"
+            echo "  ./tscode.sh"
+            echo "=========================================="
+          else
+            echo ""
+            echo "❌ Build failed!"
+            echo "Check the logs above for errors."
+            echo "=========================================="
+          fi
