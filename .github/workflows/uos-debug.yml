@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package - Size Optimized)
+name: Build for UOS (DEB Package - Official Style)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian upx-ucl
+            dpkg-dev fakeroot lintian
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -289,50 +289,10 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 📦 Compress binary files with UPX (safe level)
+      - name: 🧹 Safe cleanup
         run: |
           echo "=========================================="
-          echo "📦 Compressing binaries with UPX"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
-
-          # 查找并压缩可执行文件
-          echo "📌 Finding binaries to compress..."
-
-          # 压缩主程序（如果存在）
-          if [ -f "$BUILD_DIR/tscode" ]; then
-            echo "   Compressing tscode..."
-            SIZE_BEFORE=$(stat -c%s "$BUILD_DIR/tscode")
-            upx -1 "$BUILD_DIR/tscode" 2>/dev/null || true
-            SIZE_AFTER=$(stat -c%s "$BUILD_DIR/tscode")
-            echo "      Before: $(numfmt --to=iec $SIZE_BEFORE) -> After: $(numfmt --to=iec $SIZE_AFTER)"
-          fi
-
-          # 压缩 chrome-sandbox
-          if [ -f "$BUILD_DIR/chrome-sandbox" ]; then
-            echo "   Compressing chrome-sandbox..."
-            upx -1 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
-          fi
-
-          # 压缩 .node 原生模块（安全压缩，只压缩最大的几个）
-          echo ""
-          echo "📌 Compressing native modules (>10MB)..."
-          find "$BUILD_DIR/resources/app/node_modules" -name "*.node" -type f -size +10M 2>/dev/null | while read -r file; do
-            echo "   Compressing $(basename $file)..."
-            SIZE_BEFORE=$(stat -c%s "$file")
-            upx -1 "$file" 2>/dev/null || true
-            SIZE_AFTER=$(stat -c%s "$file")
-            echo "      Before: $(numfmt --to=iec $SIZE_BEFORE) -> After: $(numfmt --to=iec $SIZE_AFTER)"
-          done
-
-          echo ""
-          echo "✅ Binary compression completed"
-
-      - name: 🧹 Selective cleanup
-        run: |
-          echo "=========================================="
-          echo "🧹 Selective cleanup (safe)"
+          echo "🧹 Safe cleanup (preserving runtime files)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -347,43 +307,41 @@ jobs:
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
           echo ""
-          echo "📌 Cleaning only non-essential files..."
+          echo "📌 Safe node_modules cleanup..."
 
-          # 删除文档（这些不影响运行）
-          echo "   Removing documentation..."
+          echo "   Removing TypeScript source files (keeping .d.ts for types)..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+
+          echo "   Removing markdown documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
 
-          # 删除测试目录（这些不影响运行）
           echo "   Removing test directories..."
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" \) -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除示例（这些不影响运行）
           echo "   Removing example directories..."
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d \( -name "example" -o -name "examples" -o -name "demo" -o -name "demos" \) -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除 source maps（这些不影响运行）
           echo "   Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
 
-          # 删除 .git 目录
           echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 清理扩展中的类似文件
+          # 清理extensions中的开发文件
           echo ""
           echo "📌 Cleaning extensions..."
           if [ -d "extensions" ]; then
+            find extensions -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
             find extensions -name "*.md" -delete 2>/dev/null || true
             find extensions -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
             find extensions -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
-            find extensions -name "*.map" -delete 2>/dev/null || true
           fi
+
+          # 删除构建临时文件
+          echo ""
+          echo "📌 Removing build temp files..."
+          rm -rf .cache 2>/dev/null || true
 
           cd -
 
@@ -428,10 +386,10 @@ jobs:
 
           rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
 
-      - name: 📄 Create DEB package structure
+      - name: 📄 Create DEB package structure (Official Style)
         run: |
           echo "=========================================="
-          echo "📄 Creating DEB package structure"
+          echo "📄 Creating DEB package structure (Official Style)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -441,6 +399,7 @@ jobs:
           DEB_ARCH="amd64"
           DEB_ROOT="$(pwd)/deb_root"
 
+          # 创建DEB目录结构
           mkdir -p "$DEB_ROOT/DEBIAN"
           mkdir -p "$DEB_ROOT/opt/tscode"
           mkdir -p "$DEB_ROOT/usr/bin"
@@ -450,29 +409,81 @@ jobs:
           echo "📌 Size before copying to DEB:"
           du -sh "$BUILD_DIR"
 
+          # 复制应用文件到 /opt/tscode
           echo "📌 Copying application files to $DEB_ROOT/opt/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # 修复权限
+          # ===== 关键：设置 SUID 沙箱权限（官方做法） =====
+          echo "📌 Setting SUID sandbox permissions (official style)..."
+
+          # chrome-sandbox 必须设置 SUID
+          if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
+            sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            echo "   ✅ chrome-sandbox permissions set (4755)"
+          fi
+
+          # chrome_crashpad_handler 也需要设置
+          if [ -f "$DEB_ROOT/opt/tscode/chrome_crashpad_handler" ]; then
+            sudo chown root:root "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
+            sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
+            echo "   ✅ chrome_crashpad_handler permissions set (4755)"
+          fi
+
+          # 设置其他文件权限
           find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
           find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
-          chmod +x "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
 
-          # 创建符号链接
+          # ===== 创建启动脚本（带 --no-sandbox） =====
+          echo "📌 Creating startup script with --no-sandbox..."
+          cat > "$DEB_ROOT/opt/tscode/start-tscode.sh" << 'STARTEOF'
+          #!/bin/bash
+          # TSCode 启动脚本（UOS 优化版）
+
+          # 设置环境变量
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+
+          # 切换到安装目录
+          cd /opt/tscode
+
+          # 启动 TSCode（使用 --no-sandbox）
+          exec /opt/tscode/tscode \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --disable-crash-reporter \
+              --disable-breakpad \
+              "$@"
+          STARTEOF
+
+          chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh"
+
+          # ===== 创建符号链接 =====
+          echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
-          ln -sf /opt/tscode/tscode tscode
+          # 指向启动脚本
+          ln -sf /opt/tscode/start-tscode.sh tscode
           cd -
 
-          # 创建桌面文件
+          # ===== 创建桌面文件 =====
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
           Name=TSCode
           Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/tscode %F
+          Exec=/opt/tscode/start-tscode.sh %F
           Icon=tscode
           Terminal=false
           Categories=Development;IDE;
@@ -481,12 +492,12 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # 复制图标
+          # ===== 复制图标 =====
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
           fi
 
-          # 创建 DEBIAN/control 文件
+          # ===== 创建 DEBIAN/control 文件 =====
           cat > "$DEB_ROOT/DEBIAN/control" << EOF
           Package: tscode
           Version: $DEB_VERSION
@@ -495,40 +506,64 @@ jobs:
           Description: TSCode - Code Editing. Redefined.
            TSCode is a code editor redefined and optimized for building
            and debugging modern web and cloud applications.
-          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
+          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
           Recommends: git, python3
           Homepage: https://github.com/tscode
           Section: devel
           Priority: optional
           EOF
 
-          # 创建 postinst 脚本
-          cat > "$DEB_ROOT/DEBIAN/postinst" << 'EOF'
+          # ===== 创建 postinst 脚本（官方风格） =====
+          cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
 
+          echo "Setting up TSCode..."
+
+          # 修复 chrome-sandbox SUID 权限（官方做法）
+          if [ -f "/opt/tscode/chrome-sandbox" ]; then
+              echo "  Setting chrome-sandbox permissions..."
+              chown root:root /opt/tscode/chrome-sandbox
+              chmod 4755 /opt/tscode/chrome-sandbox
+          fi
+
+          # 修复 chrome_crashpad_handler 权限
+          if [ -f "/opt/tscode/chrome_crashpad_handler" ]; then
+              echo "  Setting chrome_crashpad_handler permissions..."
+              chown root:root /opt/tscode/chrome_crashpad_handler
+              chmod 4755 /opt/tscode/chrome_crashpad_handler
+          fi
+
+          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
-            update-desktop-database /usr/share/applications/
+              echo "  Updating desktop database..."
+              update-desktop-database /usr/share/applications/
           fi
 
+          # 更新图标缓存
           if command -v update-icon-caches >/dev/null 2>&1; then
-            update-icon-caches /usr/share/icons/hicolor/
+              echo "  Updating icon cache..."
+              update-icon-caches /usr/share/icons/hicolor/
           fi
 
-          echo "TSCode installed successfully!"
+          echo ""
+          echo "✅ TSCode installed successfully!"
+          echo ""
           echo "Run 'tscode' to start the application."
+          echo "=========================================="
 
           exit 0
-          EOF
+          POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          cat > "$DEB_ROOT/DEBIAN/prerm" << 'EOF'
+          # ===== 创建 prerm 脚本 =====
+          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
           echo "TSCode is being removed..."
           exit 0
-          EOF
+          PRERMEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/prerm"
 
@@ -536,7 +571,7 @@ jobs:
           echo "DEB root size:"
           du -sh "$DEB_ROOT"
 
-      - name: 📦 Build DEB package with optimized compression
+      - name: 📦 Build DEB package
         run: |
           echo "=========================================="
           echo "📦 Building DEB package"
@@ -555,7 +590,7 @@ jobs:
           echo "   Architecture: amd64"
           echo "   Compression: gzip (compatible)"
 
-          # 使用 gzip 最高压缩级别
+          # 使用 gzip 压缩
           fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "$DEB_OUTPUT"
 
           if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
@@ -568,9 +603,8 @@ jobs:
 
             echo ""
             echo "Size comparison:"
-            echo "  Source directory: $(du -sh $DEB_ROOT | cut -f1)"
+            echo "  DEB root: $(du -sh $DEB_ROOT | cut -f1)"
             echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
-            echo "  Compression ratio: $(echo "scale=1; $(stat -c%s $DEB_OUTPUT) * 100 / $(du -sb $DEB_ROOT | cut -f1)" | bc 2>/dev/null || echo 'N/A')%"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -585,7 +619,7 @@ jobs:
           set -e
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          DEB_FILE="$(ls -1 $SCRIPT_DIR/tscode-*.deb 2>/dev/null | head -1)"
+          DEB_FILE="$(ls -1 "$SCRIPT_DIR"/tscode-*.deb 2>/dev/null | head -1)"
 
           echo "=========================================="
           echo "TSCode Offline Installer for UOS"
@@ -647,8 +681,7 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
-          echo "Compression: gzip level 9 (compatible)"
-          echo "Binary compression: UPX level 1 (safe)"
+          echo "Build: Official Style with SUID permissions"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
