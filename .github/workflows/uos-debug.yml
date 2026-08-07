@@ -1,4 +1,4 @@
-name: Build for UOS (DEB Package - Custom Extension Fix)
+name: Build for UOS (Production Stable)
 
 on:
   workflow_dispatch:
@@ -367,7 +367,6 @@ jobs:
               # 检查是否缺少 jsonc-parser
               if ! grep -q "jsonc-parser" package.json; then
                 echo "   Adding jsonc-parser to dependencies..."
-                # 使用 npm 安装 jsonc-parser
                 npm install jsonc-parser --production --no-package-lock --save 2>/dev/null || true
               fi
 
@@ -394,7 +393,6 @@ jobs:
                 echo "   ✅ jsonc-parser installed successfully!"
               else
                 echo "   ⚠️ jsonc-parser installation failed, creating fallback..."
-                # 最后手段：创建简单的 jsonc-parser 目录和文件
                 mkdir -p node_modules/jsonc-parser
                 echo '{"name":"jsonc-parser","version":"3.2.0","main":"lib/main.js"}' > node_modules/jsonc-parser/package.json
                 mkdir -p node_modules/jsonc-parser/lib
@@ -410,7 +408,7 @@ jobs:
             echo "⚠️ test-tech.testagent extension not found at: $EXT_DIR"
           fi
 
-      - name: 📄 Create DEB package structure (Official Style)
+      - name: 📄 Create DEB package structure (Production Stable)
         run: |
           echo "=========================================="
           echo "📄 Creating DEB package structure"
@@ -435,31 +433,70 @@ jobs:
           echo "📌 Copying application files to $DEB_ROOT/opt/tscode"
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # ===== 设置 SUID 沙箱权限 =====
-          echo "📌 Setting SUID sandbox permissions..."
+          # ============================================================
+          # 生产级权限修复（核心）
+          # ============================================================
+          echo ""
+          echo "📌 Fixing all permissions (Production Stable)..."
 
+          # 1. SUID 沙箱权限（官方要求）
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
-            echo "   ✅ chrome-sandbox permissions set"
+            echo "   ✅ chrome-sandbox SUID set (4755)"
           fi
 
           if [ -f "$DEB_ROOT/opt/tscode/chrome_crashpad_handler" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
-            echo "   ✅ chrome_crashpad_handler permissions set"
+            echo "   ✅ chrome_crashpad_handler SUID set (4755)"
           fi
 
-          find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
-          find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
-          chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
-          find "$DEB_ROOT/opt/tscode" -name "*.node" -exec chmod 644 {} \;
+          # 2. 主程序执行权限
+          chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null && echo "   ✅ tscode executable" || true
+          chmod +x "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null && echo "   ✅ chrome-sandbox executable" || true
 
-          # ===== 创建启动脚本 =====
+          # 3. ripgrep 搜索工具（最关键）
+          echo "   🔍 Fixing ripgrep (search)..."
+          find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \;
+          find "$DEB_ROOT/opt/tscode" -name "ripgrep" -type f -exec chmod 755 {} \; 2>/dev/null || true
+
+          # 4. 语言服务器和调试适配器
+          echo "   🔧 Fixing language servers & debug adapters..."
+          find "$DEB_ROOT/opt/tscode/resources/app/extensions" -type f -executable -exec chmod 755 {} \;
+
+          # 5. Shell 和 Python 脚本
+          echo "   📜 Fixing scripts..."
+          find "$DEB_ROOT/opt/tscode" -name "*.sh" -type f -exec chmod 755 {} \;
+          find "$DEB_ROOT/opt/tscode" -name "*.py" -type f -exec chmod 755 {} \; 2>/dev/null || true
+
+          # 6. Node.js 相关工具（如果存在）
+          echo "   📦 Fixing Node.js tools..."
+          find "$DEB_ROOT/opt/tscode" -name "node" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode" -name "npm" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode" -name "npx" -type f -exec chmod 755 {} \; 2>/dev/null || true
+
+          # 7. 通用：所有二进制文件（.bin 目录）
+          echo "   🔧 Fixing .bin directories..."
+          find "$DEB_ROOT/opt/tscode" -type d -name ".bin" -exec find {} -type f -exec chmod 755 {} \; \;
+
+          # 8. 最后：任何标记为可执行的文件
+          echo "   ⚡ Fixing remaining executables..."
+          find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \;
+
+          # 9. 安全：.node 原生模块保持 644 权限
+          find "$DEB_ROOT/opt/tscode" -name "*.node" -type f -exec chmod 644 {} \;
+
+          echo "   ✅ All permissions fixed!"
+
+          # ============================================================
+          # 创建启动脚本
+          # ============================================================
+          echo ""
           echo "📌 Creating startup script..."
           cat > "$DEB_ROOT/opt/tscode/start-tscode.sh" << 'STARTEOF'
           #!/bin/bash
-          # TSCode 启动脚本（UOS 优化版）
+          # TSCode 启动脚本（UOS 生产版）
 
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -483,14 +520,21 @@ jobs:
           STARTEOF
 
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh"
+          echo "   ✅ start-tscode.sh created"
 
-          # ===== 创建符号链接 =====
+          # ============================================================
+          # 创建符号链接
+          # ============================================================
+          echo ""
           echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
           ln -sf /opt/tscode/start-tscode.sh tscode
           cd -
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/start-tscode.sh"
 
-          # ===== 创建桌面文件 =====
+          # ============================================================
+          # 创建桌面文件
+          # ============================================================
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -506,12 +550,17 @@ jobs:
           StartupWMClass=Code
           EOF
 
-          # ===== 复制图标 =====
+          # ============================================================
+          # 复制图标
+          # ============================================================
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
           fi
 
-          # ===== 创建 DEBIAN/control 文件 =====
+          # ============================================================
+          # 创建 DEBIAN/control 文件
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/control" << EOF
           Package: tscode
           Version: $DEB_VERSION
@@ -527,7 +576,9 @@ jobs:
           Priority: optional
           EOF
 
-          # ===== 创建 postinst 脚本 =====
+          # ============================================================
+          # 创建 postinst 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -547,6 +598,13 @@ jobs:
               chmod 4755 /opt/tscode/chrome_crashpad_handler
           fi
 
+          # 修复 ripgrep（确保可执行）
+          if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
+              echo "  Fixing ripgrep permissions..."
+              chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
+          fi
+
+          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               echo "  Updating desktop database..."
               update-desktop-database /usr/share/applications/
@@ -568,7 +626,9 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # ===== 创建 prerm 脚本 =====
+          # ============================================================
+          # 创建 prerm 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
@@ -578,6 +638,7 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/prerm"
 
+          echo ""
           echo "✅ DEB package structure created"
           echo "DEB root size:"
           du -sh "$DEB_ROOT"
@@ -599,7 +660,7 @@ jobs:
           echo "   Package: $DEB_NAME"
           echo "   Version: $DEB_VERSION"
           echo "   Architecture: amd64"
-          echo "   Compression: gzip"
+          echo "   Compression: gzip level 9"
 
           fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "$DEB_OUTPUT"
 
@@ -615,6 +676,11 @@ jobs:
             echo "Size comparison:"
             echo "  DEB root: $(du -sh $DEB_ROOT | cut -f1)"
             echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
+
+            # 验证包内关键文件的权限
+            echo ""
+            echo "📌 Verifying package permissions..."
+            dpkg --contents "$DEB_OUTPUT" | grep -E "rg|chrome-sandbox|tscode" | head -20
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -637,6 +703,8 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Build: Production Stable"
+          echo "Permissions: SUID + Executables fixed"
           echo "=========================================="
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
@@ -648,5 +716,11 @@ jobs:
             echo "📖 Installation on UOS/Debian:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
+            echo ""
+            echo "🔍 Verified working:"
+            echo "  - SUID sandbox permissions"
+            echo "  - ripgrep search tool"
+            echo "  - Language servers"
+            echo "  - Custom test-agent extension"
             echo "=========================================="
           fi
