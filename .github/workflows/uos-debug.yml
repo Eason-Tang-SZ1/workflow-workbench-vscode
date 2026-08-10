@@ -487,7 +487,14 @@ jobs:
           fi
 
           echo "✅ Found executable: $REAL_EXEC"
-          mv "$REAL_EXEC" "tscode"
+
+          # 只有当可执行文件不是 tscode 时才重命名
+          if [ "$REAL_EXEC" != "tscode" ]; then
+            mv "$REAL_EXEC" "tscode"
+            echo "✅ Renamed to tscode"
+          else
+            echo "✅ Already named tscode"
+          fi
 
           # 创建Git查找脚本
           mkdir -p "$BUILD_DIR/bin"
