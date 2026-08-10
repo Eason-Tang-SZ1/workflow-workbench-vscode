@@ -468,12 +468,20 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # 创建Git查找脚本
+          # ============================================================
+          # 创建 bin 目录和 git-finder（必须在 BUILD_DIR 内）
+          # ============================================================
+          echo ""
+          echo "📌 Creating bin directory and git-finder..."
+
+          # 确保 bin 目录存在
           mkdir -p "$BUILD_DIR/bin"
+
           cat > "$BUILD_DIR/bin/git-finder" << 'GITFINDER'
           #!/bin/bash
           # Git auto-discovery for TSCode
 
+          # 尝试多个常见路径
           for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
             if [ -x "$git_path" ]; then
               export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
@@ -484,6 +492,7 @@ jobs:
             fi
           done
 
+          # 尝试 PATH 中的 git
           if command -v git >/dev/null 2>&1; then
             GIT_PATH="$(command -v git)"
             export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
@@ -498,17 +507,27 @@ jobs:
           GITFINDER
 
           chmod +x "$BUILD_DIR/bin/git-finder"
-          echo "✅ git-finder created"
+
+          # 验证 git-finder 是否创建成功
+          if [ -f "$BUILD_DIR/bin/git-finder" ]; then
+            echo "   ✅ git-finder created at $BUILD_DIR/bin/git-finder"
+          else
+            echo "   ❌ git-finder creation failed!"
+            exit 1
+          fi
 
           # 创建启动脚本
+          echo ""
+          echo "📌 Creating start script..."
           cat > start-tscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          export PATH="/usr/local/bin:/usr/bin:/bin:$SCRIPT_DIR/bin:$PATH"
           export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
           export GIT_TERMINAL_PROMPT=0
 
+          # 查找 Git
           GIT_PATH=""
           for g in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git; do
             if [ -x "$g" ]; then
@@ -578,7 +597,14 @@ jobs:
           StartupWMClass=Code
           EOF
 
+          echo ""
           echo "✅ Launcher and config created"
+
+          # 最终验证
+          echo ""
+          echo "📌 Final verification:"
+          ls -la "$BUILD_DIR/bin/" 2>/dev/null || echo "   bin directory not found!"
+          ls -la "$BUILD_DIR/start-tscode.sh" 2>/dev/null || echo "   start-tscode.sh not found!"
 
       - name: 📄 Create default Git configuration
         run: |
