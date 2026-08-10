@@ -651,28 +651,21 @@ jobs:
 
           echo "✅ Default Git configuration created"
 
-      - name: 📦 Package (official style)
+      - name: 📦 Package (optimized)
         run: |
           echo "=========================================="
-          echo "📦 Package (official style)"
+          echo "📦 Package (optimized)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 修复所有权限（关键步骤）
+          # 修复权限（快速）
           echo "📌 Fixing permissions..."
-          find "$BUILD_DIR" -type f -exec chmod 644 {} \;
-          find "$BUILD_DIR" -type d -exec chmod 755 {} \;
-
-          # 设置可执行权限
           chmod +x "$BUILD_DIR/tscode" 2>/dev/null || true
           chmod +x "$BUILD_DIR/start-tscode.sh" 2>/dev/null || true
           chmod +x "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
           chmod +x "$BUILD_DIR/bin/git-finder" 2>/dev/null || true
-
-          # 设置 .node 文件权限
-          find "$BUILD_DIR" -name "*.node" -exec chmod 644 {} \;
 
           echo ""
           echo "📌 Pre-package validation:"
@@ -681,44 +674,34 @@ jobs:
           echo "   git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git ]; then echo 'OK'; else echo 'MISSING!'; fi)"
 
           echo ""
-          echo "📌 Creating package with standard permissions..."
+          echo "📌 Creating package (fast compression)..."
 
-          # 使用官方方式打包（不保留所有者和权限信息）
+          # 使用最快的压缩级别（-1 最快，-9 最慢）
+          # 同时排除不必要的文件
           tar -czf "tscode-${VERSION}.tar.gz" \
             --no-same-owner \
             --no-same-permissions \
             --owner=0 \
             --group=0 \
             --numeric-owner \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          # 同时创建 xz 格式（更小）
-          echo ""
-          echo "📌 Creating optimized package..."
-          tar -cJf "tscode-${VERSION}.tar.xz" \
-            --no-same-owner \
-            --no-same-permissions \
-            --owner=0 \
-            --group=0 \
-            --numeric-owner \
+            --exclude="*.ts" \
+            --exclude="*.map" \
+            --exclude="*.md" \
+            --exclude="test" \
+            --exclude="tests" \
+            --exclude="__tests__" \
+            --exclude="example" \
+            --exclude="examples" \
+            --exclude="node_modules/*/node_modules" \
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
           # 创建校验文件
-          echo ""
-          echo "📌 Creating checksums..."
           sha256sum "tscode-${VERSION}.tar.gz" > "tscode-${VERSION}.tar.gz.sha256"
-          sha256sum "tscode-${VERSION}.tar.xz" > "tscode-${VERSION}.tar.xz.sha256"
 
           echo ""
-          echo "✅ Packages created:"
-          ls -lh tscode-${VERSION}.*
-
-          echo ""
-          echo "📌 Package verification:"
-          echo "   tar.gz: $(file tscode-${VERSION}.tar.gz)"
-          echo "   tar.xz: $(file tscode-${VERSION}.tar.xz)"
+          echo "✅ Package created:"
+          ls -lh tscode-${VERSION}.tar.gz
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
