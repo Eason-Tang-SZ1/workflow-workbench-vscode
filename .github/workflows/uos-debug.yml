@@ -1,4 +1,4 @@
-name: Build for UOS (Production Stable)
+name: Build for Debian 10 (DEB Package)
 
 on:
   workflow_dispatch:
@@ -211,7 +211,7 @@ jobs:
             exit 1
           fi
 
-          TARGET_DIR="./tscode-uos-x64"
+          TARGET_DIR="./tscode"
           if [ "$BUILD_DIR" != "$TARGET_DIR" ]; then
             echo "Renaming $BUILD_DIR to $TARGET_DIR"
             rm -rf "$TARGET_DIR"
@@ -229,7 +229,7 @@ jobs:
           echo "📦 Copy node_modules to resources/app"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           if [ ! -d "./node_modules" ]; then
             echo "❌ node_modules not found in root!"
@@ -249,7 +249,7 @@ jobs:
           echo "🔥 Replacing native modules with official version"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           echo "📌 Downloading official VSCode $VERSION for Linux x64..."
@@ -274,14 +274,21 @@ jobs:
 
           echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
+          # 替换所有原生模块
+          echo ""
+          echo "📌 Replacing native modules from official build..."
+
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
             echo "   Copying official node_modules..."
+
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
               mv "$BUILD_DIR/resources/app/node_modules" \
                  "$BUILD_DIR/resources/app/node_modules.bak"
             fi
+
             cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
                   "$BUILD_DIR/resources/app/"
+
             echo "   ✅ node_modules replaced with official version"
           fi
 
@@ -296,7 +303,7 @@ jobs:
           echo "📂 Copying official Git extension"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           if [ ! -f "/tmp/official.tar.gz" ]; then
@@ -335,7 +342,7 @@ jobs:
           echo "📂 Copying all official extensions"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
@@ -359,89 +366,65 @@ jobs:
             echo "⚠️ Could not find official extensions"
           fi
 
-      - name: 🧹 Deep cleanup for smaller package
+      - name: 🧹 Strip down build for release
         run: |
           echo "=========================================="
-          echo "🧹 Deep cleanup for smaller package"
+          echo "🧹 Stripping down build for release"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Before cleanup: $(du -sh . | cut -f1)"
+          echo "📌 Current size before cleanup:"
+          du -sh .
 
-          # 1. 清理 node_modules
+          echo ""
+          echo "📌 Removing devDependencies..."
+          if command -v json &> /dev/null; then
+            npx json -I -f package.json -e 'this.devDependencies={}'
+          else
+            npm install -g json
+            npx json -I -f package.json -e 'this.devDependencies={}'
+          fi
+
           echo ""
           echo "📌 Cleaning node_modules..."
-
-          # 删除 .ts 文件（保留 .d.ts）
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          # 删除 .map 文件
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-
-          # 删除 .md 文件
+          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
-
-          # 删除 LICENSE 等
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "COPYING*" -type f -delete 2>/dev/null || true
-          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
-
-          # 删除测试目录
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "specs" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除示例目录
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除 .git 目录
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除 .bin 目录
-          find node_modules -type d -name ".bin" -exec rm -rf {} + 2>/dev/null || true
-
-          # 2. 清理扩展
           echo ""
-          echo "📌 Cleaning extensions..."
-          cd extensions
-          find . -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-          find . -name "*.map" -type f -delete 2>/dev/null || true
-          find . -name "*.md" -type f -delete 2>/dev/null || true
+          echo "📌 Removing build temp directories..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
 
-          # 删除非 git 扩展的 node_modules
-          for ext in */; do
-            if [ "$ext" != "git/" ] && [ -d "$ext/node_modules" ]; then
-              rm -rf "$ext/node_modules"
-            fi
-          done
-          cd ..
+          echo ""
+          echo "📌 Removing unnecessary large modules..."
+          rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
 
-          echo "📌 After cleanup: $(du -sh . | cut -f1)"
+          echo ""
+          echo "📌 Final size after cleanup:"
+          du -sh .
           cd -
 
-      - name: 📄 Create launcher and config
+      - name: 📄 Create launcher and Git finder
         run: |
           echo "=========================================="
-          echo "📄 Creating launcher and config"
+          echo "📄 Creating launcher and Git finder"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
-
-          # 确保 BUILD_DIR 是绝对路径
-          BUILD_DIR="$(realpath "$BUILD_DIR")"
-          echo "BUILD_DIR: $BUILD_DIR"
-
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR"
-          echo "Current directory: $(pwd)"
 
           # 复制配置文件
           [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
@@ -474,15 +457,9 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # ============================================================
-          # 创建 bin 目录和 git-finder
-          # ============================================================
-          echo ""
-          echo "📌 Creating bin directory and git-finder..."
-
-          mkdir -p "$BUILD_DIR/bin"
-
-          cat > "$BUILD_DIR/bin/git-finder" << 'GITFINDER'
+          # 创建Git查找脚本
+          mkdir -p bin
+          cat > bin/git-finder << 'GITFINDER'
           #!/bin/bash
           # Git auto-discovery for TSCode
 
@@ -509,21 +486,10 @@ jobs:
           exit 1
           GITFINDER
 
-          chmod +x "$BUILD_DIR/bin/git-finder"
-
-          # 验证创建
-          if [ -f "$BUILD_DIR/bin/git-finder" ]; then
-            echo "   ✅ git-finder created at $BUILD_DIR/bin/git-finder"
-            ls -la "$BUILD_DIR/bin/git-finder"
-          else
-            echo "   ❌ git-finder creation failed!"
-            ls -la "$BUILD_DIR/bin/" 2>/dev/null || echo "   bin directory is empty"
-            exit 1
-          fi
+          chmod +x bin/git-finder
+          echo "✅ git-finder created"
 
           # 创建启动脚本
-          echo ""
-          echo "📌 Creating start script..."
           cat > start-tscode.sh << 'START_EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -561,7 +527,7 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
           export VSCODE_APP_NAME="TSCode"
-          export VSCODE_APP_VERSION="1.116.0"
+          export VSCODE_APP_VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
           if [ -f "$SCRIPT_DIR/tscode" ]; then
             EXEC="$SCRIPT_DIR/tscode"
@@ -570,7 +536,7 @@ jobs:
             exit 1
           fi
 
-          echo "=== TSCode for UOS ==="
+          echo "=== TSCode for Debian 10 ==="
           echo "Starting TSCode..."
 
           exec "$EXEC" \
@@ -585,68 +551,7 @@ jobs:
           chmod +x tscode
           chmod +x chrome-sandbox 2>/dev/null || true
 
-          # 创建桌面文件
-          cat > tscode.desktop << 'EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          Comment=Code Editing. Redefined.
-          Exec=./tscode %F
-          Icon=./resources/app/resources/linux/code.png
-          Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupNotify=true
-          StartupWMClass=Code
-          EOF
-
-          echo ""
-          echo "📌 Final directory structure:"
-          ls -la "$BUILD_DIR/" | head -20
-          echo ""
-          echo "📌 bin directory:"
-          ls -la "$BUILD_DIR/bin/" 2>/dev/null || echo "   bin directory not found!"
-
-          echo ""
           echo "✅ Launcher and config created"
-
-      - name: 📄 Create default Git configuration
-        run: |
-          echo "=========================================="
-          echo "📄 Creating default Git configuration"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
-
-          mkdir -p "$BUILD_DIR/resources/app/user-data"
-          cat > "$BUILD_DIR/resources/app/user-data/settings.json" << 'GITCONFIG'
-          {
-            "git.enabled": true,
-            "git.path": "/usr/bin/git",
-            "git.autoRepositoryDetection": true,
-            "git.repositoryScanMaxDepth": 2,
-            "git.verbose": false,
-            "git.logLevel": "error",
-            "git.allowUnsigned": false,
-            "git.enableSmartCommit": true,
-            "git.enableCommitSigning": false,
-            "git.statusLimit": 10000,
-            "git.detectSubmodules": false,
-            "git.submoduleIgnore": "all",
-            "git.useForcePushWithLease": true,
-            "files.watcherExclude": {
-              "**/.git/objects/**": true,
-              "**/.git/subtree-cache/**": true,
-              "**/node_modules/**": true,
-              "**/bower_components/**": true,
-              "**/vendor/**": true,
-              "**/target/**": true
-            }
-          }
-          GITCONFIG
-
-          echo "✅ Default Git configuration created"
 
       - name: 📄 Create validation script
         run: |
@@ -654,7 +559,7 @@ jobs:
           echo "📄 Creating validation script"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           cat > "$BUILD_DIR/validate.sh" << 'VALIDATE_EOF'
           #!/bin/bash
@@ -697,15 +602,6 @@ jobs:
           if [ -x "$SCRIPT_DIR/bin/git-finder" ]; then
             echo "   ✅ git-finder executable"
             ((PASSED++))
-
-            if "$SCRIPT_DIR/bin/git-finder" --version > /dev/null 2>&1; then
-              GIT_VERSION="$("$SCRIPT_DIR/bin/git-finder" --version 2>&1)"
-              echo "   ✅ Git found: $GIT_VERSION"
-              ((PASSED++))
-            else
-              echo "   ❌ Git not working"
-              ((FAILED++))
-            fi
           else
             echo "   ❌ git-finder not found"
             ((FAILED++))
@@ -716,13 +612,6 @@ jobs:
           if [ -d "$SCRIPT_DIR/resources/app/extensions/git" ]; then
             echo "   ✅ Git extension exists"
             ((PASSED++))
-
-            if [ -f "$SCRIPT_DIR/resources/app/extensions/git/out/main.js" ]; then
-              echo "   ✅ Git extension compiled"
-              ((PASSED++))
-            else
-              echo "   ⚠️ Git extension may not be compiled"
-            fi
           else
             echo "   ❌ Git extension missing"
             ((FAILED++))
@@ -732,38 +621,12 @@ jobs:
           echo "5️⃣ Checking node_modules..."
           if [ -d "$SCRIPT_DIR/resources/app/node_modules" ]; then
             SIZE=$(du -sh "$SCRIPT_DIR/resources/app/node_modules" | cut -f1)
-            COUNT=$(find "$SCRIPT_DIR/resources/app/node_modules" -type f | wc -l)
-            echo "   ✅ node_modules: $COUNT files, $SIZE"
+            echo "   ✅ node_modules: $SIZE"
             ((PASSED++))
           else
             echo "   ❌ node_modules missing"
             ((FAILED++))
           fi
-
-          echo ""
-          echo "6️⃣ Testing Git repository..."
-          TEST_DIR="/tmp/tscode-validate-$$"
-          mkdir -p "$TEST_DIR"
-          cd "$TEST_DIR"
-
-          if "$SCRIPT_DIR/bin/git-finder" init > /dev/null 2>&1; then
-            echo "test" > test.txt
-            "$SCRIPT_DIR/bin/git-finder" add test.txt > /dev/null 2>&1
-            "$SCRIPT_DIR/bin/git-finder" commit -m "test" > /dev/null 2>&1
-            if "$SCRIPT_DIR/bin/git-finder" status > /dev/null 2>&1; then
-              echo "   ✅ Git repository operations working"
-              ((PASSED++))
-            else
-              echo "   ❌ Git status failed"
-              ((FAILED++))
-            fi
-          else
-            echo "   ❌ Git init failed"
-            ((FAILED++))
-          fi
-
-          cd /
-          rm -rf "$TEST_DIR"
 
           echo ""
           echo "=========================================="
@@ -773,10 +636,10 @@ jobs:
           echo "=========================================="
 
           if [ $FAILED -eq 0 ]; then
-            echo "✅ All checks passed! TSCode is ready."
+            echo "✅ All checks passed!"
             exit 0
           else
-            echo "❌ Some checks failed. Please review above."
+            echo "❌ Some checks failed."
             exit 1
           fi
           VALIDATE_EOF
@@ -784,13 +647,13 @@ jobs:
           chmod +x "$BUILD_DIR/validate.sh"
           echo "✅ Validation script created"
 
-      - name: 🔍 Run validation before packaging
+      - name: 🔍 Run validation
         run: |
           echo "=========================================="
-          echo "🔍 Running validation before packaging"
+          echo "🔍 Running validation"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           if ! "$BUILD_DIR/validate.sh"; then
             echo "❌ Validation failed!"
@@ -799,75 +662,161 @@ jobs:
 
           echo "✅ Validation passed!"
 
-      - name: 📦 Package and verify
+      - name: 📦 Build DEB package
         run: |
           echo "=========================================="
-          echo "📦 Package and verify"
+          echo "📦 Building DEB package for Debian 10"
           echo "=========================================="
 
-          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_NAME="tscode"
+          DEB_VERSION="${VERSION}-1"
+          DEB_ARCH="amd64"
+          DEB_ROOT="$(pwd)/deb_root"
 
-          # 修复所有权限
-          echo "📌 Fixing permissions..."
-          find "$BUILD_DIR" -type f -exec chmod 644 {} \;
-          find "$BUILD_DIR" -type d -exec chmod 755 {} \;
+          # 创建 DEB 目录结构
+          mkdir -p "$DEB_ROOT/DEBIAN"
+          mkdir -p "$DEB_ROOT/opt/tscode"
+          mkdir -p "$DEB_ROOT/usr/bin"
+          mkdir -p "$DEB_ROOT/usr/share/applications"
+          mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps"
 
-          chmod +x "$BUILD_DIR/tscode" 2>/dev/null || true
-          chmod +x "$BUILD_DIR/start-tscode.sh" 2>/dev/null || true
-          chmod +x "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
-          chmod +x "$BUILD_DIR/bin/git-finder" 2>/dev/null || true
-          chmod +x "$BUILD_DIR/validate.sh" 2>/dev/null || true
+          echo "📌 Copying application to /opt/tscode..."
+          cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          find "$BUILD_DIR" -name "*.node" -exec chmod 644 {} \;
-
-          echo ""
-          echo "📌 Pre-package validation:"
-          echo "   node_modules: $(if [ -d $BUILD_DIR/resources/app/node_modules ]; then echo 'OK'; else echo 'MISSING!'; fi)"
-          echo "   extensions: $(ls -la $BUILD_DIR/resources/app/extensions/ 2>/dev/null | wc -l)"
-          echo "   git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git ]; then echo 'OK'; else echo 'MISSING!'; fi)"
-
-          echo ""
-          echo "📌 Creating package (gzip)..."
-
-          tar -czf "tscode-${VERSION}.tar.gz" \
-            --no-same-owner \
-            --no-same-permissions \
-            --owner=0 \
-            --group=0 \
-            --numeric-owner \
-            -C "$(dirname "$BUILD_DIR")" \
-            "$(basename "$BUILD_DIR")"
-
-          echo ""
-          echo "📌 Verifying package contents..."
-          mkdir -p /tmp/verify
-          tar -xzf "tscode-${VERSION}.tar.gz" -C /tmp/verify
-
-          if [ -x "/tmp/verify/$(basename "$BUILD_DIR")/validate.sh" ]; then
-            echo "   ✅ Validation script exists in package"
-          else
-            echo "   ❌ Validation script missing from package"
-            exit 1
+          # 修复 chrome-sandbox SUID
+          if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
+            sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            echo "   ✅ chrome-sandbox SUID set"
           fi
 
-          sha256sum "tscode-${VERSION}.tar.gz" > "tscode-${VERSION}.tar.gz.sha256"
+          # 设置执行权限
+          chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
+
+          # 创建符号链接
+          cd "$DEB_ROOT/usr/bin"
+          ln -sf /opt/tscode/start-tscode.sh tscode
+          cd -
+
+          # 创建桌面文件
+          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          Comment=Code Editing. Redefined.
+          Exec=/opt/tscode/start-tscode.sh %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=Code
+          EOF
+
+          # 复制图标
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+            cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
+          fi
+
+          # 创建 DEBIAN/control
+          cat > "$DEB_ROOT/DEBIAN/control" << EOF
+          Package: tscode
+          Version: $DEB_VERSION
+          Architecture: $DEB_ARCH
+          Maintainer: TSCode Team <tscode@example.com>
+          Description: TSCode - Code Editing. Redefined.
+           TSCode is a code editor redefined and optimized for building
+           and debugging modern web and cloud applications.
+          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
+          Recommends: git, python3
+          Homepage: https://github.com/tscode
+          Section: devel
+          Priority: optional
+          EOF
+
+          # 创建 postinst
+          cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
+          #!/bin/bash
+          set -e
+
+          echo "Setting up TSCode for Debian 10..."
+
+          # 修复 chrome-sandbox
+          if [ -f "/opt/tscode/chrome-sandbox" ]; then
+              chown root:root /opt/tscode/chrome-sandbox
+              chmod 4755 /opt/tscode/chrome-sandbox
+              echo "  ✅ chrome-sandbox permissions fixed"
+          fi
+
+          # 检测 Git
+          GIT_PATH=""
+          for g in /usr/local/bin/git /usr/bin/git; do
+              if [ -x "$g" ]; then
+                  GIT_PATH="$g"
+                  break
+              fi
+          done
+
+          if [ -n "$GIT_PATH" ]; then
+              echo "  ✅ Git found at: $GIT_PATH"
+          else
+              echo "  ⚠️ Git not found. Install with: apt-get install git"
+          fi
+
+          # 更新桌面数据库
+          if command -v update-desktop-database >/dev/null 2>&1; then
+              update-desktop-database /usr/share/applications/
+          fi
 
           echo ""
-          echo "✅ Package created and verified:"
-          ls -lh tscode-${VERSION}.tar.gz
+          echo "✅ TSCode installed successfully!"
           echo ""
-          echo "📌 Package size: $(du -sh tscode-${VERSION}.tar.gz | cut -f1)"
+          echo "Run 'tscode' to start."
+          echo "=========================================="
+          POSTINSTEOF
 
-          rm -rf /tmp/verify
+          chmod +x "$DEB_ROOT/DEBIAN/postinst"
+
+          # 创建 prerm
+          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
+          #!/bin/bash
+          set -e
+          echo "TSCode is being removed..."
+          exit 0
+          PRERMEOF
+
+          chmod +x "$DEB_ROOT/DEBIAN/prerm"
+
+          echo ""
+          echo "📌 Building DEB package..."
+          fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+          if [ $? -eq 0 ] && [ -f "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" ]; then
+            echo ""
+            echo "✅ DEB package built successfully!"
+            ls -lh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+            sha256sum "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" > "tscode-${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
+          else
+            echo "❌ Failed to build DEB package"
+            exit 1
+          fi
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: tscode-uos
+          name: tscode-debian10-deb
           path: |
-            tscode-*.tar.gz
-            tscode-*.tar.gz.sha256
+            *.deb
+            *.deb.sha256
           retention-days: 30
 
       - name: 📊 Build summary
@@ -878,29 +827,21 @@ jobs:
           echo "=========================================="
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Format: DEB (Debian 10)"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
             echo "✅ Build completed successfully!"
             echo ""
-            echo "📦 Packages available:"
-            ls -lh tscode-*.*
+            echo "📦 DEB Package:"
+            ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
             echo ""
-            echo "📖 Installation:"
-            echo "  1. tar -xzf tscode-*.tar.gz"
-            echo "  2. cd tscode-uos-x64"
-            echo "  3. ./validate.sh  (verify installation)"
-            echo "  4. ./start-tscode.sh"
+            echo "📖 Installation on Debian 10:"
+            echo "  sudo dpkg -i tscode-*.deb"
+            echo "  sudo apt-get install -f"
             echo ""
-            echo "🔍 Git features verified:"
-            echo "  - Git extension included ✅"
-            echo "  - git-finder auto-discovery ✅"
-            echo "  - Git configuration pre-set ✅"
-            echo "  - Git repository operations tested ✅"
-            echo "=========================================="
-          else
-            echo ""
-            echo "❌ Build failed. Check logs for details."
+            echo "🔍 Verify:"
+            echo "  /opt/tscode/validate.sh"
             echo "=========================================="
           fi
