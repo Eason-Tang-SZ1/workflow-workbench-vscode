@@ -435,7 +435,13 @@ jobs:
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+
+          # 确保 BUILD_DIR 是绝对路径
+          BUILD_DIR="$(realpath "$BUILD_DIR")"
+          echo "BUILD_DIR: $BUILD_DIR"
+
           cd "$BUILD_DIR"
+          echo "Current directory: $(pwd)"
 
           # 复制配置文件
           [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
@@ -469,19 +475,17 @@ jobs:
           fi
 
           # ============================================================
-          # 创建 bin 目录和 git-finder（必须在 BUILD_DIR 内）
+          # 创建 bin 目录和 git-finder
           # ============================================================
           echo ""
           echo "📌 Creating bin directory and git-finder..."
 
-          # 确保 bin 目录存在
           mkdir -p "$BUILD_DIR/bin"
 
           cat > "$BUILD_DIR/bin/git-finder" << 'GITFINDER'
           #!/bin/bash
           # Git auto-discovery for TSCode
 
-          # 尝试多个常见路径
           for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
             if [ -x "$git_path" ]; then
               export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
@@ -492,7 +496,6 @@ jobs:
             fi
           done
 
-          # 尝试 PATH 中的 git
           if command -v git >/dev/null 2>&1; then
             GIT_PATH="$(command -v git)"
             export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
@@ -508,11 +511,13 @@ jobs:
 
           chmod +x "$BUILD_DIR/bin/git-finder"
 
-          # 验证 git-finder 是否创建成功
+          # 验证创建
           if [ -f "$BUILD_DIR/bin/git-finder" ]; then
             echo "   ✅ git-finder created at $BUILD_DIR/bin/git-finder"
+            ls -la "$BUILD_DIR/bin/git-finder"
           else
             echo "   ❌ git-finder creation failed!"
+            ls -la "$BUILD_DIR/bin/" 2>/dev/null || echo "   bin directory is empty"
             exit 1
           fi
 
@@ -527,7 +532,6 @@ jobs:
           export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
           export GIT_TERMINAL_PROMPT=0
 
-          # 查找 Git
           GIT_PATH=""
           for g in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git; do
             if [ -x "$g" ]; then
@@ -598,13 +602,14 @@ jobs:
           EOF
 
           echo ""
-          echo "✅ Launcher and config created"
-
-          # 最终验证
+          echo "📌 Final directory structure:"
+          ls -la "$BUILD_DIR/" | head -20
           echo ""
-          echo "📌 Final verification:"
+          echo "📌 bin directory:"
           ls -la "$BUILD_DIR/bin/" 2>/dev/null || echo "   bin directory not found!"
-          ls -la "$BUILD_DIR/start-tscode.sh" 2>/dev/null || echo "   start-tscode.sh not found!"
+
+          echo ""
+          echo "✅ Launcher and config created"
 
       - name: 📄 Create default Git configuration
         run: |
