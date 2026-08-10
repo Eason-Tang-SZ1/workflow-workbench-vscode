@@ -274,24 +274,14 @@ jobs:
 
           echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
-          # 替换所有原生模块
-          echo ""
-          echo "📌 Replacing native modules from official build..."
-
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            # 复制整个 node_modules（但保留我们需要的）
             echo "   Copying official node_modules..."
-
-            # 备份当前的 node_modules
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
               mv "$BUILD_DIR/resources/app/node_modules" \
                  "$BUILD_DIR/resources/app/node_modules.bak"
             fi
-
-            # 复制官方 node_modules
             cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
                   "$BUILD_DIR/resources/app/"
-
             echo "   ✅ node_modules replaced with official version"
           fi
 
@@ -309,20 +299,17 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 下载官方VSCode（如果还没有下载）
           if [ ! -f "/tmp/official.tar.gz" ]; then
             echo "📌 Downloading official VSCode $VERSION..."
             wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
           fi
 
-          # 解压官方VSCode
           tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
           OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
           if [ -n "$OFFICIAL_DIR" ]; then
             echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
-            # 确保Git扩展存在
             if [ -d "$OFFICIAL_DIR/resources/app/extensions/git" ]; then
               echo "📌 Copying Git extension..."
               mkdir -p "$BUILD_DIR/resources/app/extensions"
@@ -331,7 +318,6 @@ jobs:
                     "$BUILD_DIR/resources/app/extensions/"
               echo "✅ Git extension copied"
 
-              # 复制Git扩展的node_modules依赖
               if [ -d "$OFFICIAL_DIR/resources/app/extensions/git/node_modules" ]; then
                 echo "📌 Copying Git extension dependencies..."
                 cp -r "$OFFICIAL_DIR/resources/app/extensions/git/node_modules" \
@@ -351,16 +337,12 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
 
-          # 如果官方VSCode已解压，复制所有扩展
           OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "📌 Copying all official extensions..."
-
-            # 创建扩展目录
             mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-            # 复制官方所有扩展（除了git，已经复制过了）
             for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
               if [ -d "$ext" ]; then
                 ext_name=$(basename "$ext")
@@ -372,90 +354,81 @@ jobs:
             done
 
             echo "✅ All extensions copied from official build"
-
-            # 显示扩展数量
             echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
           else
             echo "⚠️ Could not find official extensions"
           fi
 
-      - name: 🧹 Strip down build for release
+      - name: 🧹 Deep cleanup for smaller package
         run: |
           echo "=========================================="
-          echo "🧹 Stripping down build for release"
+          echo "🧹 Deep cleanup for smaller package"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Current size before cleanup:"
-          du -sh .
+          echo "📌 Before cleanup: $(du -sh . | cut -f1)"
 
-          # 1. 删除所有开发依赖
-          echo ""
-          echo "📌 Removing devDependencies..."
-          if command -v json &> /dev/null; then
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          else
-            npm install -g json
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          fi
-
-          # 2. 清理 node_modules
+          # 1. 清理 node_modules
           echo ""
           echo "📌 Cleaning node_modules..."
 
-          # 删除类型定义文件
-          echo "   Removing .d.ts files..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
-
-          # 删除文档
-          echo "   Removing .md files..."
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-
-          # 删除测试目录
-          echo "   Removing test directories..."
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除示例目录
-          echo "   Removing example directories..."
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除 .ts 源文件
-          echo "   Removing .ts source files..."
+          # 删除 .ts 文件（保留 .d.ts）
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
 
           # 删除 .map 文件
-          echo "   Removing .map files..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
 
+          # 删除 .md 文件
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
+
+          # 删除 LICENSE 等
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -name "COPYING*" -type f -delete 2>/dev/null || true
+          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
+
+          # 删除测试目录
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "specs" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除示例目录
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
+
           # 删除 .git 目录
-          echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
-          # 3. 删除构建临时目录
-          echo ""
-          echo "📌 Removing build temp directories..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
+          # 删除 .bin 目录
+          find node_modules -type d -name ".bin" -exec rm -rf {} + 2>/dev/null || true
 
-          # 4. 删除不必要的模块
+          # 2. 清理扩展
           echo ""
-          echo "📌 Removing unnecessary large modules..."
-          rm -rf node_modules/@types 2>/dev/null || true
-          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
+          echo "📌 Cleaning extensions..."
+          cd extensions
+          find . -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          find . -name "*.map" -type f -delete 2>/dev/null || true
+          find . -name "*.md" -type f -delete 2>/dev/null || true
 
-          echo ""
-          echo "📌 Final size after cleanup:"
-          du -sh .
+          # 删除非 git 扩展的 node_modules
+          for ext in */; do
+            if [ "$ext" != "git/" ] && [ -d "$ext/node_modules" ]; then
+              rm -rf "$ext/node_modules"
+            fi
+          done
+          cd ..
+
+          echo "📌 After cleanup: $(du -sh . | cut -f1)"
           cd -
 
-      - name: 📄 Copy config files and create launcher
+      - name: 📄 Create launcher and config
         run: |
           echo "=========================================="
           echo "📄 Creating launcher and config"
@@ -478,7 +451,6 @@ jobs:
           done
 
           if [ -z "$REAL_EXEC" ]; then
-            # 使用 basename 去除路径前缀
             REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1 | sed 's|^\./||')
           fi
 
@@ -489,7 +461,6 @@ jobs:
 
           echo "✅ Found executable: $REAL_EXEC"
 
-          # 只有当可执行文件不是 tscode 时才重命名
           if [ "$REAL_EXEC" != "tscode" ]; then
             mv "$REAL_EXEC" "tscode"
             echo "✅ Renamed to tscode"
@@ -503,7 +474,6 @@ jobs:
           #!/bin/bash
           # Git auto-discovery for TSCode
 
-          # 尝试多个路径
           for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
             if [ -x "$git_path" ]; then
               export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
@@ -514,7 +484,6 @@ jobs:
             fi
           done
 
-          # 尝试PATH
           if command -v git >/dev/null 2>&1; then
             GIT_PATH="$(command -v git)"
             export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
@@ -536,12 +505,10 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # Git环境设置
           export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
           export GIT_TERMINAL_PROMPT=0
 
-          # 查找Git
           GIT_PATH=""
           for g in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git; do
             if [ -x "$g" ]; then
@@ -621,7 +588,6 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
 
-          # 创建默认Git配置
           mkdir -p "$BUILD_DIR/resources/app/user-data"
           cat > "$BUILD_DIR/resources/app/user-data/settings.json" << 'GITCONFIG'
           {
@@ -651,21 +617,178 @@ jobs:
 
           echo "✅ Default Git configuration created"
 
-      - name: 📦 Package (optimized)
+      - name: 📄 Create validation script
         run: |
           echo "=========================================="
-          echo "📦 Package (optimized)"
+          echo "📄 Creating validation script"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+
+          cat > "$BUILD_DIR/validate.sh" << 'VALIDATE_EOF'
+          #!/bin/bash
+          echo "=========================================="
+          echo "TSCode Validation Script"
+          echo "=========================================="
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          PASSED=0
+          FAILED=0
+
+          echo ""
+          echo "1️⃣ Checking main executable..."
+          if [ -x "$SCRIPT_DIR/tscode" ]; then
+            echo "   ✅ tscode executable"
+            ((PASSED++))
+          else
+            echo "   ❌ tscode not executable"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "2️⃣ Checking Chrome sandbox..."
+          if [ -f "$SCRIPT_DIR/chrome-sandbox" ]; then
+            PERMS=$(stat -c %a "$SCRIPT_DIR/chrome-sandbox" 2>/dev/null || echo "000")
+            if [ "$PERMS" = "4755" ]; then
+              echo "   ✅ chrome-sandbox SUID: 4755"
+              ((PASSED++))
+            else
+              echo "   ⚠️ chrome-sandbox permissions: $PERMS (expected: 4755)"
+              ((FAILED++))
+            fi
+          else
+            echo "   ❌ chrome-sandbox not found"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "3️⃣ Checking Git integration..."
+          if [ -x "$SCRIPT_DIR/bin/git-finder" ]; then
+            echo "   ✅ git-finder executable"
+            ((PASSED++))
+
+            if "$SCRIPT_DIR/bin/git-finder" --version > /dev/null 2>&1; then
+              GIT_VERSION="$("$SCRIPT_DIR/bin/git-finder" --version 2>&1)"
+              echo "   ✅ Git found: $GIT_VERSION"
+              ((PASSED++))
+            else
+              echo "   ❌ Git not working"
+              ((FAILED++))
+            fi
+          else
+            echo "   ❌ git-finder not found"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "4️⃣ Checking Git extension..."
+          if [ -d "$SCRIPT_DIR/resources/app/extensions/git" ]; then
+            echo "   ✅ Git extension exists"
+            ((PASSED++))
+
+            if [ -f "$SCRIPT_DIR/resources/app/extensions/git/out/main.js" ]; then
+              echo "   ✅ Git extension compiled"
+              ((PASSED++))
+            else
+              echo "   ⚠️ Git extension may not be compiled"
+            fi
+          else
+            echo "   ❌ Git extension missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "5️⃣ Checking node_modules..."
+          if [ -d "$SCRIPT_DIR/resources/app/node_modules" ]; then
+            SIZE=$(du -sh "$SCRIPT_DIR/resources/app/node_modules" | cut -f1)
+            COUNT=$(find "$SCRIPT_DIR/resources/app/node_modules" -type f | wc -l)
+            echo "   ✅ node_modules: $COUNT files, $SIZE"
+            ((PASSED++))
+          else
+            echo "   ❌ node_modules missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "6️⃣ Testing Git repository..."
+          TEST_DIR="/tmp/tscode-validate-$$"
+          mkdir -p "$TEST_DIR"
+          cd "$TEST_DIR"
+
+          if "$SCRIPT_DIR/bin/git-finder" init > /dev/null 2>&1; then
+            echo "test" > test.txt
+            "$SCRIPT_DIR/bin/git-finder" add test.txt > /dev/null 2>&1
+            "$SCRIPT_DIR/bin/git-finder" commit -m "test" > /dev/null 2>&1
+            if "$SCRIPT_DIR/bin/git-finder" status > /dev/null 2>&1; then
+              echo "   ✅ Git repository operations working"
+              ((PASSED++))
+            else
+              echo "   ❌ Git status failed"
+              ((FAILED++))
+            fi
+          else
+            echo "   ❌ Git init failed"
+            ((FAILED++))
+          fi
+
+          cd /
+          rm -rf "$TEST_DIR"
+
+          echo ""
+          echo "=========================================="
+          echo "Validation Results:"
+          echo "   ✅ Passed: $PASSED"
+          echo "   ❌ Failed: $FAILED"
+          echo "=========================================="
+
+          if [ $FAILED -eq 0 ]; then
+            echo "✅ All checks passed! TSCode is ready."
+            exit 0
+          else
+            echo "❌ Some checks failed. Please review above."
+            exit 1
+          fi
+          VALIDATE_EOF
+
+          chmod +x "$BUILD_DIR/validate.sh"
+          echo "✅ Validation script created"
+
+      - name: 🔍 Run validation before packaging
+        run: |
+          echo "=========================================="
+          echo "🔍 Running validation before packaging"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
+
+          if ! "$BUILD_DIR/validate.sh"; then
+            echo "❌ Validation failed!"
+            exit 1
+          fi
+
+          echo "✅ Validation passed!"
+
+      - name: 📦 Package and verify
+        run: |
+          echo "=========================================="
+          echo "📦 Package and verify"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          # 修复权限（快速）
+          # 修复所有权限
           echo "📌 Fixing permissions..."
+          find "$BUILD_DIR" -type f -exec chmod 644 {} \;
+          find "$BUILD_DIR" -type d -exec chmod 755 {} \;
+
           chmod +x "$BUILD_DIR/tscode" 2>/dev/null || true
           chmod +x "$BUILD_DIR/start-tscode.sh" 2>/dev/null || true
           chmod +x "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
           chmod +x "$BUILD_DIR/bin/git-finder" 2>/dev/null || true
+          chmod +x "$BUILD_DIR/validate.sh" 2>/dev/null || true
+
+          find "$BUILD_DIR" -name "*.node" -exec chmod 644 {} \;
 
           echo ""
           echo "📌 Pre-package validation:"
@@ -674,34 +797,38 @@ jobs:
           echo "   git extension: $(if [ -d $BUILD_DIR/resources/app/extensions/git ]; then echo 'OK'; else echo 'MISSING!'; fi)"
 
           echo ""
-          echo "📌 Creating package (fast compression)..."
+          echo "📌 Creating package (gzip)..."
 
-          # 使用最快的压缩级别（-1 最快，-9 最慢）
-          # 同时排除不必要的文件
           tar -czf "tscode-${VERSION}.tar.gz" \
             --no-same-owner \
             --no-same-permissions \
             --owner=0 \
             --group=0 \
             --numeric-owner \
-            --exclude="*.ts" \
-            --exclude="*.map" \
-            --exclude="*.md" \
-            --exclude="test" \
-            --exclude="tests" \
-            --exclude="__tests__" \
-            --exclude="example" \
-            --exclude="examples" \
-            --exclude="node_modules/*/node_modules" \
             -C "$(dirname "$BUILD_DIR")" \
             "$(basename "$BUILD_DIR")"
 
-          # 创建校验文件
+          echo ""
+          echo "📌 Verifying package contents..."
+          mkdir -p /tmp/verify
+          tar -xzf "tscode-${VERSION}.tar.gz" -C /tmp/verify
+
+          if [ -x "/tmp/verify/$(basename "$BUILD_DIR")/validate.sh" ]; then
+            echo "   ✅ Validation script exists in package"
+          else
+            echo "   ❌ Validation script missing from package"
+            exit 1
+          fi
+
           sha256sum "tscode-${VERSION}.tar.gz" > "tscode-${VERSION}.tar.gz.sha256"
 
           echo ""
-          echo "✅ Package created:"
+          echo "✅ Package created and verified:"
           ls -lh tscode-${VERSION}.tar.gz
+          echo ""
+          echo "📌 Package size: $(du -sh tscode-${VERSION}.tar.gz | cut -f1)"
+
+          rm -rf /tmp/verify
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
@@ -709,8 +836,7 @@ jobs:
           name: tscode-uos
           path: |
             tscode-*.tar.gz
-            tscode-*.tar.xz
-            tscode-*.sha256
+            tscode-*.tar.gz.sha256
           retention-days: 30
 
       - name: 📊 Build summary
@@ -722,6 +848,7 @@ jobs:
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "=========================================="
+
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
             echo "✅ Build completed successfully!"
@@ -729,14 +856,20 @@ jobs:
             echo "📦 Packages available:"
             ls -lh tscode-*.*
             echo ""
-            echo "📖 Installation on UOS/Debian:"
+            echo "📖 Installation:"
             echo "  1. tar -xzf tscode-*.tar.gz"
             echo "  2. cd tscode-uos-x64"
-            echo "  3. ./start-tscode.sh"
+            echo "  3. ./validate.sh  (verify installation)"
+            echo "  4. ./start-tscode.sh"
             echo ""
             echo "🔍 Git features verified:"
-            echo "  - Git extension included"
-            echo "  - Git auto-discovery enabled"
-            echo "  - Git configuration pre-set"
+            echo "  - Git extension included ✅"
+            echo "  - git-finder auto-discovery ✅"
+            echo "  - Git configuration pre-set ✅"
+            echo "  - Git repository operations tested ✅"
+            echo "=========================================="
+          else
+            echo ""
+            echo "❌ Build failed. Check logs for details."
             echo "=========================================="
           fi
