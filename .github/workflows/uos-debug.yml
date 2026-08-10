@@ -177,8 +177,6 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
-          echo "GIT_ENABLE_CREDENTIALS=1" >> $GITHUB_ENV
-          echo "GIT_TERMINAL_PROMPT=0" >> $GITHUB_ENV
 
       - name: 🔨 Build VSCode
         run: |
@@ -404,10 +402,10 @@ jobs:
             echo "⚠️ test-tech.testagent extension not found at: $EXT_DIR"
           fi
 
-      - name: 📄 Create DEB package structure with universal Git support
+      - name: 📄 Create DEB package structure
         run: |
           echo "=========================================="
-          echo "📄 Creating DEB package structure with universal Git support"
+          echo "📄 Creating DEB package structure"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode-uos-x64}"
@@ -433,308 +431,290 @@ jobs:
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
           # ============================================================
-          # 创建 Git 自动发现脚本（核心功能）
+          # 创建启动脚本
           # ============================================================
           echo ""
-          echo "📌 Creating Git auto-discovery script..."
-
-          cat > "$DEB_ROOT/opt/tscode/bin/git-finder" << 'GITFINDEOF'
+          echo "📌 Creating startup script..."
+          cat > "$DEB_ROOT/opt/tscode/start-tscode.sh" << 'STARTEOF'
           #!/bin/bash
-          # TSCode Git Auto-Discovery Script
-          # 自动查找并调用系统上的Git
+          # TSCode 启动脚本（UOS 生产版）
 
-          # Git候选路径（按优先级排序）
-          GIT_CANDIDATES=(
-              "/usr/local/bin/git"      # 源码编译
-              "/usr/bin/git"            # 系统包管理
-              "/usr/local/git/bin/git"  # 自定义安装
-              "/opt/git/bin/git"        # 第三方安装
-              "$HOME/bin/git"           # 用户本地
-              "$HOME/.local/bin/git"    # 用户本地（XDG）
-              "$HOME/tools/git/bin/git" # 用户工具目录
-          )
-
-          # 查找可用的Git
+          # Git自动发现
           find_git() {
-              local git_path
-
-              # 1. 首先尝试PATH中的git
               if command -v git >/dev/null 2>&1; then
-                  git_path="$(command -v git)"
-                  echo "Found git in PATH: $git_path" >&2
-                  echo "$git_path"
+                  command -v git
                   return 0
               fi
 
-              # 2. 遍历候选路径
-              for candidate in "${GIT_CANDIDATES[@]}"; do
-                  # 展开变量（如$HOME）
-                  eval candidate="$candidate"
-                  if [ -x "$candidate" ]; then
-                      echo "Found git at: $candidate" >&2
-                      echo "$candidate"
+              for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
+                  if [ -x "$git_path" ]; then
+                      echo "$git_path"
                       return 0
                   fi
               done
 
-              # 3. 使用find搜索（最后的尝试）
-              git_path="$(find /usr /opt $HOME -name git -type f -executable 2>/dev/null | grep -v '.git' | head -1)"
-              if [ -n "$git_path" ] && [ -x "$git_path" ]; then
-                  echo "Found git via find: $git_path" >&2
-                  echo "$git_path"
-                  return 0
-              fi
-
-              echo "ERROR: Git not found!" >&2
               return 1
           }
 
-          # 调用找到的Git
           GIT_PATH="$(find_git)"
-          if [ $? -eq 0 ] && [ -n "$GIT_PATH" ]; then
-              # 设置环境变量
-              export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
-              export GIT_TEMPLATE_DIR="$("$GIT_PATH" config --get init.templatedir 2>/dev/null || echo '')"
-
-              # 执行Git命令
-              exec "$GIT_PATH" "$@"
+          if [ -n "$GIT_PATH" ]; then
+              echo "✅ Git found: $GIT_PATH" >> /tmp/tscode-startup.log
+              export GIT_EXEC_PATH="$($GIT_PATH --exec-path 2>/dev/null || echo '')"
+              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+              export GIT_TERMINAL_PROMPT=0
           else
-              echo "ERROR: Cannot find Git executable" >&2
-              echo "Please install Git or set the correct path in TSCode settings" >&2
-              exit 1
+              echo "⚠️ Git not found" >> /tmp/tscode-startup.log
           fi
-          GITFINDEOF
 
-          chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder"
-          echo "   ✅ git-finder created"
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+
+          cd /opt/tscode
+          exec /opt/tscode/tscode \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --disable-crash-reporter \
+              --disable-breakpad \
+              "$@"
+          STARTEOF
+
+          chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh"
+          echo "   ✅ start-tscode.sh created"
 
           # ============================================================
-          # 创建 Git 配置助手脚本
+          # 创建符号链接
           # ============================================================
           echo ""
-          echo "📌 Creating Git configuration helper..."
+          echo "📌 Creating symlink..."
+          cd "$DEB_ROOT/usr/bin"
+          ln -sf /opt/tscode/start-tscode.sh tscode
+          cd -
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/start-tscode.sh"
 
-          cat > "$DEB_ROOT/opt/tscode/configure-git.sh" << 'CONFIGGITEOF'
+          # ============================================================
+          # 创建桌面文件
+          # ============================================================
+          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          Comment=Code Editing. Redefined.
+          Exec=/opt/tscode/start-tscode.sh %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=Code
+          EOF
+
+          # ============================================================
+          # 复制图标
+          # ============================================================
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+            cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
+          fi
+
+          # ============================================================
+          # 修复所有权限
+          # ============================================================
+          echo ""
+          echo "📌 Fixing all permissions..."
+
+          # SUID沙箱权限
+          if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
+            sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
+            echo "   ✅ chrome-sandbox SUID set"
+          fi
+
+          # 可执行权限
+          chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode" -name "*.sh" -type f -exec chmod 755 {} \; 2>/dev/null || true
+
+          echo "   ✅ All permissions fixed"
+
+          # ============================================================
+          # 创建 DEBIAN/control 文件
+          # ============================================================
+          cat > "$DEB_ROOT/DEBIAN/control" << EOF
+          Package: tscode
+          Version: $DEB_VERSION
+          Architecture: $DEB_ARCH
+          Maintainer: TSCode Team <tscode@example.com>
+          Description: TSCode - Code Editing. Redefined.
+           TSCode is a code editor redefined and optimized for building
+           and debugging modern web and cloud applications.
+          Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
+          Recommends: git, python3
+          Homepage: https://github.com/tscode
+          Section: devel
+          Priority: optional
+          EOF
+
+          # ============================================================
+          # 创建 postinst 脚本
+          # ============================================================
+          cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
-          # TSCode Git Configuration Helper
+          set -e
 
-          echo "=========================================="
-          echo "TSCode Git Configuration Helper"
-          echo "=========================================="
-          echo ""
+          echo "Setting up TSCode..."
 
-          # 检测Git
-          if command -v git >/dev/null 2>&1; then
-              GIT_PATH="$(command -v git)"
-              GIT_VERSION="$($GIT_PATH --version 2>/dev/null)"
-              echo "✅ Git found: $GIT_PATH"
-              echo "   Version: $GIT_VERSION"
-          else
-              echo "❌ Git not found in PATH"
-              echo ""
-              echo "Please install Git using one of these methods:"
-              echo "  1. sudo apt-get install git"
-              echo "  2. Download from https://git-scm.com/download/linux"
-              echo "  3. Build from source"
-              exit 1
+          # 修复 chrome-sandbox SUID
+          if [ -f "/opt/tscode/chrome-sandbox" ]; then
+              echo "  Setting chrome-sandbox permissions..."
+              chown root:root /opt/tscode/chrome-sandbox
+              chmod 4755 /opt/tscode/chrome-sandbox
           fi
 
-          echo ""
-          echo "Creating TSCode Git configuration..."
-
-          # 创建用户配置
-          CONFIG_DIR="$HOME/.config/tscode"
-          mkdir -p "$CONFIG_DIR"
-
-          # 如果已有配置，询问是否覆盖
-          if [ -f "$CONFIG_DIR/settings.json" ]; then
-              read -p "Configuration already exists. Overwrite? (y/N): " -n 1 -r
-              echo
-              if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                  echo "Keeping existing configuration."
-                  exit 0
+          # 检测并配置Git
+          GIT_PATH=""
+          for git_cmd in /usr/local/bin/git /usr/bin/git; do
+              if [ -x "$git_cmd" ]; then
+                  GIT_PATH="$git_cmd"
+                  break
               fi
+          done
+
+          if [ -z "$GIT_PATH" ] && command -v git >/dev/null 2>&1; then
+              GIT_PATH="$(command -v git)"
           fi
 
-          # 生成配置文件
-          cat > "$CONFIG_DIR/settings.json" << EOF
+          if [ -n "$GIT_PATH" ]; then
+              echo "  Found Git at: $GIT_PATH"
+              # 为root用户创建配置
+              mkdir -p /root/.config/tscode
+              cat > /root/.config/tscode/settings.json << GITCONFIG
           {
               "git.enabled": true,
               "git.path": "$GIT_PATH",
               "git.autoRepositoryDetection": true,
-              "git.repositoryScanMaxDepth": 2,
-              "git.repositoryScanIgnoredFolders": [
-                  "node_modules",
-                  "bower_components",
-                  ".vscode-test",
-                  ".git",
-                  "vendor",
-                  "target"
-              ],
-              "git.verbose": false,
-              "git.logLevel": "error",
-              "git.allowUnsigned": false,
-              "git.enableSmartCommit": true,
-              "git.enableCommitSigning": false,
-              "git.statusLimit": 10000,
-              "git.detectSubmodules": false,
-              "git.submoduleIgnore": "all",
-              "files.watcherExclude": {
-                  "**/.git/objects/**": true,
-                  "**/.git/subtree-cache/**": true,
-                  "**/node_modules/**": true,
-                  "**/bower_components/**": true,
-                  "**/vendor/**": true,
-                  "**/target/**": true
-              }
+              "git.repositoryScanMaxDepth": 2
           }
-          EOF
-
-          echo "✅ Configuration created at: $CONFIG_DIR/settings.json"
-          echo ""
-          echo "TSCode will use Git at: $GIT_PATH"
-          echo ""
-          echo "To verify, run: tscode ~/your-project/"
-          echo "=========================================="
-          CONFIGGITEOF
-
-          chmod +x "$DEB_ROOT/opt/tscode/configure-git.sh"
-          echo "   ✅ configure-git.sh created"
-
-          # ============================================================
-          # 创建默认用户配置模板
-          # ============================================================
-          cat > "$DEB_ROOT/etc/skel/.config/tscode/settings.json" << 'USERSETEOF'
-          {
-              "git.enabled": true,
-              "git.path": "/opt/tscode/bin/git-finder",
-              "git.autoRepositoryDetection": true,
-              "git.repositoryScanMaxDepth": 2,
-              "git.repositoryScanIgnoredFolders": [
-                  "node_modules",
-                  "bower_components",
-                  ".vscode-test",
-                  ".git",
-                  "vendor",
-                  "target"
-              ],
-              "git.verbose": false,
-              "git.logLevel": "error"
-          }
-          USERSETEOF
-
-          # ============================================================
-          # 创建 Git 调试脚本
-          # ============================================================
-          cat > "$DEB_ROOT/opt/tscode/debug-git.sh" << 'DEBUGBOF'
-          #!/bin/bash
-          # TSCode Git Debug Script
-
-          echo "=========================================="
-          echo "TSCode Git Debug Information"
-          echo "=========================================="
-          echo "Date: $(date)"
-          echo "User: $(whoami)"
-          echo ""
-
-          echo "=== Git Executables ==="
-          which -a git 2>/dev/null || echo "No git found in PATH"
-          echo ""
-
-          echo "=== Git Version ==="
-          git --version 2>/dev/null || echo "Git not found"
-          /usr/bin/git --version 2>/dev/null || echo "/usr/bin/git not found"
-          /usr/local/bin/git --version 2>/dev/null || echo "/usr/local/bin/git not found"
-          echo ""
-
-          echo "=== Git Configuration ==="
-          git config --list --show-origin 2>/dev/null | head -20
-          echo ""
-
-          echo "=== Environment PATH ==="
-          echo $PATH | tr ':' '\n'
-          echo ""
-
-          echo "=== TSCode Configuration ==="
-          cat ~/.config/tscode/settings.json 2>/dev/null || echo "No user settings found"
-          echo ""
-
-          echo "=== TSCode Git Extension ==="
-          ls -la /opt/tscode/resources/app/extensions/git/ 2>/dev/null | head -20
-          echo ""
-
-          echo "=== Test Git Repository ==="
-          TEST_DIR="/tmp/tscode-git-test-$$"
-          mkdir -p "$TEST_DIR"
-          cd "$TEST_DIR"
-          git init 2>&1
-          echo "test" > test.txt
-          git add test.txt 2>&1
-          git commit -m "test" 2>&1
-          git status --porcelain=v2 --branch --untracked-files=all 2>&1
-          cd /
-          rm -rf "$TEST_DIR"
-          echo ""
-
-          echo "=========================================="
-          echo "Debug information completed"
-          echo "=========================================="
-          DEBUGBOF
-
-          chmod +x "$DEB_ROOT/opt/tscode/debug-git.sh"
-          echo "   ✅ debug-git.sh created"
-
-          # ============================================================
-          # 创建 Git 重置配置脚本
-          # ============================================================
-          cat > "$DEB_ROOT/opt/tscode/reset-git-config.sh" << 'RESETEOF'
-          #!/bin/bash
-          # Reset TSCode Git configuration
-
-          echo "Resetting TSCode Git configuration..."
-
-          if [ -f "$HOME/.config/tscode/settings.json" ]; then
-              rm -f "$HOME/.config/tscode/settings.json"
-              echo "✅ Configuration removed"
+          GITCONFIG
+              echo "  ✅ Git configured for root"
           fi
 
-          echo "Running configuration helper..."
-          /opt/tscode/configure-git.sh
-          RESETEOF
+          # 更新桌面数据库
+          if command -v update-desktop-database >/dev/null 2>&1; then
+              update-desktop-database /usr/share/applications/
+          fi
 
-          chmod +x "$DEB_ROOT/opt/tscode/reset-git-config.sh"
-          echo "   ✅ reset-git-config.sh created"
+          echo ""
+          echo "✅ TSCode installed successfully!"
+          echo ""
+          echo "Run 'tscode' to start the application."
+          echo "=========================================="
+          exit 0
+          POSTINSTEOF
+
+          chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
           # ============================================================
-          # 创建 README 文档
+          # 创建 prerm 脚本
           # ============================================================
-          cat > "$DEB_ROOT/opt/tscode/README-Git.md" << 'READMEEOF'
-          # TSCode Git Configuration Guide
+          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
+          #!/bin/bash
+          set -e
+          echo "TSCode is being removed..."
+          exit 0
+          PRERMEOF
 
-          ## Overview
-          TSCode includes automatic Git detection that works with various Git installations.
+          chmod +x "$DEB_ROOT/DEBIAN/prerm"
 
-          ## Auto-Detection
-          TSCode automatically detects Git in these locations (in order):
-          1. PATH environment variable
-          2. /usr/local/bin/git
-          3. /usr/bin/git
-          4. /usr/local/git/bin/git
-          5. /opt/git/bin/git
-          6. ~/bin/git
-          7. ~/.local/bin/git
-          8. ~/tools/git/bin/git
+          echo ""
+          echo "✅ DEB package structure created"
+          echo "DEB root size:"
+          du -sh "$DEB_ROOT"
 
-          ## Manual Configuration
-          To specify a custom Git path:
+      - name: 📦 Build DEB package
+        run: |
+          echo "=========================================="
+          echo "📦 Building DEB package"
+          echo "=========================================="
 
-          1. Create or edit: ~/.config/tscode/settings.json
-          2. Add: `{"git.path": "/path/to/your/git"}`
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_NAME="tscode"
+          DEB_VERSION="${VERSION}-1"
+          DEB_ROOT="$(pwd)/deb_root"
+          DEB_OUTPUT="$(pwd)/tscode-${DEB_VERSION}_amd64.deb"
 
-          Example:
-          ```json
-          {
-              "git.enabled": true,
-              "git.path": "/home/user/my-git/bin/git",
-              "git.autoRepositoryDetection": true
-          }
+          echo ""
+          echo "📌 Building DEB package..."
+          echo "   Package: $DEB_NAME"
+          echo "   Version: $DEB_VERSION"
+          echo "   Architecture: amd64"
+
+          fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "$DEB_OUTPUT"
+
+          if [ $? -eq 0 ] && [ -f "$DEB_OUTPUT" ]; then
+            echo ""
+            echo "✅ DEB package built successfully!"
+            echo "📦 Package: $(basename $DEB_OUTPUT)"
+            ls -lh "$DEB_OUTPUT"
+
+            sha256sum "$DEB_OUTPUT" > "$DEB_OUTPUT.sha256"
+
+            echo ""
+            echo "Size comparison:"
+            echo "  DEB root: $(du -sh $DEB_ROOT | cut -f1)"
+            echo "  DEB package: $(du -sh $DEB_OUTPUT | cut -f1)"
+
+            echo ""
+            echo "📌 Verifying package contents:"
+            dpkg --contents "$DEB_OUTPUT" | head -20
+          else
+            echo "❌ Failed to build DEB package"
+            exit 1
+          fi
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tscode-uos-deb
+          path: |
+            *.deb
+            *.deb.sha256
+          retention-days: 30
+
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "=========================================="
+          echo "Status: ${{ job.status }}"
+          echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
+          echo "Build: Production Stable"
+          echo "=========================================="
+
+          if [ "${{ job.status }}" = "success" ]; then
+            echo ""
+            echo "✅ Build completed successfully!"
+            echo ""
+            echo "📦 DEB Package:"
+            ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
+            echo ""
+            echo "📖 Installation on UOS/Debian:"
+            echo "  sudo dpkg -i tscode-*.deb"
+            echo "  sudo apt-get install -f"
+            echo "=========================================="
+          else
+            echo ""
+            echo "❌ Build failed. Check logs for details."
+            echo "=========================================="
+          fi
