@@ -478,7 +478,8 @@ jobs:
           done
 
           if [ -z "$REAL_EXEC" ]; then
-            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1)
+            # 使用 basename 去除路径前缀
+            REAL_EXEC=$(find . -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.sh" ! -name "chrome-*" 2>/dev/null | head -1 | sed 's|^\./||')
           fi
 
           if [ -z "$REAL_EXEC" ]; then
