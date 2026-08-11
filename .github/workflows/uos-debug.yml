@@ -410,7 +410,7 @@ jobs:
           du -sh .
           cd -
 
-      - name: 📄 Create launcher and Git finder
+      - name: 📄 Create launcher and Git finder (修复版 - 不使用 exec)
         run: |
           echo "=========================================="
           echo "📄 Creating launcher and Git finder"
@@ -482,9 +482,14 @@ jobs:
           chmod +x bin/git-finder
           echo "✅ git-finder created"
 
-          # 创建启动脚本（包含锁机制，防止无限循环）
+          # ============================================================
+          # 创建启动脚本（修复版 - 不使用 exec，防止进程管理问题）
+          # ============================================================
           cat > start-tscode.sh << 'START_EOF'
           #!/bin/bash
+          # TSCode 启动脚本 (Debian 10 修复版)
+          # 重要：不使用 exec，避免进程管理问题
+
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
           # 防止重复启动导致无限循环
@@ -546,11 +551,11 @@ jobs:
               exit 1
           fi
 
-          # 启动 TSCode
+          # 启动 TSCode（直接调用，不使用 exec）
           echo "=== TSCode for Debian 10 ==="
           echo "Starting TSCode..."
 
-          # 执行程序，退出后自动删除锁文件
+          # 直接运行，不使用 exec
           "$EXEC" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -708,28 +713,42 @@ jobs:
           echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
+          # 权限修复
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
             echo "   ✅ chrome-sandbox SUID set"
           fi
 
+          # 设置可执行权限
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
 
-          cd "$DEB_ROOT/usr/bin"
-          ln -sf /opt/tscode/start-tscode.sh tscode
-          cd -
+          # 修复所有可执行文件
+          find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode/resources/app/extensions" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
 
+          # ============================================================
+          # 创建符号链接 - 直接指向可执行文件（修复版）
+          # ============================================================
+          cd "$DEB_ROOT/usr/bin"
+          # 直接指向可执行文件，而不是脚本（避免进程管理问题）
+          ln -sf /opt/tscode/tscode tscode
+          cd -
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/tscode"
+
+          # ============================================================
+          # 创建桌面文件 - 直接调用可执行文件
+          # ============================================================
           cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
           Name=TSCode
           Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/start-tscode.sh %F
+          Exec=/opt/tscode/tscode --no-sandbox %F
           Icon=tscode
           Terminal=false
           Categories=Development;IDE;
@@ -738,12 +757,18 @@ jobs:
           StartupWMClass=Code
           EOF
 
+          # ============================================================
+          # 复制图标
+          # ============================================================
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
+          # ============================================================
+          # 创建 DEBIAN/control
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/control" << EOF
           Package: tscode
           Version: $DEB_VERSION
@@ -759,6 +784,9 @@ jobs:
           Priority: optional
           EOF
 
+          # ============================================================
+          # 创建 postinst 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -768,12 +796,20 @@ jobs:
           # 清理可能的锁文件
           rm -f /tmp/tscode.lock
 
+          # 修复 chrome-sandbox SUID 权限
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
               echo "  ✅ chrome-sandbox permissions fixed"
           fi
 
+          # 修复 ripgrep
+          if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
+              chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
+              echo "  ✅ ripgrep permissions fixed"
+          fi
+
+          # 检查 Git
           GIT_PATH=""
           for g in /usr/local/bin/git /usr/bin/git; do
               if [ -x "$g" ]; then
@@ -788,21 +824,27 @@ jobs:
               echo "  ⚠️ Git not found. Install with: apt-get install git"
           fi
 
+          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/
+          fi
+
+          if command -v update-icon-caches >/dev/null 2>&1; then
+              update-icon-caches /usr/share/icons/hicolor/
           fi
 
           echo ""
           echo "✅ TSCode installed successfully!"
           echo ""
           echo "Run 'tscode' to start."
-          echo "If you see repeated 'Starting TSCode' messages, run:"
-          echo "  rm -f /tmp/tscode.lock"
           echo "=========================================="
           POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
+          # ============================================================
+          # 创建 prerm 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
@@ -860,8 +902,5 @@ jobs:
             echo ""
             echo "🔍 Verify:"
             echo "  /opt/tscode/validate.sh"
-            echo ""
-            echo "⚠️ If you see repeated 'Starting TSCode' messages:"
-            echo "  rm -f /tmp/tscode.lock"
             echo "=========================================="
           fi
