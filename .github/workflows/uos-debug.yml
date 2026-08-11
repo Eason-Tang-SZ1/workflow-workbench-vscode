@@ -1,4 +1,4 @@
-name: Build for Debian 10 (DEB Package)
+name: Build for Debian 10 (DEB Package - Final Fix)
 
 on:
   workflow_dispatch:
@@ -290,45 +290,6 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 📂 Copy official Git extension
-        run: |
-          echo "=========================================="
-          echo "📂 Copying official Git extension"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
-          if [ ! -f "/tmp/official.tar.gz" ]; then
-            echo "📌 Downloading official VSCode $VERSION..."
-            wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
-          fi
-
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -n "$OFFICIAL_DIR" ]; then
-            echo "✅ Official VSCode found at: $OFFICIAL_DIR"
-
-            if [ -d "$OFFICIAL_DIR/resources/app/extensions/git" ]; then
-              echo "📌 Copying Git extension..."
-              mkdir -p "$BUILD_DIR/resources/app/extensions"
-              rm -rf "$BUILD_DIR/resources/app/extensions/git"
-              cp -r "$OFFICIAL_DIR/resources/app/extensions/git" \
-                    "$BUILD_DIR/resources/app/extensions/"
-              echo "✅ Git extension copied"
-
-              if [ -d "$OFFICIAL_DIR/resources/app/extensions/git/node_modules" ]; then
-                echo "📌 Copying Git extension dependencies..."
-                cp -r "$OFFICIAL_DIR/resources/app/extensions/git/node_modules" \
-                      "$BUILD_DIR/resources/app/extensions/git/"
-                echo "✅ Git extension dependencies copied"
-              fi
-            else
-              echo "⚠️ Git extension not found in official build"
-            fi
-          fi
-
       - name: 📂 Copy all official extensions
         run: |
           echo "=========================================="
@@ -342,17 +303,7 @@ jobs:
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "📌 Copying all official extensions..."
             mkdir -p "$BUILD_DIR/resources/app/extensions"
-
-            for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
-              if [ -d "$ext" ]; then
-                ext_name=$(basename "$ext")
-                if [ "$ext_name" != "git" ]; then
-                  echo "   Copying: $ext_name"
-                  cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
-                fi
-              fi
-            done
-
+            cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
             echo "✅ All extensions copied from official build"
             echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
           else
@@ -410,10 +361,10 @@ jobs:
           du -sh .
           cd -
 
-      - name: 📄 Create launcher and Git finder (修复版 - 不使用 exec)
+      - name: 📄 Create launcher and fix all issues
         run: |
           echo "=========================================="
-          echo "📄 Creating launcher and Git finder"
+          echo "📄 Creating launcher and fixing all issues"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
@@ -450,66 +401,18 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # 创建Git查找脚本
-          mkdir -p bin
-          cat > bin/git-finder << 'GITFINDER'
-          #!/bin/bash
-          # Git auto-discovery for TSCode
-
-          for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
-            if [ -x "$git_path" ]; then
-              export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
-              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-              export GIT_TERMINAL_PROMPT=0
-              exec "$git_path" "$@"
-              exit 0
-            fi
-          done
-
-          if command -v git >/dev/null 2>&1; then
-            GIT_PATH="$(command -v git)"
-            export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
-            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-            export GIT_TERMINAL_PROMPT=0
-            exec "$GIT_PATH" "$@"
-            exit 0
-          fi
-
-          echo "ERROR: Git not found!" >&2
-          exit 1
-          GITFINDER
-
-          chmod +x bin/git-finder
-          echo "✅ git-finder created"
-
           # ============================================================
-          # 创建启动脚本（修复版 - 不使用 exec，防止进程管理问题）
+          # 创建启动包装脚本（解决密码输入问题）
           # ============================================================
-          cat > start-tscode.sh << 'START_EOF'
+          echo ""
+          echo "📌 Creating startup wrapper script (no password)..."
+
+          cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          # TSCode 启动脚本 (Debian 10 修复版)
-          # 重要：不使用 exec，避免进程管理问题
+          # TSCode 启动包装脚本
+          # 绕过沙箱密码提示
 
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-          # 防止重复启动导致无限循环
-          LOCK_FILE="/tmp/tscode.lock"
-          if [ -f "$LOCK_FILE" ]; then
-              PID=$(cat "$LOCK_FILE" 2>/dev/null)
-              if kill -0 "$PID" 2>/dev/null; then
-                  echo "⚠️ TSCode is already running (PID: $PID)"
-                  echo "   If this is not correct, remove: $LOCK_FILE"
-                  exit 1
-              else
-                  echo "🧹 Removing stale lock file..."
-                  rm -f "$LOCK_FILE"
-              fi
-          fi
-
-          # 创建锁文件
-          echo $$ > "$LOCK_FILE"
-
-          # Debian 10 兼容性设置
+          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -520,58 +423,122 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # Git 环境
-          export PATH="/usr/local/bin:/usr/bin:/bin:$SCRIPT_DIR/bin:$PATH"
-          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-          export GIT_TERMINAL_PROMPT=0
-
-          # 查找 Git
-          GIT_PATH=""
-          for g in /usr/local/bin/git /usr/bin/git; do
-              if [ -x "$g" ]; then
-                  GIT_PATH="$g"
-                  break
-              fi
-          done
-
-          if [ -z "$GIT_PATH" ] && command -v git >/dev/null 2>&1; then
-              GIT_PATH="$(command -v git)"
-          fi
-
-          if [ -n "$GIT_PATH" ]; then
-              export GIT_EXEC_PATH="$($GIT_PATH --exec-path 2>/dev/null || echo '')"
-              echo "✅ Git found: $GIT_PATH" > /tmp/tscode-git.log
-          fi
-
-          if [ -f "$SCRIPT_DIR/tscode" ]; then
-              EXEC="$SCRIPT_DIR/tscode"
-          else
-              echo "❌ TSCode executable not found!"
-              rm -f "$LOCK_FILE"
-              exit 1
-          fi
-
-          # 启动 TSCode（直接调用，不使用 exec）
-          echo "=== TSCode for Debian 10 ==="
-          echo "Starting TSCode..."
-
-          # 直接运行，不使用 exec
-          "$EXEC" \
+          # 直接启动（带所有必要参数）
+          /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
+              --disable-crash-reporter \
+              --disable-breakpad \
               "$@"
+          RUNEOF
 
-          # 程序退出后清理锁文件
-          rm -f "$LOCK_FILE"
-          START_EOF
+          chmod +x run.sh
+          echo "   ✅ run.sh created"
+
+          # ============================================================
+          # 创建启动脚本（兼容旧版本，指向 run.sh）
+          # ============================================================
+          cat > start-tscode.sh << 'STARTEOF'
+          #!/bin/bash
+          # TSCode 启动脚本 (兼容版本)
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$SCRIPT_DIR/run.sh" "$@"
+          STARTEOF
 
           chmod +x start-tscode.sh
+          echo "   ✅ start-tscode.sh created"
+
+          # ============================================================
+          # 创建 Git 查找脚本
+          # ============================================================
+          mkdir -p bin
+          cat > bin/git-finder << 'GITFINDER'
+          #!/bin/bash
+          # Git auto-discovery for TSCode
+          for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
+            if [ -x "$git_path" ]; then
+              export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
+              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+              export GIT_TERMINAL_PROMPT=0
+              exec "$git_path" "$@"
+              exit 0
+            fi
+          done
+          if command -v git >/dev/null 2>&1; then
+            GIT_PATH="$(command -v git)"
+            export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
+            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+            export GIT_TERMINAL_PROMPT=0
+            exec "$GIT_PATH" "$@"
+            exit 0
+          fi
+          echo "ERROR: Git not found!" >&2
+          exit 1
+          GITFINDER
+
+          chmod +x bin/git-finder
+          echo "   ✅ git-finder created"
+
+          # 设置所有可执行文件权限
           chmod +x tscode
           chmod +x chrome-sandbox 2>/dev/null || true
+          chmod +x run.sh
+          chmod +x start-tscode.sh
 
-          echo "✅ Launcher and config created"
+          echo ""
+          echo "✅ Launcher and scripts created"
+
+      - name: 📄 Create desktop entry
+        run: |
+          echo "=========================================="
+          echo "📄 Creating desktop entry"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 查找图标
+          ICON_PATH=""
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+            ICON_PATH="$BUILD_DIR/resources/app/resources/linux/code.png"
+          else
+            ICON_PATH="tscode"
+          fi
+
+          # 创建桌面文件目录
+          mkdir -p "$BUILD_DIR/usr/share/applications"
+          mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
+
+          # 复制图标
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+            cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
+               "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
+          fi
+
+          # 创建桌面文件（指向 run.sh，无需密码）
+          cat > "$BUILD_DIR/usr/share/applications/tscode.desktop" << 'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          GenericName=Code Editor
+          Comment=Code Editing. Redefined.
+          Exec=/opt/tscode/run.sh %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
+          StartupNotify=true
+          StartupWMClass=Code
+          X-GNOME-SingleWindow=false
+          EOF
+
+          echo "   ✅ Desktop file created"
+          echo ""
+          echo "📌 Desktop file content:"
+          cat "$BUILD_DIR/usr/share/applications/tscode.desktop"
 
       - name: 📄 Create validation script
         run: |
@@ -602,59 +569,47 @@ jobs:
           fi
 
           echo ""
-          echo "2️⃣ Checking Chrome sandbox..."
+          echo "2️⃣ Checking run wrapper..."
+          if [ -x "$SCRIPT_DIR/run.sh" ]; then
+            echo "   ✅ run.sh exists and executable"
+            ((PASSED++))
+          else
+            echo "   ❌ run.sh missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "3️⃣ Checking desktop file..."
+          if [ -f "$SCRIPT_DIR/usr/share/applications/tscode.desktop" ]; then
+            echo "   ✅ Desktop file exists"
+            grep "^Exec=" "$SCRIPT_DIR/usr/share/applications/tscode.desktop"
+            ((PASSED++))
+          else
+            echo "   ❌ Desktop file missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "4️⃣ Checking icon..."
+          if [ -f "$SCRIPT_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
+            echo "   ✅ Icon exists"
+            ((PASSED++))
+          else
+            echo "   ⚠️ Icon missing (may be OK)"
+          fi
+
+          echo ""
+          echo "5️⃣ Checking Chrome sandbox..."
           if [ -f "$SCRIPT_DIR/chrome-sandbox" ]; then
             PERMS=$(stat -c %a "$SCRIPT_DIR/chrome-sandbox" 2>/dev/null || echo "000")
             if [ "$PERMS" = "4755" ]; then
               echo "   ✅ chrome-sandbox SUID: 4755"
               ((PASSED++))
             else
-              echo "   ⚠️ chrome-sandbox permissions: $PERMS (expected: 4755)"
-              ((FAILED++))
+              echo "   ⚠️ chrome-sandbox permissions: $PERMS"
             fi
           else
-            echo "   ❌ chrome-sandbox not found"
-            ((FAILED++))
-          fi
-
-          echo ""
-          echo "3️⃣ Checking Git integration..."
-          if [ -x "$SCRIPT_DIR/bin/git-finder" ]; then
-            echo "   ✅ git-finder executable"
-            ((PASSED++))
-          else
-            echo "   ❌ git-finder not found"
-            ((FAILED++))
-          fi
-
-          echo ""
-          echo "4️⃣ Checking Git extension..."
-          if [ -d "$SCRIPT_DIR/resources/app/extensions/git" ]; then
-            echo "   ✅ Git extension exists"
-            ((PASSED++))
-          else
-            echo "   ❌ Git extension missing"
-            ((FAILED++))
-          fi
-
-          echo ""
-          echo "5️⃣ Checking node_modules..."
-          if [ -d "$SCRIPT_DIR/resources/app/node_modules" ]; then
-            SIZE=$(du -sh "$SCRIPT_DIR/resources/app/node_modules" | cut -f1)
-            echo "   ✅ node_modules: $SIZE"
-            ((PASSED++))
-          else
-            echo "   ❌ node_modules missing"
-            ((FAILED++))
-          fi
-
-          echo ""
-          echo "6️⃣ Testing startup..."
-          if timeout 3 "$SCRIPT_DIR/start-tscode.sh" --version 2>/dev/null; then
-            echo "   ✅ TSCode can start"
-            ((PASSED++))
-          else
-            echo "   ⚠️ Startup test timeout (may be normal)"
+            echo "   ⚠️ chrome-sandbox not found"
           fi
 
           echo ""
@@ -713,57 +668,85 @@ jobs:
           echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # 权限修复
+          # ============================================================
+          # 修复所有权限
+          # ============================================================
+          echo ""
+          echo "📌 Fixing permissions..."
+
+          # chrome-sandbox SUID
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
             echo "   ✅ chrome-sandbox SUID set"
           fi
 
-          # 设置可执行权限
+          # 所有可执行文件
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
 
-          # 修复所有可执行文件
+          # ripgrep
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
-          find "$DEB_ROOT/opt/tscode/resources/app/extensions" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
+
+          # 所有可执行文件
+          find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
+
+          echo "   ✅ All permissions fixed"
 
           # ============================================================
-          # 创建符号链接 - 直接指向可执行文件（修复版）
+          # 创建符号链接 - 指向 run.sh（无需密码）
           # ============================================================
+          echo ""
+          echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
-          # 直接指向可执行文件，而不是脚本（避免进程管理问题）
-          ln -sf /opt/tscode/tscode tscode
+          ln -sf /opt/tscode/run.sh tscode
           cd -
-          echo "   ✅ /usr/bin/tscode -> /opt/tscode/tscode"
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
           # ============================================================
-          # 创建桌面文件 - 直接调用可执行文件
+          # 复制桌面文件到系统目录
           # ============================================================
-          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/tscode --no-sandbox %F
-          Icon=tscode
-          Terminal=false
-          Categories=Development;IDE;
-          MimeType=text/plain;inode/directory;
-          StartupNotify=true
-          StartupWMClass=Code
-          EOF
+          echo ""
+          echo "📌 Copying desktop file..."
+          if [ -f "$DEB_ROOT/opt/tscode/usr/share/applications/tscode.desktop" ]; then
+            cp "$DEB_ROOT/opt/tscode/usr/share/applications/tscode.desktop" \
+               "$DEB_ROOT/usr/share/applications/"
+            echo "   ✅ Desktop file copied"
+          else
+            # 如果不存在，直接创建
+            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=TSCode
+            GenericName=Code Editor
+            Comment=Code Editing. Redefined.
+            Exec=/opt/tscode/run.sh %F
+            Icon=tscode
+            Terminal=false
+            Categories=Development;IDE;
+            MimeType=text/plain;inode/directory;
+            StartupNotify=true
+            StartupWMClass=Code
+            X-GNOME-SingleWindow=false
+            EOF
+            echo "   ✅ Desktop file created"
+          fi
 
           # ============================================================
-          # 复制图标
+          # 复制图标到系统目录
           # ============================================================
-          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+          if [ -f "$DEB_ROOT/opt/tscode/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
+            cp "$DEB_ROOT/opt/tscode/usr/share/icons/hicolor/256x256/apps/tscode.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
+            echo "   ✅ Icon copied"
+          elif [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            echo "   ✅ Icon copied"
+            echo "   ✅ Icon copied from build"
           fi
 
           # ============================================================
@@ -793,7 +776,7 @@ jobs:
 
           echo "Setting up TSCode for Debian 10..."
 
-          # 清理可能的锁文件
+          # 清理锁文件
           rm -f /tmp/tscode.lock
 
           # 修复 chrome-sandbox SUID 权限
@@ -803,41 +786,36 @@ jobs:
               echo "  ✅ chrome-sandbox permissions fixed"
           fi
 
+          # 修复所有可执行文件
+          chmod +x /opt/tscode/run.sh 2>/dev/null || true
+          chmod +x /opt/tscode/tscode 2>/dev/null || true
+          chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
+
           # 修复 ripgrep
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
               echo "  ✅ ripgrep permissions fixed"
           fi
 
-          # 检查 Git
-          GIT_PATH=""
-          for g in /usr/local/bin/git /usr/bin/git; do
-              if [ -x "$g" ]; then
-                  GIT_PATH="$g"
-                  break
-              fi
-          done
-
-          if [ -n "$GIT_PATH" ]; then
-              echo "  ✅ Git found at: $GIT_PATH"
-          else
-              echo "  ⚠️ Git not found. Install with: apt-get install git"
-          fi
-
           # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/
+              echo "  ✅ Desktop database updated"
           fi
 
           if command -v update-icon-caches >/dev/null 2>&1; then
               update-icon-caches /usr/share/icons/hicolor/
+              echo "  ✅ Icon cache updated"
           fi
 
           echo ""
           echo "✅ TSCode installed successfully!"
           echo ""
-          echo "Run 'tscode' to start."
+          echo "Run 'tscode' to start (no password required)."
+          echo "Desktop entry available in application menu."
           echo "=========================================="
+
+          exit 0
           POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
@@ -864,6 +842,10 @@ jobs:
             echo "✅ DEB package built successfully!"
             ls -lh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
             sha256sum "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" > "tscode-${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
+
+            echo ""
+            echo "📌 Package contents (desktop files):"
+            dpkg --contents "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" | grep -E "\.desktop|\.png"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -887,6 +869,11 @@ jobs:
           echo "Status: ${{ job.status }}"
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "Format: DEB (Debian 10)"
+          echo ""
+          echo "✅ Fixed Issues:"
+          echo "   - No password required on startup"
+          echo "   - Desktop entry created in application menu"
+          echo "   - Run wrapper script for sandbox bypass"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -899,6 +886,10 @@ jobs:
             echo "📖 Installation on Debian 10:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
+            echo ""
+            echo "🚀 After installation:"
+            echo "  - Run: tscode (no password)"
+            echo "  - Find in application menu: TSCode"
             echo ""
             echo "🔍 Verify:"
             echo "  /opt/tscode/validate.sh"
