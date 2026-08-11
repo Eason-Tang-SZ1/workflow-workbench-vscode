@@ -674,30 +674,25 @@ jobs:
           echo ""
           echo "📌 Fixing permissions..."
 
-          # chrome-sandbox SUID
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
             echo "   ✅ chrome-sandbox SUID set"
           fi
 
-          # 所有可执行文件
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
 
-          # ripgrep
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
-
-          # 所有可执行文件
           find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
 
           echo "   ✅ All permissions fixed"
 
           # ============================================================
-          # 创建符号链接 - 指向 run.sh（无需密码）
+          # 创建符号链接
           # ============================================================
           echo ""
           echo "📌 Creating symlink..."
@@ -707,52 +702,42 @@ jobs:
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
           # ============================================================
-          # 复制桌面文件到系统目录
+          # 复制桌面文件
           # ============================================================
           echo ""
           echo "📌 Copying desktop file..."
-          if [ -f "$DEB_ROOT/opt/tscode/usr/share/applications/tscode.desktop" ]; then
-            cp "$DEB_ROOT/opt/tscode/usr/share/applications/tscode.desktop" \
-               "$DEB_ROOT/usr/share/applications/"
-            echo "   ✅ Desktop file copied"
-          else
-            # 如果不存在，直接创建
-            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'EOF'
-            [Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name=TSCode
-            GenericName=Code Editor
-            Comment=Code Editing. Redefined.
-            Exec=/opt/tscode/run.sh %F
-            Icon=tscode
-            Terminal=false
-            Categories=Development;IDE;
-            MimeType=text/plain;inode/directory;
-            StartupNotify=true
-            StartupWMClass=Code
-            X-GNOME-SingleWindow=false
-            EOF
-            echo "   ✅ Desktop file created"
-          fi
+
+          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          GenericName=Code Editor
+          Comment=Code Editing. Redefined.
+          Exec=/opt/tscode/run.sh %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE
+          MimeType=text/plain;inode/directory
+          StartupNotify=true
+          StartupWMClass=Code
+          DESKTOPEOF
+
+          echo "   ✅ Desktop file created"
 
           # ============================================================
-          # 复制图标到系统目录
+          # 复制图标
           # ============================================================
-          if [ -f "$DEB_ROOT/opt/tscode/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
-            cp "$DEB_ROOT/opt/tscode/usr/share/icons/hicolor/256x256/apps/tscode.png" \
-               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
-            echo "   ✅ Icon copied"
-          elif [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            echo "   ✅ Icon copied from build"
+            echo "   ✅ Icon copied"
           fi
 
           # ============================================================
           # 创建 DEBIAN/control
           # ============================================================
-          cat > "$DEB_ROOT/DEBIAN/control" << EOF
+          cat > "$DEB_ROOT/DEBIAN/control" << CONTROLEOF
           Package: tscode
           Version: $DEB_VERSION
           Architecture: $DEB_ARCH
@@ -765,7 +750,7 @@ jobs:
           Homepage: https://github.com/tscode
           Section: devel
           Priority: optional
-          EOF
+          CONTROLEOF
 
           # ============================================================
           # 创建 postinst 脚本
@@ -776,28 +761,23 @@ jobs:
 
           echo "Setting up TSCode for Debian 10..."
 
-          # 清理锁文件
           rm -f /tmp/tscode.lock
 
-          # 修复 chrome-sandbox SUID 权限
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
               echo "  ✅ chrome-sandbox permissions fixed"
           fi
 
-          # 修复所有可执行文件
           chmod +x /opt/tscode/run.sh 2>/dev/null || true
           chmod +x /opt/tscode/tscode 2>/dev/null || true
           chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
 
-          # 修复 ripgrep
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
               echo "  ✅ ripgrep permissions fixed"
           fi
 
-          # 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/
               echo "  ✅ Desktop database updated"
@@ -842,10 +822,6 @@ jobs:
             echo "✅ DEB package built successfully!"
             ls -lh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
             sha256sum "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" > "tscode-${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
-
-            echo ""
-            echo "📌 Package contents (desktop files):"
-            dpkg --contents "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" | grep -E "\.desktop|\.png"
           else
             echo "❌ Failed to build DEB package"
             exit 1
