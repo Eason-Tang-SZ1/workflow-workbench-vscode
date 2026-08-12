@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debug DEB Package - Optimized)
+name: Build for Debian 10 (Debug DEB Package - Complete)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian
+            dpkg-dev fakeroot lintian ripgrep
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -47,12 +47,57 @@ jobs:
           echo 'console.log("Postinstall OK");' > build/npm/postinstall.js
           sed -i 's/"postinstall": "node build\/npm\/postinstall.ts"/"postinstall": "node build\/npm\/postinstall.js"/' package.json
 
+      - name: 📦 Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
       - name: 📦 Install dependencies
         run: |
           echo "=========================================="
           echo "📦 Installing dependencies"
           echo "=========================================="
-          npm install --legacy-peer-deps
+
+          # 设置 npm 镜像（加速国内下载）
+          npm config set registry https://registry.npmmirror.com
+
+          # 使用 GitHub Token 避免 API 限流
+          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+            export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+            echo "📌 Using GitHub Token to avoid rate limiting"
+          fi
+
+          # 跳过 ripgrep 下载（防止 403 错误）
+          export RIPGREP_DOWNLOAD_SKIP=1
+          export VSCODE_SKIP_RIPGREP_DOWNLOAD=1
+
+          if [ ! -d "node_modules" ]; then
+            echo "📌 Installing dependencies..."
+            npm install --legacy-peer-deps --no-audit --no-fund || true
+          else
+            echo "📌 Using cached node_modules"
+          fi
+
+          # 确保 ripgrep 可用（通过 apt 安装）
+          if [ ! -f "node_modules/@vscode/ripgrep/bin/rg" ]; then
+            echo "📌 Ensuring ripgrep is available..."
+            mkdir -p node_modules/@vscode/ripgrep/bin
+            if command -v rg >/dev/null 2>&1; then
+              ln -sf $(which rg) node_modules/@vscode/ripgrep/bin/rg 2>/dev/null || true
+              echo "   ✅ ripgrep linked from system"
+            else
+              echo "   Installing ripgrep via apt..."
+              sudo apt-get install -y ripgrep
+              ln -sf $(which rg) node_modules/@vscode/ripgrep/bin/rg 2>/dev/null || true
+            fi
+          fi
+
+          echo "✅ Dependencies installed"
 
       - name: 📦 Install build tools
         run: |
@@ -177,6 +222,8 @@ jobs:
           echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+          echo "RIPGREP_DOWNLOAD_SKIP=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_RIPGREP_DOWNLOAD=1" >> $GITHUB_ENV
 
       - name: 🔨 Build VSCode
         run: |
@@ -187,6 +234,8 @@ jobs:
           export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export RIPGREP_DOWNLOAD_SKIP=1
+          export VSCODE_SKIP_RIPGREP_DOWNLOAD=1
           echo "Start: $(date)"
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
           echo "Done: $(date)"
@@ -285,7 +334,7 @@ jobs:
             echo "   ✅ node_modules replaced with official version"
           fi
 
-          # 保留官方目录供后续使用
+          # 保存官方目录路径供后续使用
           echo "OFFICIAL_DIR=$OFFICIAL_DIR" >> $GITHUB_ENV
           echo "✅ Official VSCode saved for later use"
 
@@ -347,7 +396,7 @@ jobs:
           echo "✅ Extensions copied"
           echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-      - name: 🧹 Aggressive but safe cleanup (size optimization)
+      - name: 🧹 Safe cleanup (preserve core extensions)
         run: |
           echo "=========================================="
           echo "🧹 Safe cleanup - Size Optimization"
@@ -374,34 +423,25 @@ jobs:
 
           cd "$BUILD_DIR/resources/app"
 
-          # ============================================================
-          # 1. 删除 devDependencies（安全，省 50-100MB）
-          # ============================================================
+          # 1. 删除 devDependencies
           echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # ============================================================
-          # 2. 删除 TypeScript 源文件（安全，省 20-50MB）
-          # ============================================================
+          # 2. 删除 TypeScript 源文件
           echo ""
           echo "📌 Removing TypeScript sources..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
 
-          # ============================================================
-          # 3. 删除文档（安全，省 10-30MB）
-          # ============================================================
+          # 3. 删除文档
           echo ""
           echo "📌 Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
 
-          # ============================================================
-          # 4. 删除测试目录（安全，省 10-30MB）
-          # ============================================================
+          # 4. 删除测试目录
           echo ""
           echo "📌 Removing test directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
@@ -409,35 +449,25 @@ jobs:
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
 
-          # ============================================================
-          # 5. 删除示例目录（安全，省 5-15MB）
-          # ============================================================
+          # 5. 删除示例目录
           echo ""
           echo "📌 Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
 
-          # ============================================================
-          # 6. 删除 source maps（安全，省 10-20MB）
-          # ============================================================
+          # 6. 删除 source maps
           echo ""
           echo "📌 Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
           find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.css.map" -type f -delete 2>/dev/null || true
 
-          # ============================================================
-          # 7. 删除 .git 目录（安全，省 5-20MB）
-          # ============================================================
+          # 7. 删除 .git 目录
           echo ""
           echo "📌 Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # ============================================================
-          # 8. 删除不必要的开发包（谨慎，省 50-100MB）
-          # ============================================================
+          # 8. 删除不必要的开发包
           echo ""
           echo "📌 Removing unnecessary development packages..."
           rm -rf node_modules/@types 2>/dev/null || true
@@ -447,11 +477,8 @@ jobs:
           rm -rf node_modules/terser 2>/dev/null || true
           rm -rf node_modules/uglify-js 2>/dev/null || true
           rm -rf node_modules/typescript 2>/dev/null || true
-          rm -rf node_modules/tslib 2>/dev/null || true
 
-          # ============================================================
-          # 9. 删除临时和缓存文件（安全，省 5-10MB）
-          # ============================================================
+          # 9. 删除临时文件
           echo ""
           echo "📌 Removing temp and cache..."
           rm -rf .cache 2>/dev/null || true
@@ -519,9 +546,7 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # ============================================================
           # 创建启动包装脚本（解决密码输入问题）
-          # ============================================================
           echo ""
           echo "📌 Creating startup wrapper script (no password)..."
 
@@ -555,9 +580,7 @@ jobs:
           chmod +x run.sh
           echo "   ✅ run.sh created"
 
-          # ============================================================
           # 创建启动脚本（兼容旧版本，指向 run.sh）
-          # ============================================================
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
           # TSCode 启动脚本 (兼容版本)
@@ -568,9 +591,7 @@ jobs:
           chmod +x start-tscode.sh
           echo "   ✅ start-tscode.sh created"
 
-          # ============================================================
           # 创建 Git 查找脚本
-          # ============================================================
           mkdir -p bin
           cat > bin/git-finder << 'GITFINDER'
           #!/bin/bash
@@ -731,6 +752,16 @@ jobs:
           done
 
           echo ""
+          echo "7️⃣ Checking ripgrep..."
+          if [ -f "$SCRIPT_DIR/resources/app/node_modules/@vscode/ripgrep/bin/rg" ] || command -v rg >/dev/null 2>&1; then
+            echo "   ✅ ripgrep available"
+            ((PASSED++))
+          else
+            echo "   ❌ ripgrep not available"
+            ((FAILED++))
+          fi
+
+          echo ""
           echo "=========================================="
           echo "Validation Results:"
           echo "   ✅ Passed: $PASSED"
@@ -786,9 +817,7 @@ jobs:
           echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # ============================================================
           # 修复所有权限
-          # ============================================================
           echo ""
           echo "📌 Fixing permissions..."
 
@@ -809,9 +838,7 @@ jobs:
 
           echo "   ✅ All permissions fixed"
 
-          # ============================================================
           # 创建符号链接
-          # ============================================================
           echo ""
           echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
@@ -819,9 +846,7 @@ jobs:
           cd -
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
-          # ============================================================
-          # 创建桌面文件（使用 echo 方式避免 heredoc 问题）
-          # ============================================================
+          # 创建桌面文件
           echo ""
           echo "📌 Creating desktop file..."
 
@@ -842,18 +867,14 @@ jobs:
 
           echo "   ✅ Desktop file created"
 
-          # ============================================================
           # 复制图标
-          # ============================================================
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
-          # ============================================================
           # 创建 DEBIAN/control
-          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -872,9 +893,7 @@ jobs:
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
-          # ============================================================
           # 创建 postinst 脚本
-          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -893,9 +912,16 @@ jobs:
           chmod +x /opt/tscode/tscode 2>/dev/null || true
           chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
 
+          # 修复 ripgrep 权限
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
               echo "  ✅ ripgrep permissions fixed"
+          elif command -v rg >/dev/null 2>&1; then
+              echo "  ✅ ripgrep available at $(which rg)"
+          else
+              echo "  ⚠️ ripgrep not found, installing..."
+              apt-get update
+              apt-get install -y ripgrep
           fi
 
           if command -v update-desktop-database >/dev/null 2>&1; then
@@ -920,9 +946,7 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # ============================================================
           # 创建 prerm 脚本
-          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
@@ -946,6 +970,10 @@ jobs:
             echo ""
             echo "📌 Final package size:"
             du -sh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+            echo ""
+            echo "📌 Verifying package contents..."
+            dpkg --contents "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" | grep -E "extensions/(typescript|git|json|markdown)" | head -10 || echo "   No extensions found in package!"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -971,6 +999,8 @@ jobs:
           echo "Format: DEB (Debian 10)"
           echo ""
           echo "✅ Optimizations applied:"
+          echo "   - Cached node_modules"
+          echo "   - Skipped ripgrep download (using system package)"
           echo "   - Removed devDependencies"
           echo "   - Removed TypeScript source files"
           echo "   - Removed documentation"
