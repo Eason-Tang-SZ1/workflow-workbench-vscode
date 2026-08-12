@@ -310,7 +310,7 @@ jobs:
             echo "⚠️ No extensions directory found in source"
           fi
 
-      - name: 🧹 Analyze and strip down build
+      - name: 🧹 Analyze and strip down build (preserve dev)
         run: |
           echo "=========================================="
           echo "🧹 Analyzing and stripping down build"
@@ -322,101 +322,110 @@ jobs:
           echo "📊 Size before cleanup:"
           du -sh .
           echo ""
-          echo "📌 Total node_modules size before cleanup:"
-          du -sh node_modules
-          echo ""
           echo "📌 Top 20 largest packages BEFORE cleanup:"
           du -sh node_modules/* 2>/dev/null | sort -hr | head -20
 
-          # 1. 删除 devDependencies
+          # 删除 devDependencies
           echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # 2. 删除所有开发工具包
+          # 删除测试工具（不影响开发）
           echo ""
-          echo "📌 Removing development tools..."
-          rm -rf node_modules/webpack 2>/dev/null || true
-          rm -rf node_modules/rollup 2>/dev/null || true
-          rm -rf node_modules/vite 2>/dev/null || true
-          rm -rf node_modules/terser 2>/dev/null || true
-          rm -rf node_modules/uglify-js 2>/dev/null || true
-          rm -rf node_modules/typescript 2>/dev/null || true
-          rm -rf node_modules/tslib 2>/dev/null || true
-          rm -rf node_modules/esbuild 2>/dev/null || true
-          rm -rf node_modules/jest 2>/dev/null || true
-          rm -rf node_modules/mocha 2>/dev/null || true
-          rm -rf node_modules/chai 2>/dev/null || true
-          rm -rf node_modules/nyc 2>/dev/null || true
-          rm -rf node_modules/prettier 2>/dev/null || true
-          rm -rf node_modules/eslint 2>/dev/null || true
-          rm -rf node_modules/stylelint 2>/dev/null || true
-          rm -rf node_modules/nodemon 2>/dev/null || true
+          echo "📌 Removing test tools..."
+          sudo rm -rf node_modules/jest 2>/dev/null || true
+          sudo rm -rf node_modules/mocha 2>/dev/null || true
+          sudo rm -rf node_modules/chai 2>/dev/null || true
+          sudo rm -rf node_modules/nyc 2>/dev/null || true
+          sudo rm -rf node_modules/sinon 2>/dev/null || true
+          sudo rm -rf node_modules/@wdio 2>/dev/null || true
+          sudo rm -rf node_modules/@appium 2>/dev/null || true
 
-          # 3. 删除大型可选依赖
+          # 删除浏览器自动化工具（不影响开发）
+          echo ""
+          echo "📌 Removing browser automation tools..."
+          sudo rm -rf node_modules/@playwright 2>/dev/null || true
+          sudo rm -rf node_modules/playwright 2>/dev/null || true
+          sudo rm -rf node_modules/playwright-core 2>/dev/null || true
+          sudo rm -rf node_modules/puppeteer 2>/dev/null || true
+          sudo rm -rf node_modules/agent-browser 2>/dev/null || true
+
+          # 删除本地化测试工具
+          echo ""
+          echo "📌 Removing localization test tools..."
+          sudo rm -rf node_modules/pseudo-localization 2>/dev/null || true
+
+          # 删除构建工具（不影响运行时）
+          echo ""
+          echo "📌 Removing build tools..."
+          sudo rm -rf node_modules/webpack 2>/dev/null || true
+          sudo rm -rf node_modules/rollup 2>/dev/null || true
+          sudo rm -rf node_modules/vite 2>/dev/null || true
+          sudo rm -rf node_modules/esbuild 2>/dev/null || true
+          sudo rm -rf node_modules/@esbuild 2>/dev/null || true
+          sudo rm -rf node_modules/terser 2>/dev/null || true
+          sudo rm -rf node_modules/uglify-js 2>/dev/null || true
+
+          # 删除 TypeScript 相关（VSCode 内置了 TS 服务）
+          echo ""
+          echo "📌 Removing TypeScript tools (VSCode has built-in support)..."
+          sudo rm -rf node_modules/typescript 2>/dev/null || true
+          sudo rm -rf node_modules/tslib 2>/dev/null || true
+          sudo rm -rf node_modules/@typescript 2>/dev/null || true
+          sudo rm -rf node_modules/@typescript-eslint 2>/dev/null || true
+          sudo rm -rf node_modules/@ts-morph 2>/dev/null || true
+          sudo rm -rf node_modules/@types 2>/dev/null || true
+
+          # 删除代码质量工具
+          echo ""
+          echo "📌 Removing code quality tools..."
+          sudo rm -rf node_modules/prettier 2>/dev/null || true
+          sudo rm -rf node_modules/eslint 2>/dev/null || true
+          sudo rm -rf node_modules/stylelint 2>/dev/null || true
+          sudo rm -rf node_modules/nodemon 2>/dev/null || true
+
+          # 删除可选依赖（不影响核心功能）
           echo ""
           echo "📌 Removing optional large dependencies..."
-          rm -rf node_modules/electron 2>/dev/null || true
-          rm -rf node_modules/aws-sdk 2>/dev/null || true
-          rm -rf node_modules/puppeteer 2>/dev/null || true
-          rm -rf node_modules/playwright 2>/dev/null || true
-          rm -rf node_modules/chromium 2>/dev/null || true
-          rm -rf node_modules/aws-sdk 2>/dev/null || true
+          sudo rm -rf node_modules/electron 2>/dev/null || true
+          sudo rm -rf node_modules/aws-sdk 2>/dev/null || true
+          sudo rm -rf node_modules/innosetup 2>/dev/null || true
+          sudo rm -rf node_modules/@zip.js 2>/dev/null || true
 
-          # 4. 删除所有类型定义
-          echo ""
-          echo "📌 Removing TypeScript definitions..."
-          rm -rf node_modules/@types 2>/dev/null || true
+          # ⚠️ 保留以下核心包（影响开发功能）
+          # @vscode     - VSCode 核心（必须保留）
+          # @github     - Git 功能（必须保留）
+          # @octokit    - GitHub API（必须保留）
+          # @xterm      - 终端功能（必须保留）
+          # @babel      - 可能被其他包依赖
+          # lodash      - 被许多包依赖
 
-          # 5. 删除 TypeScript 源文件
+          # 删除 TypeScript 源文件和文档
           echo ""
-          echo "📌 Removing TypeScript source files..."
+          echo "📌 Removing TypeScript source files and docs..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          # 6. 删除文档
-          echo ""
-          echo "📌 Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
-          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
 
-          # 7. 删除测试目录
+          # 删除测试和示例目录
           echo ""
-          echo "📌 Removing test directories..."
+          echo "📌 Removing test and example directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
-
-          # 8. 删除示例目录
-          echo ""
-          echo "📌 Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
 
-          # 9. 删除 source maps
+          # 删除 source maps
           echo ""
           echo "📌 Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.css.map" -type f -delete 2>/dev/null || true
 
-          # 10. 删除 .git 目录
+          # 删除 .git
           echo ""
           echo "📌 Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-
-          # 11. 删除缓存
-          echo ""
-          echo "📌 Removing cache..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf .vscode-test 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
 
           echo ""
           echo "📊 Size AFTER cleanup:"
