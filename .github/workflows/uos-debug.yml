@@ -290,66 +290,155 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 📂 Copy all official extensions
+      - name: 📂 Copy official extensions (preserve all including @builtin)
         run: |
           echo "=========================================="
-          echo "📂 Copying all official extensions"
+          echo "📂 Copying official extensions"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 重新解压官方 VSCode（如果已被删除）
+          if [ ! -d "/tmp/VSCode-linux-x64" ]; then
+            echo "📌 Re-downloading official VSCode..."
+            wget -q https://update.code.visualstudio.com/1.116.0/linux-x64/stable -O /tmp/official.tar.gz
+            tar -xzf /tmp/official.tar.gz -C /tmp/
+          fi
 
           OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
-          if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "📌 Copying all official extensions..."
-            mkdir -p "$BUILD_DIR/resources/app/extensions"
-
-            # 复制所有扩展，包括 @builtin
-            cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
-
-            # 确保 @builtin 扩展存在
-            if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
-              echo "   ✅ @builtin extension copied"
-            else
-              echo "   ⚠️ @builtin extension not found in official build"
-            fi
-
-            echo "✅ All extensions copied from official build"
-            echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
-          else
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "⚠️ Could not find official extensions"
+            exit 0
           fi
 
-      - name: 🧹 Strip down build for release
+          echo "✅ Official VSCode at: $OFFICIAL_DIR"
+
+          # 核心扩展列表（必须保留）
+          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
+
+          mkdir -p "$BUILD_DIR/resources/app/extensions"
+
+          # 复制所有扩展（保留自定义扩展）
+          echo "📌 Copying extensions from official build..."
+          for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
+            if [ -d "$ext" ]; then
+              ext_name=$(basename "$ext")
+              # 跳过 @builtin（单独处理）
+              if [ "$ext_name" = "@builtin" ]; then
+                continue
+              fi
+              # 如果扩展已存在（自定义扩展），跳过
+              if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
+                echo "   ⏭️ Skipping (already exists): $ext_name"
+                continue
+              fi
+              echo "   ✅ Copying: $ext_name"
+              cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
+            fi
+          done
+
+          # 复制 @builtin
+          if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
+            echo "   ✅ Copying: @builtin"
+            rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
+            cp -r "$OFFICIAL_DIR/resources/app/extensions/@builtin" \
+                  "$BUILD_DIR/resources/app/extensions/"
+          fi
+
+          echo ""
+          echo "✅ Extensions copied"
+          echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+
+          # 验证核心扩展
+          echo ""
+          echo "📌 Verifying core extensions:"
+          for ext in $CORE_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+            else
+              echo "   ❌ $ext (MISSING!)"
+            fi
+          done
+
+          # 保存官方目录路径供后续使用
+          echo "OFFICIAL_EXT_DIR=$OFFICIAL_DIR/resources/app/extensions" >> $GITHUB_ENV
+
+      - name: 🧹 Safe cleanup (preserve core extensions)
         run: |
           echo "=========================================="
-          echo "🧹 Stripping down build for release"
+          echo "🧹 Safe cleanup - Step by Step"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          echo "📊 Before cleanup:"
+          du -sh "$BUILD_DIR"
+
+          # 保护核心扩展不被删除
+          echo ""
+          echo "📌 Preserving core extensions..."
+          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result @builtin"
+
+          mkdir -p /tmp/core-extensions-backup
+          for ext in $CORE_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   Backing up: $ext"
+              mv "$BUILD_DIR/resources/app/extensions/$ext" /tmp/core-extensions-backup/ 2>/dev/null || true
+            fi
+          done
+
           cd "$BUILD_DIR/resources/app"
 
-          # 保护 @builtin 扩展不被删除
-          echo "📌 Preserving @builtin extension..."
-          if [ -d "extensions/@builtin" ]; then
-            # 临时移走 @builtin
-            mv extensions/@builtin /tmp/@builtin-backup
-          fi
+          echo ""
+          echo "📌 Removing devDependencies..."
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          echo "📌 Current size before cleanup:"
-          du -sh .
+          echo ""
+          echo "📌 Cleaning node_modules (safe)..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # ... 其他清理操作 ...
+          echo ""
+          echo "📌 Removing unnecessary packages..."
+          rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/webpack 2>/dev/null || true
+          rm -rf node_modules/rollup 2>/dev/null || true
+          rm -rf node_modules/vite 2>/dev/null || true
+          rm -rf node_modules/terser 2>/dev/null || true
 
-          # 恢复 @builtin
-          if [ -d "/tmp/@builtin-backup" ]; then
-            mv /tmp/@builtin-backup extensions/@builtin
-            echo "   ✅ @builtin restored"
-          fi
+          echo ""
+          echo "📌 Removing build temp..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
 
-          echo "📌 Final size after cleanup:"
-          du -sh .
           cd -
+
+          # 恢复核心扩展
+          echo ""
+          echo "📌 Restoring core extensions..."
+          if [ -d "/tmp/core-extensions-backup" ]; then
+            for ext in $CORE_EXTS; do
+              if [ -d "/tmp/core-extensions-backup/$ext" ]; then
+                echo "   Restoring: $ext"
+                mv "/tmp/core-extensions-backup/$ext" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null || true
+              fi
+            done
+            rm -rf /tmp/core-extensions-backup
+          fi
+
+          echo ""
+          echo "📊 After cleanup:"
+          du -sh "$BUILD_DIR"
 
       - name: 📄 Create launcher and fix all issues
         run: |
@@ -488,14 +577,6 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 查找图标
-          ICON_PATH=""
-          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
-            ICON_PATH="$BUILD_DIR/resources/app/resources/linux/code.png"
-          else
-            ICON_PATH="tscode"
-          fi
-
           # 创建桌面文件目录
           mkdir -p "$BUILD_DIR/usr/share/applications"
           mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
@@ -526,9 +607,6 @@ jobs:
           EOF
 
           echo "   ✅ Desktop file created"
-          echo ""
-          echo "📌 Desktop file content:"
-          cat "$BUILD_DIR/usr/share/applications/tscode.desktop"
 
       - name: 📄 Create validation script
         run: |
@@ -572,7 +650,6 @@ jobs:
           echo "3️⃣ Checking desktop file..."
           if [ -f "$SCRIPT_DIR/usr/share/applications/tscode.desktop" ]; then
             echo "   ✅ Desktop file exists"
-            grep "^Exec=" "$SCRIPT_DIR/usr/share/applications/tscode.desktop"
             ((PASSED++))
           else
             echo "   ❌ Desktop file missing"
@@ -585,7 +662,7 @@ jobs:
             echo "   ✅ Icon exists"
             ((PASSED++))
           else
-            echo "   ⚠️ Icon missing (may be OK)"
+            echo "   ⚠️ Icon missing"
           fi
 
           echo ""
@@ -601,6 +678,18 @@ jobs:
           else
             echo "   ⚠️ chrome-sandbox not found"
           fi
+
+          echo ""
+          echo "6️⃣ Checking core extensions..."
+          for ext in typescript-language-features git json-language-features; do
+            if [ -d "$SCRIPT_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+              ((PASSED++))
+            else
+              echo "   ❌ $ext (missing)"
+              ((FAILED++))
+            fi
+          done
 
           echo ""
           echo "=========================================="
@@ -692,36 +781,44 @@ jobs:
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
           # ============================================================
-          # 创建桌面文件
+          # 复制桌面文件
           # ============================================================
           echo ""
-          echo "📌 Creating desktop file..."
-
-          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          GenericName=Code Editor
-          Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/run.sh %F
-          Icon=tscode
-          Terminal=false
-          Categories=Development;IDE
-          MimeType=text/plain;inode/directory
-          StartupNotify=true
-          StartupWMClass=Code
-          DESKTOPEOF
-
-          echo "   ✅ Desktop file created"
+          echo "📌 Copying desktop file..."
+          if [ -f "$BUILD_DIR/usr/share/applications/tscode.desktop" ]; then
+            cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
+               "$DEB_ROOT/usr/share/applications/"
+            echo "   ✅ Desktop file copied"
+          else
+            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=TSCode
+            GenericName=Code Editor
+            Comment=Code Editing. Redefined.
+            Exec=/opt/tscode/run.sh %F
+            Icon=tscode
+            Terminal=false
+            Categories=Development;IDE
+            MimeType=text/plain;inode/directory
+            StartupNotify=true
+            StartupWMClass=Code
+            DESKTOPEOF
+            echo "   ✅ Desktop file created"
+          fi
 
           # ============================================================
           # 复制图标
           # ============================================================
-          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+          if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
+            cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
+            echo "   ✅ Icon copied"
+          elif [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            echo "   ✅ Icon copied"
+            echo "   ✅ Icon copied from resources"
           fi
 
           # ============================================================
@@ -742,7 +839,6 @@ jobs:
           Priority: optional
           CONTROLEOF
 
-          # 替换版本和架构
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
@@ -816,6 +912,10 @@ jobs:
             echo "✅ DEB package built successfully!"
             ls -lh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
             sha256sum "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" > "tscode-${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
+
+            echo ""
+            echo "📌 Verifying package contents..."
+            dpkg --contents "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" | grep -E "extensions/(typescript|git|json|markdown)" | head -10 || echo "   No extensions found in package!"
           else
             echo "❌ Failed to build DEB package"
             exit 1
@@ -843,7 +943,7 @@ jobs:
           echo "✅ Fixed Issues:"
           echo "   - No password required on startup"
           echo "   - Desktop entry created in application menu"
-          echo "   - Run wrapper script for sandbox bypass"
+          echo "   - Official extensions preserved"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -860,6 +960,7 @@ jobs:
             echo "🚀 After installation:"
             echo "  - Run: tscode (no password)"
             echo "  - Find in application menu: TSCode"
+            echo "  - Extensions: TypeScript, Git, JSON, Markdown included"
             echo ""
             echo "🔍 Verify:"
             echo "  /opt/tscode/validate.sh"
