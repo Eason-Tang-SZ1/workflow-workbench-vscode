@@ -57,10 +57,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install dependencies (production only)
         run: |
           echo "=========================================="
-          echo "📦 Installing dependencies"
+          echo "📦 Installing dependencies (production only)"
           echo "=========================================="
 
           npm config set registry https://registry.npmmirror.com
@@ -73,15 +73,13 @@ jobs:
           export VSCODE_SKIP_RIPGREP_DOWNLOAD=1
 
           if [ ! -d "node_modules" ]; then
-            echo "📌 Installing dependencies..."
-            npm install --legacy-peer-deps --no-audit --no-fund || true
+            echo "📌 Installing production dependencies only..."
+            npm install --production --legacy-peer-deps --no-audit --no-fund || true
           else
             echo "📌 Using cached node_modules"
+            # 即使使用缓存，也要清理 devDependencies
+            npm prune --production --legacy-peer-deps 2>/dev/null || true
           fi
-
-          # 使用 npm prune 删除 devDependencies（比手动删除更彻底）
-          echo "📌 Pruning devDependencies..."
-          npm prune --production --legacy-peer-deps 2>/dev/null || true
 
           # 确保 ripgrep 可用
           if [ ! -f "node_modules/@vscode/ripgrep/bin/rg" ]; then
@@ -96,15 +94,24 @@ jobs:
             fi
           fi
 
-          echo "✅ Dependencies installed"
+          echo "✅ Production dependencies installed"
 
-      - name: 📦 Install build tools
+      - name: 📦 Install build tools (separate)
         run: |
+          echo "=========================================="
+          echo "📦 Installing build tools"
+          echo "=========================================="
+
+          # 构建工具单独安装，不污染 node_modules
           npm install -g tsx
-          npm install --legacy-peer-deps \
+
+          # 在项目目录安装构建依赖（但不保存到 package.json）
+          npm install --no-save \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
+
+          echo "✅ Build tools installed"
 
       - name: 🔧 Fix extensions.ts
         run: |
@@ -279,17 +286,16 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          if [ ! -d "./node_modules" ]; then
-            echo "❌ node_modules not found in root!"
-            echo "Installing node_modules..."
-            npm install --legacy-peer-deps
+          # 复制前确保 node_modules 是干净的
+          if [ -d "./node_modules" ]; then
+            echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
+            rm -rf "$BUILD_DIR/resources/app/node_modules"
+            cp -r ./node_modules "$BUILD_DIR/resources/app/"
+            echo "✅ node_modules copied"
+          else
+            echo "❌ node_modules not found!"
+            exit 1
           fi
-
-          echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
-          rm -rf "$BUILD_DIR/resources/app/node_modules"
-          cp -r ./node_modules "$BUILD_DIR/resources/app/"
-
-          echo "✅ node_modules copied"
 
       - name: 🔥 Replace native modules with official version
         run: |
@@ -336,10 +342,10 @@ jobs:
           echo "OFFICIAL_DIR=$OFFICIAL_DIR" >> $GITHUB_ENV
           echo "✅ Official VSCode saved for later use"
 
-      - name: 📂 Copy official extensions (preserve all including @builtin)
+      - name: 📂 Copy official extensions (minimal set)
         run: |
           echo "=========================================="
-          echo "📂 Copying official extensions"
+          echo "📂 Copying official extensions (minimal set)"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
@@ -359,26 +365,24 @@ jobs:
 
           echo "✅ Official VSCode at: $OFFICIAL_DIR"
 
-          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
+          # 只复制核心扩展（减少体积）
+          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
 
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          echo "📌 Copying extensions from official build..."
-          for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
-            if [ -d "$ext" ]; then
-              ext_name=$(basename "$ext")
-              if [ "$ext_name" = "@builtin" ]; then
-                continue
-              fi
-              if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
-                echo "   ⏭️ Skipping (already exists): $ext_name"
-                continue
-              fi
-              echo "   ✅ Copying: $ext_name"
-              cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
+          echo "📌 Copying core extensions only..."
+          for ext in $CORE_EXTS; do
+            if [ -d "$OFFICIAL_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ Copying: $ext"
+              rm -rf "$BUILD_DIR/resources/app/extensions/$ext"
+              cp -r "$OFFICIAL_DIR/resources/app/extensions/$ext" \
+                    "$BUILD_DIR/resources/app/extensions/"
+            else
+              echo "   ⚠️ Skipping: $ext (not found)"
             fi
           done
 
+          # 复制 @builtin
           if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
             echo "   ✅ Copying: @builtin"
             rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
@@ -390,143 +394,86 @@ jobs:
           echo "✅ Extensions copied"
           echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-      - name: 🧹 Aggressive but safe cleanup
+      - name: 🧹 Final cleanup before packaging
         run: |
           echo "=========================================="
-          echo "🧹 Aggressive but safe cleanup"
+          echo "🧹 Final cleanup before packaging"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          echo "📊 Before cleanup:"
+          echo "📊 Size before final cleanup:"
           du -sh "$BUILD_DIR"
-          echo ""
-          echo "📌 Top 20 largest directories before cleanup:"
-          du -sh "$BUILD_DIR"/* 2>/dev/null | sort -hr | head -10
-          echo ""
-          du -sh "$BUILD_DIR/resources/app/node_modules"/* 2>/dev/null | sort -hr | head -10
-
-          # 保护核心扩展
-          echo ""
-          echo "📌 Preserving core extensions..."
-          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result @builtin"
-
-          mkdir -p /tmp/core-extensions-backup
-          for ext in $CORE_EXTS; do
-            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-              echo "   Backing up: $ext"
-              mv "$BUILD_DIR/resources/app/extensions/$ext" /tmp/core-extensions-backup/ 2>/dev/null || true
-            fi
-          done
+          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "No node_modules"
 
           cd "$BUILD_DIR/resources/app"
 
-          # 1. 删除 devDependencies（通过 package.json）
+          # 删除所有开发相关文件
           echo ""
-          echo "📌 Removing devDependencies..."
-          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
+          echo "📌 Removing development files from node_modules..."
 
-          # 2. 删除 TypeScript 源文件
-          echo ""
-          echo "📌 Removing TypeScript sources..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          # 3. 删除所有 .d.ts 类型定义文件（大幅减小体积）
-          echo ""
-          echo "📌 Removing TypeScript definition files (.d.ts)..."
+          # 1. TypeScript 源码和类型定义
+          echo "   Removing TypeScript files..."
+          find node_modules -name "*.ts" -type f -delete 2>/dev/null || true
           find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
 
-          # 4. 删除文档
-          echo ""
-          echo "📌 Removing documentation..."
+          # 2. 文档
+          echo "   Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
           find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
-          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
 
-          # 5. 删除测试目录
-          echo ""
-          echo "📌 Removing test directories..."
+          # 3. 测试
+          echo "   Removing tests..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
 
-          # 6. 删除示例目录
-          echo ""
-          echo "📌 Removing example directories..."
+          # 4. 示例
+          echo "   Removing examples..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
 
-          # 7. 删除 source maps
-          echo ""
-          echo "📌 Removing source maps..."
+          # 5. Source maps
+          echo "   Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
           find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.css.map" -type f -delete 2>/dev/null || true
 
-          # 8. 删除 .git 目录
-          echo ""
-          echo "📌 Removing .git directories..."
+          # 6. .git
+          echo "   Removing .git..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 9. 删除不必要的开发包
-          echo ""
-          echo "📌 Removing unnecessary development packages..."
+          # 7. 开发工具包
+          echo "   Removing development packages..."
           rm -rf node_modules/@types 2>/dev/null || true
           rm -rf node_modules/webpack 2>/dev/null || true
           rm -rf node_modules/rollup 2>/dev/null || true
           rm -rf node_modules/vite 2>/dev/null || true
           rm -rf node_modules/terser 2>/dev/null || true
-          rm -rf node_modules/uglify-js 2>/dev/null || true
           rm -rf node_modules/typescript 2>/dev/null || true
-          rm -rf node_modules/tslib 2>/dev/null || true
           rm -rf node_modules/esbuild 2>/dev/null || true
 
-          # 10. 删除大型可选依赖（如果不需要）
-          echo ""
-          echo "📌 Removing large optional dependencies..."
+          # 8. 大型可选依赖
+          echo "   Removing optional large dependencies..."
           rm -rf node_modules/aws-sdk 2>/dev/null || true
           rm -rf node_modules/electron 2>/dev/null || true
           rm -rf node_modules/puppeteer 2>/dev/null || true
           rm -rf node_modules/playwright 2>/dev/null || true
 
-          # 11. 删除临时和缓存文件
-          echo ""
-          echo "📌 Removing temp and cache..."
+          # 9. 缓存
+          echo "   Removing cache..."
           rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
-          rm -rf out-build 2>/dev/null || true
-          rm -rf out-vscode 2>/dev/null || true
           rm -rf .vscode-test 2>/dev/null || true
 
           cd -
 
-          # 恢复核心扩展
           echo ""
-          echo "📌 Restoring core extensions..."
-          if [ -d "/tmp/core-extensions-backup" ]; then
-            for ext in $CORE_EXTS; do
-              if [ -d "/tmp/core-extensions-backup/$ext" ]; then
-                echo "   Restoring: $ext"
-                mv "/tmp/core-extensions-backup/$ext" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null || true
-              fi
-            done
-            rm -rf /tmp/core-extensions-backup
-          fi
-
-          echo ""
-          echo "📊 After cleanup:"
+          echo "📊 Size after final cleanup:"
           du -sh "$BUILD_DIR"
-          echo ""
-          echo "📌 Top 20 largest directories after cleanup:"
-          du -sh "$BUILD_DIR"/* 2>/dev/null | sort -hr | head -10
-          echo ""
-          du -sh "$BUILD_DIR/resources/app/node_modules"/* 2>/dev/null | sort -hr | head -10
+          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "No node_modules"
 
       - name: 📄 Create launcher and fix all issues
         run: |
@@ -1004,9 +951,10 @@ jobs:
           echo "Format: DEB (Debian 10)"
           echo ""
           echo "✅ Optimizations applied:"
-          echo "   - Cached node_modules"
-          echo "   - npm prune --production"
-          echo "   - Removed TypeScript sources and .d.ts files"
+          echo "   - npm install --production (skip devDependencies)"
+          echo "   - Build tools installed separately"
+          echo "   - Minimal extensions set"
+          echo "   - Removed TypeScript sources and .d.ts"
           echo "   - Removed documentation, tests, examples"
           echo "   - Removed source maps"
           echo "   - Removed unnecessary packages"
