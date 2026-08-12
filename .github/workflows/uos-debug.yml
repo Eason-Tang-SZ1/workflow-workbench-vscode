@@ -781,44 +781,36 @@ jobs:
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
           # ============================================================
-          # 复制桌面文件
+          # 创建桌面文件（使用 echo 方式避免 heredoc 问题）
           # ============================================================
           echo ""
-          echo "📌 Copying desktop file..."
-          if [ -f "$BUILD_DIR/usr/share/applications/tscode.desktop" ]; then
-            cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
-               "$DEB_ROOT/usr/share/applications/"
-            echo "   ✅ Desktop file copied"
-          else
-            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
-            [Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name=TSCode
-            GenericName=Code Editor
-            Comment=Code Editing. Redefined.
-            Exec=/opt/tscode/run.sh %F
-            Icon=tscode
-            Terminal=false
-            Categories=Development;IDE
-            MimeType=text/plain;inode/directory
-            StartupNotify=true
-            StartupWMClass=Code
-            DESKTOPEOF
-            echo "   ✅ Desktop file created"
-          fi
+          echo "📌 Creating desktop file..."
+
+          # 使用 printf 或 echo 代替 heredoc
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Version=1.0' \
+            'Type=Application' \
+            'Name=TSCode' \
+            'GenericName=Code Editor' \
+            'Comment=Code Editing. Redefined.' \
+            'Exec=/opt/tscode/run.sh %F' \
+            'Icon=tscode' \
+            'Terminal=false' \
+            'Categories=Development;IDE' \
+            'MimeType=text/plain;inode/directory' \
+            'StartupNotify=true' \
+            'StartupWMClass=Code' > "$DEB_ROOT/usr/share/applications/tscode.desktop"
+
+          echo "   ✅ Desktop file created"
 
           # ============================================================
           # 复制图标
           # ============================================================
-          if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
-            cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
-               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
-            echo "   ✅ Icon copied"
-          elif [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            echo "   ✅ Icon copied from resources"
+            echo "   ✅ Icon copied"
           fi
 
           # ============================================================
@@ -912,10 +904,6 @@ jobs:
             echo "✅ DEB package built successfully!"
             ls -lh "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
             sha256sum "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" > "tscode-${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
-
-            echo ""
-            echo "📌 Verifying package contents..."
-            dpkg --contents "tscode-${DEB_VERSION}_${DEB_ARCH}.deb" | grep -E "extensions/(typescript|git|json|markdown)" | head -10 || echo "   No extensions found in package!"
           else
             echo "❌ Failed to build DEB package"
             exit 1
