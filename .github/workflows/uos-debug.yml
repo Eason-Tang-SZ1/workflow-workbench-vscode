@@ -303,7 +303,17 @@ jobs:
           if [ -n "$OFFICIAL_DIR" ] && [ -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "📌 Copying all official extensions..."
             mkdir -p "$BUILD_DIR/resources/app/extensions"
+
+            # 复制所有扩展，包括 @builtin
             cp -r "$OFFICIAL_DIR/resources/app/extensions"/* "$BUILD_DIR/resources/app/extensions/"
+
+            # 确保 @builtin 扩展存在
+            if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
+              echo "   ✅ @builtin extension copied"
+            else
+              echo "   ⚠️ @builtin extension not found in official build"
+            fi
+
             echo "✅ All extensions copied from official build"
             echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
           else
@@ -319,44 +329,24 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR/resources/app"
 
+          # 保护 @builtin 扩展不被删除
+          echo "📌 Preserving @builtin extension..."
+          if [ -d "extensions/@builtin" ]; then
+            # 临时移走 @builtin
+            mv extensions/@builtin /tmp/@builtin-backup
+          fi
+
           echo "📌 Current size before cleanup:"
           du -sh .
 
-          echo ""
-          echo "📌 Removing devDependencies..."
-          if command -v json &> /dev/null; then
-            npx json -I -f package.json -e 'this.devDependencies={}'
-          else
-            npm install -g json
-            npx json -I -f package.json -e 'this.devDependencies={}'
+          # ... 其他清理操作 ...
+
+          # 恢复 @builtin
+          if [ -d "/tmp/@builtin-backup" ]; then
+            mv /tmp/@builtin-backup extensions/@builtin
+            echo "   ✅ @builtin restored"
           fi
 
-          echo ""
-          echo "📌 Cleaning node_modules..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-
-          echo ""
-          echo "📌 Removing build temp directories..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
-
-          echo ""
-          echo "📌 Removing unnecessary large modules..."
-          rm -rf node_modules/@types 2>/dev/null || true
-          rm -rf node_modules/*/node_modules/@types 2>/dev/null || true
-
-          echo ""
           echo "📌 Final size after cleanup:"
           du -sh .
           cd -
@@ -692,38 +682,40 @@ jobs:
           echo "   ✅ All permissions fixed"
 
           # ============================================================
-          # 创建符号链接
+          # 创建符号链接 - 指向 run.sh（无需密码）
           # ============================================================
-          echo ""
-          echo "📌 Creating symlink..."
-          cd "$DEB_ROOT/usr/bin"
-          ln -sf /opt/tscode/run.sh tscode
-          cd -
-          echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
+            echo ""
+            echo "📌 Creating symlink..."
+            cd "$DEB_ROOT/usr/bin"
+            # 删除旧链接，创建新链接指向 run.sh
+            rm -f tscode
+            ln -sf /opt/tscode/run.sh tscode
+            cd -
+            echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
-          # ============================================================
-          # 复制桌面文件
-          # ============================================================
-          echo ""
-          echo "📌 Copying desktop file..."
+            # ============================================================
+            # 创建桌面文件 - 使用 run.sh（无需密码）
+            # ============================================================
+            echo ""
+            echo "📌 Creating desktop file..."
 
-          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
-          [Desktop Entry]
-          Version=1.0
-          Type=Application
-          Name=TSCode
-          GenericName=Code Editor
-          Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/run.sh %F
-          Icon=tscode
-          Terminal=false
-          Categories=Development;IDE
-          MimeType=text/plain;inode/directory
-          StartupNotify=true
-          StartupWMClass=Code
-          DESKTOPEOF
+            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
+            [Desktop Entry]
+            Version=1.0
+            Type=Application
+            Name=TSCode
+            GenericName=Code Editor
+            Comment=Code Editing. Redefined.
+            Exec=/opt/tscode/run.sh %F
+            Icon=tscode
+            Terminal=false
+            Categories=Development;IDE
+            MimeType=text/plain;inode/directory
+            StartupNotify=true
+            StartupWMClass=Code
+            DESKTOPEOF
 
-          echo "   ✅ Desktop file created"
+            echo "   ✅ Desktop file created"
 
           # ============================================================
           # 复制图标
