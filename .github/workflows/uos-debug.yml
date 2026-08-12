@@ -1,4 +1,4 @@
-name: Build for Debian 10 (DEB Package - Self-Contained)
+name: Build for Debian 10 (DEB Package - Optimized)
 
 on:
   workflow_dispatch:
@@ -300,7 +300,6 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 使用源码中的扩展
           if [ -d "./extensions" ]; then
             echo "📌 Copying extensions from source..."
             mkdir -p "$BUILD_DIR/resources/app/extensions"
@@ -311,84 +310,124 @@ jobs:
             echo "⚠️ No extensions directory found in source"
           fi
 
-      - name: 🧹 Strip down build for release
+      - name: 🧹 Analyze and strip down build
         run: |
           echo "=========================================="
-          echo "🧹 Stripping down build for release"
+          echo "🧹 Analyzing and stripping down build"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Current size before cleanup:"
+          echo "📊 Size before cleanup:"
           du -sh .
+          echo ""
+          echo "📌 Total node_modules size before cleanup:"
+          du -sh node_modules
+          echo ""
+          echo "📌 Top 20 largest packages BEFORE cleanup:"
+          du -sh node_modules/* 2>/dev/null | sort -hr | head -20
 
           # 1. 删除 devDependencies
           echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # 2. 清理 node_modules
+          # 2. 删除所有开发工具包
           echo ""
-          echo "📌 Cleaning node_modules..."
-
-          # 删除类型定义文件
-          echo "   Removing .d.ts files..."
-          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
-
-          # 删除 TypeScript 源文件
-          echo "   Removing .ts source files..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-
-          # 删除文档
-          echo "   Removing .md files..."
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-
-          # 删除测试目录
-          echo "   Removing test directories..."
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除示例目录
-          echo "   Removing example directories..."
-          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-
-          # 删除 .map 文件
-          echo "   Removing .map files..."
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-
-          # 删除 .git 目录
-          echo "   Removing .git directories..."
-          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-
-          # 3. 删除构建临时目录
-          echo ""
-          echo "📌 Removing build temp directories..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
-
-          # 4. 删除不必要的模块
-          echo ""
-          echo "📌 Removing unnecessary large modules..."
-          rm -rf node_modules/@types 2>/dev/null || true
+          echo "📌 Removing development tools..."
           rm -rf node_modules/webpack 2>/dev/null || true
           rm -rf node_modules/rollup 2>/dev/null || true
           rm -rf node_modules/vite 2>/dev/null || true
           rm -rf node_modules/terser 2>/dev/null || true
+          rm -rf node_modules/uglify-js 2>/dev/null || true
           rm -rf node_modules/typescript 2>/dev/null || true
+          rm -rf node_modules/tslib 2>/dev/null || true
           rm -rf node_modules/esbuild 2>/dev/null || true
+          rm -rf node_modules/jest 2>/dev/null || true
+          rm -rf node_modules/mocha 2>/dev/null || true
+          rm -rf node_modules/chai 2>/dev/null || true
+          rm -rf node_modules/nyc 2>/dev/null || true
+          rm -rf node_modules/prettier 2>/dev/null || true
+          rm -rf node_modules/eslint 2>/dev/null || true
+          rm -rf node_modules/stylelint 2>/dev/null || true
+          rm -rf node_modules/nodemon 2>/dev/null || true
+
+          # 3. 删除大型可选依赖
+          echo ""
+          echo "📌 Removing optional large dependencies..."
           rm -rf node_modules/electron 2>/dev/null || true
           rm -rf node_modules/aws-sdk 2>/dev/null || true
           rm -rf node_modules/puppeteer 2>/dev/null || true
           rm -rf node_modules/playwright 2>/dev/null || true
+          rm -rf node_modules/chromium 2>/dev/null || true
+          rm -rf node_modules/aws-sdk 2>/dev/null || true
+
+          # 4. 删除所有类型定义
+          echo ""
+          echo "📌 Removing TypeScript definitions..."
+          rm -rf node_modules/@types 2>/dev/null || true
+
+          # 5. 删除 TypeScript 源文件
+          echo ""
+          echo "📌 Removing TypeScript source files..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+
+          # 6. 删除文档
+          echo ""
+          echo "📌 Removing documentation..."
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
+          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
+
+          # 7. 删除测试目录
+          echo ""
+          echo "📌 Removing test directories..."
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
+
+          # 8. 删除示例目录
+          echo ""
+          echo "📌 Removing example directories..."
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
+
+          # 9. 删除 source maps
+          echo ""
+          echo "📌 Removing source maps..."
+          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.css.map" -type f -delete 2>/dev/null || true
+
+          # 10. 删除 .git 目录
+          echo ""
+          echo "📌 Removing .git directories..."
+          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+
+          # 11. 删除缓存
+          echo ""
+          echo "📌 Removing cache..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf .vscode-test 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
 
           echo ""
-          echo "📌 Final size after cleanup:"
+          echo "📊 Size AFTER cleanup:"
           du -sh .
+          echo ""
+          echo "📌 Total node_modules size AFTER cleanup:"
+          du -sh node_modules
+          echo ""
+          echo "📌 Top 20 largest packages AFTER cleanup:"
+          du -sh node_modules/* 2>/dev/null | sort -hr | head -20
+
           cd -
 
           echo ""
@@ -878,7 +917,8 @@ jobs:
           echo "   - Removed TypeScript sources and .d.ts"
           echo "   - Removed documentation, tests, examples"
           echo "   - Removed source maps"
-          echo "   - Removed unnecessary packages"
+          echo "   - Removed development tools and optional dependencies"
+          echo "   - Analyzed node_modules structure"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
