@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debug DEB Package - Size Optimized)
+name: Build for Debian 10 (Debug DEB Package - Optimized)
 
 on:
   workflow_dispatch:
@@ -77,7 +77,6 @@ jobs:
             npm install --production --legacy-peer-deps --no-audit --no-fund || true
           else
             echo "📌 Using cached node_modules"
-            # 即使使用缓存，也要清理 devDependencies
             npm prune --production --legacy-peer-deps 2>/dev/null || true
           fi
 
@@ -102,10 +101,7 @@ jobs:
           echo "📦 Installing build tools"
           echo "=========================================="
 
-          # 构建工具单独安装，不污染 node_modules
           npm install -g tsx
-
-          # 在项目目录安装构建依赖（但不保存到 package.json）
           npm install --no-save \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
@@ -286,7 +282,6 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 复制前确保 node_modules 是干净的
           if [ -d "./node_modules" ]; then
             echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
             rm -rf "$BUILD_DIR/resources/app/node_modules"
@@ -297,51 +292,6 @@ jobs:
             exit 1
           fi
 
-      - name: 🔥 Replace native modules with official version
-        run: |
-          echo "=========================================="
-          echo "🔥 Replacing native modules with official version"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode}"
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-
-          echo "📌 Downloading official VSCode $VERSION for Linux x64..."
-          wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
-
-          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
-            echo "⚠️ Failed to download version $VERSION, trying latest..."
-            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
-          fi
-
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-          if [ -z "$OFFICIAL_DIR" ]; then
-            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-          fi
-
-          if [ -z "$OFFICIAL_DIR" ]; then
-            echo "❌ Could not find official VSCode!"
-            exit 1
-          fi
-
-          echo "✅ Official VSCode found at: $OFFICIAL_DIR"
-
-          if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            echo "   Copying official node_modules..."
-            if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
-              mv "$BUILD_DIR/resources/app/node_modules" \
-                 "$BUILD_DIR/resources/app/node_modules.bak"
-            fi
-            cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
-                  "$BUILD_DIR/resources/app/"
-            echo "   ✅ node_modules replaced with official version"
-          fi
-
-          echo "OFFICIAL_DIR=$OFFICIAL_DIR" >> $GITHUB_ENV
-          echo "✅ Official VSCode saved for later use"
-
       - name: 📂 Copy official extensions (minimal set)
         run: |
           echo "=========================================="
@@ -349,14 +299,18 @@ jobs:
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
-          OFFICIAL_DIR="${OFFICIAL_DIR:-/tmp/VSCode-linux-x64}"
 
-          if [ ! -d "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "📌 Re-downloading official VSCode..."
-            wget -q https://update.code.visualstudio.com/1.116.0/linux-x64/stable -O /tmp/official.tar.gz
-            tar -xzf /tmp/official.tar.gz -C /tmp/
-            OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          # 下载官方 VSCode 获取扩展
+          echo "📌 Downloading official VSCode for extensions..."
+          wget -q --show-progress "https://update.code.visualstudio.com/1.116.0/linux-x64/stable" -O /tmp/official.tar.gz
+
+          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
+            echo "⚠️ Failed to download version, trying latest..."
+            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
           fi
+
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
 
           if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "⚠️ Could not find official extensions"
@@ -377,8 +331,6 @@ jobs:
               rm -rf "$BUILD_DIR/resources/app/extensions/$ext"
               cp -r "$OFFICIAL_DIR/resources/app/extensions/$ext" \
                     "$BUILD_DIR/resources/app/extensions/"
-            else
-              echo "   ⚠️ Skipping: $ext (not found)"
             fi
           done
 
@@ -390,64 +342,75 @@ jobs:
                   "$BUILD_DIR/resources/app/extensions/"
           fi
 
+          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
+
           echo ""
           echo "✅ Extensions copied"
           echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-      - name: 🧹 Final cleanup before packaging
+      - name: 🧹 Strip down build for release
         run: |
           echo "=========================================="
-          echo "🧹 Final cleanup before packaging"
+          echo "🧹 Stripping down build for release"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
-
-          echo "📊 Size before final cleanup:"
-          du -sh "$BUILD_DIR"
-          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "No node_modules"
-
           cd "$BUILD_DIR/resources/app"
 
-          # 删除所有开发相关文件
-          echo ""
-          echo "📌 Removing development files from node_modules..."
+          echo "📌 Current size before cleanup:"
+          du -sh .
 
-          # 1. TypeScript 源码和类型定义
-          echo "   Removing TypeScript files..."
-          find node_modules -name "*.ts" -type f -delete 2>/dev/null || true
+          # 1. 删除 devDependencies
+          echo ""
+          echo "📌 Removing devDependencies..."
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
+
+          # 2. 清理 node_modules
+          echo ""
+          echo "📌 Cleaning node_modules..."
+
+          # 删除类型定义文件
+          echo "   Removing .d.ts files..."
           find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
 
-          # 2. 文档
-          echo "   Removing documentation..."
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
+          # 删除 TypeScript 源文件
+          echo "   Removing .ts source files..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
 
-          # 3. 测试
-          echo "   Removing tests..."
+          # 删除文档
+          echo "   Removing .md files..."
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+
+          # 删除测试目录
+          echo "   Removing test directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
 
-          # 4. 示例
-          echo "   Removing examples..."
+          # 删除示例目录
+          echo "   Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
 
-          # 5. Source maps
-          echo "   Removing source maps..."
+          # 删除 .map 文件
+          echo "   Removing .map files..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-          find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
 
-          # 6. .git
-          echo "   Removing .git..."
+          # 删除 .git 目录
+          echo "   Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 7. 开发工具包
-          echo "   Removing development packages..."
+          # 3. 删除构建临时目录
+          echo ""
+          echo "📌 Removing build temp directories..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
+
+          # 4. 删除不必要的模块
+          echo ""
+          echo "📌 Removing unnecessary large modules..."
           rm -rf node_modules/@types 2>/dev/null || true
           rm -rf node_modules/webpack 2>/dev/null || true
           rm -rf node_modules/rollup 2>/dev/null || true
@@ -456,24 +419,10 @@ jobs:
           rm -rf node_modules/typescript 2>/dev/null || true
           rm -rf node_modules/esbuild 2>/dev/null || true
 
-          # 8. 大型可选依赖
-          echo "   Removing optional large dependencies..."
-          rm -rf node_modules/aws-sdk 2>/dev/null || true
-          rm -rf node_modules/electron 2>/dev/null || true
-          rm -rf node_modules/puppeteer 2>/dev/null || true
-          rm -rf node_modules/playwright 2>/dev/null || true
-
-          # 9. 缓存
-          echo "   Removing cache..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf .vscode-test 2>/dev/null || true
-
-          cd -
-
           echo ""
-          echo "📊 Size after final cleanup:"
-          du -sh "$BUILD_DIR"
-          du -sh "$BUILD_DIR/resources/app/node_modules" 2>/dev/null || echo "No node_modules"
+          echo "📌 Final size after cleanup:"
+          du -sh .
+          cd -
 
       - name: 📄 Create launcher and fix all issues
         run: |
