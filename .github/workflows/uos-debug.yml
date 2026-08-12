@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debug DEB Package - Complete)
+name: Build for Debian 10 (Debug DEB Package - Size Optimized)
 
 on:
   workflow_dispatch:
@@ -63,16 +63,12 @@ jobs:
           echo "📦 Installing dependencies"
           echo "=========================================="
 
-          # 设置 npm 镜像（加速国内下载）
           npm config set registry https://registry.npmmirror.com
 
-          # 使用 GitHub Token 避免 API 限流
           if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
             export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-            echo "📌 Using GitHub Token to avoid rate limiting"
           fi
 
-          # 跳过 ripgrep 下载（防止 403 错误）
           export RIPGREP_DOWNLOAD_SKIP=1
           export VSCODE_SKIP_RIPGREP_DOWNLOAD=1
 
@@ -83,7 +79,11 @@ jobs:
             echo "📌 Using cached node_modules"
           fi
 
-          # 确保 ripgrep 可用（通过 apt 安装）
+          # 使用 npm prune 删除 devDependencies（比手动删除更彻底）
+          echo "📌 Pruning devDependencies..."
+          npm prune --production --legacy-peer-deps 2>/dev/null || true
+
+          # 确保 ripgrep 可用
           if [ ! -f "node_modules/@vscode/ripgrep/bin/rg" ]; then
             echo "📌 Ensuring ripgrep is available..."
             mkdir -p node_modules/@vscode/ripgrep/bin
@@ -91,7 +91,6 @@ jobs:
               ln -sf $(which rg) node_modules/@vscode/ripgrep/bin/rg 2>/dev/null || true
               echo "   ✅ ripgrep linked from system"
             else
-              echo "   Installing ripgrep via apt..."
               sudo apt-get install -y ripgrep
               ln -sf $(which rg) node_modules/@vscode/ripgrep/bin/rg 2>/dev/null || true
             fi
@@ -334,7 +333,6 @@ jobs:
             echo "   ✅ node_modules replaced with official version"
           fi
 
-          # 保存官方目录路径供后续使用
           echo "OFFICIAL_DIR=$OFFICIAL_DIR" >> $GITHUB_ENV
           echo "✅ Official VSCode saved for later use"
 
@@ -347,7 +345,6 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           OFFICIAL_DIR="${OFFICIAL_DIR:-/tmp/VSCode-linux-x64}"
 
-          # 如果官方目录不存在，重新解压
           if [ ! -d "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
             echo "📌 Re-downloading official VSCode..."
             wget -q https://update.code.visualstudio.com/1.116.0/linux-x64/stable -O /tmp/official.tar.gz
@@ -362,12 +359,10 @@ jobs:
 
           echo "✅ Official VSCode at: $OFFICIAL_DIR"
 
-          # 核心扩展列表（必须保留）
           CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
 
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 复制所有扩展（保留自定义扩展）
           echo "📌 Copying extensions from official build..."
           for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
             if [ -d "$ext" ]; then
@@ -384,7 +379,6 @@ jobs:
             fi
           done
 
-          # 复制 @builtin
           if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
             echo "   ✅ Copying: @builtin"
             rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
@@ -396,19 +390,23 @@ jobs:
           echo "✅ Extensions copied"
           echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-      - name: 🧹 Safe cleanup (preserve core extensions)
+      - name: 🧹 Aggressive but safe cleanup
         run: |
           echo "=========================================="
-          echo "🧹 Safe cleanup - Size Optimization"
+          echo "🧹 Aggressive but safe cleanup"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           echo "📊 Before cleanup:"
           du -sh "$BUILD_DIR"
-          du -sh "$BUILD_DIR/resources/app" 2>/dev/null || true
+          echo ""
+          echo "📌 Top 20 largest directories before cleanup:"
+          du -sh "$BUILD_DIR"/* 2>/dev/null | sort -hr | head -10
+          echo ""
+          du -sh "$BUILD_DIR/resources/app/node_modules"/* 2>/dev/null | sort -hr | head -10
 
-          # 保护核心扩展不被删除
+          # 保护核心扩展
           echo ""
           echo "📌 Preserving core extensions..."
           CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result @builtin"
@@ -423,7 +421,7 @@ jobs:
 
           cd "$BUILD_DIR/resources/app"
 
-          # 1. 删除 devDependencies
+          # 1. 删除 devDependencies（通过 package.json）
           echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
@@ -433,15 +431,22 @@ jobs:
           echo "📌 Removing TypeScript sources..."
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
 
-          # 3. 删除文档
+          # 3. 删除所有 .d.ts 类型定义文件（大幅减小体积）
+          echo ""
+          echo "📌 Removing TypeScript definition files (.d.ts)..."
+          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+
+          # 4. 删除文档
           echo ""
           echo "📌 Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "*.markdown" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -name "AUTHORS*" -type f -delete 2>/dev/null || true
+          find node_modules -name "NOTICE*" -type f -delete 2>/dev/null || true
 
-          # 4. 删除测试目录
+          # 5. 删除测试目录
           echo ""
           echo "📌 Removing test directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
@@ -449,25 +454,27 @@ jobs:
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "spec" -exec rm -rf {} + 2>/dev/null || true
 
-          # 5. 删除示例目录
+          # 6. 删除示例目录
           echo ""
           echo "📌 Removing example directories..."
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "demo" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "demos" -exec rm -rf {} + 2>/dev/null || true
 
-          # 6. 删除 source maps
+          # 7. 删除 source maps
           echo ""
           echo "📌 Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
           find node_modules -name "*.js.map" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.css.map" -type f -delete 2>/dev/null || true
 
-          # 7. 删除 .git 目录
+          # 8. 删除 .git 目录
           echo ""
           echo "📌 Removing .git directories..."
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
-          # 8. 删除不必要的开发包
+          # 9. 删除不必要的开发包
           echo ""
           echo "📌 Removing unnecessary development packages..."
           rm -rf node_modules/@types 2>/dev/null || true
@@ -477,14 +484,25 @@ jobs:
           rm -rf node_modules/terser 2>/dev/null || true
           rm -rf node_modules/uglify-js 2>/dev/null || true
           rm -rf node_modules/typescript 2>/dev/null || true
+          rm -rf node_modules/tslib 2>/dev/null || true
+          rm -rf node_modules/esbuild 2>/dev/null || true
 
-          # 9. 删除临时文件
+          # 10. 删除大型可选依赖（如果不需要）
+          echo ""
+          echo "📌 Removing large optional dependencies..."
+          rm -rf node_modules/aws-sdk 2>/dev/null || true
+          rm -rf node_modules/electron 2>/dev/null || true
+          rm -rf node_modules/puppeteer 2>/dev/null || true
+          rm -rf node_modules/playwright 2>/dev/null || true
+
+          # 11. 删除临时和缓存文件
           echo ""
           echo "📌 Removing temp and cache..."
           rm -rf .cache 2>/dev/null || true
           rm -rf build 2>/dev/null || true
           rm -rf out-build 2>/dev/null || true
           rm -rf out-vscode 2>/dev/null || true
+          rm -rf .vscode-test 2>/dev/null || true
 
           cd -
 
@@ -504,7 +522,11 @@ jobs:
           echo ""
           echo "📊 After cleanup:"
           du -sh "$BUILD_DIR"
-          du -sh "$BUILD_DIR/resources/app" 2>/dev/null || true
+          echo ""
+          echo "📌 Top 20 largest directories after cleanup:"
+          du -sh "$BUILD_DIR"/* 2>/dev/null | sort -hr | head -10
+          echo ""
+          du -sh "$BUILD_DIR/resources/app/node_modules"/* 2>/dev/null | sort -hr | head -10
 
       - name: 📄 Create launcher and fix all issues
         run: |
@@ -515,11 +537,9 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR"
 
-          # 复制配置文件
           [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
           [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
 
-          # 找到可执行文件
           REAL_EXEC=""
           for name in code code-oss; do
             if [ -f "./$name" ]; then
@@ -546,16 +566,13 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # 创建启动包装脚本（解决密码输入问题）
           echo ""
           echo "📌 Creating startup wrapper script (no password)..."
 
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
           # TSCode 启动包装脚本
-          # 绕过沙箱密码提示
 
-          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -566,7 +583,6 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # 直接启动（带所有必要参数）
           /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -580,10 +596,8 @@ jobs:
           chmod +x run.sh
           echo "   ✅ run.sh created"
 
-          # 创建启动脚本（兼容旧版本，指向 run.sh）
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
-          # TSCode 启动脚本 (兼容版本)
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           exec "$SCRIPT_DIR/run.sh" "$@"
           STARTEOF
@@ -591,11 +605,9 @@ jobs:
           chmod +x start-tscode.sh
           echo "   ✅ start-tscode.sh created"
 
-          # 创建 Git 查找脚本
           mkdir -p bin
           cat > bin/git-finder << 'GITFINDER'
           #!/bin/bash
-          # Git auto-discovery for TSCode
           for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
             if [ -x "$git_path" ]; then
               export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
@@ -620,7 +632,6 @@ jobs:
           chmod +x bin/git-finder
           echo "   ✅ git-finder created"
 
-          # 设置所有可执行文件权限
           chmod +x tscode
           chmod +x chrome-sandbox 2>/dev/null || true
           chmod +x run.sh
@@ -637,18 +648,15 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 创建桌面文件目录
           mkdir -p "$BUILD_DIR/usr/share/applications"
           mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
 
-          # 复制图标
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
-          # 创建桌面文件（指向 run.sh，无需密码）
           cat > "$BUILD_DIR/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -762,6 +770,11 @@ jobs:
           fi
 
           echo ""
+          echo "8️⃣ Checking total size..."
+          SIZE=$(du -sh "$SCRIPT_DIR" | cut -f1)
+          echo "   📦 Total size: $SIZE"
+
+          echo ""
           echo "=========================================="
           echo "Validation Results:"
           echo "   ✅ Passed: $PASSED"
@@ -817,7 +830,6 @@ jobs:
           echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # 修复所有权限
           echo ""
           echo "📌 Fixing permissions..."
 
@@ -838,7 +850,6 @@ jobs:
 
           echo "   ✅ All permissions fixed"
 
-          # 创建符号链接
           echo ""
           echo "📌 Creating symlink..."
           cd "$DEB_ROOT/usr/bin"
@@ -846,7 +857,6 @@ jobs:
           cd -
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
-          # 创建桌面文件
           echo ""
           echo "📌 Creating desktop file..."
 
@@ -867,14 +877,12 @@ jobs:
 
           echo "   ✅ Desktop file created"
 
-          # 复制图标
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
-          # 创建 DEBIAN/control
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -893,7 +901,6 @@ jobs:
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
-          # 创建 postinst 脚本
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -912,7 +919,6 @@ jobs:
           chmod +x /opt/tscode/tscode 2>/dev/null || true
           chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
 
-          # 修复 ripgrep 权限
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
               echo "  ✅ ripgrep permissions fixed"
@@ -946,7 +952,6 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # 创建 prerm 脚本
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
@@ -1000,12 +1005,9 @@ jobs:
           echo ""
           echo "✅ Optimizations applied:"
           echo "   - Cached node_modules"
-          echo "   - Skipped ripgrep download (using system package)"
-          echo "   - Removed devDependencies"
-          echo "   - Removed TypeScript source files"
-          echo "   - Removed documentation"
-          echo "   - Removed test directories"
-          echo "   - Removed example directories"
+          echo "   - npm prune --production"
+          echo "   - Removed TypeScript sources and .d.ts files"
+          echo "   - Removed documentation, tests, examples"
           echo "   - Removed source maps"
           echo "   - Removed unnecessary packages"
           echo "=========================================="
@@ -1024,7 +1026,6 @@ jobs:
             echo "🚀 After installation:"
             echo "  - Run: tscode (no password)"
             echo "  - Find in application menu: TSCode"
-            echo "  - Extensions: TypeScript, Git, JSON, Markdown included"
             echo ""
             echo "🔍 Verify:"
             echo "  /opt/tscode/validate.sh"
