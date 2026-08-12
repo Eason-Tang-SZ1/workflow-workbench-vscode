@@ -1,4 +1,4 @@
-name: Build for Debian 10 (DEB Package - Optimized)
+name: Build for Debian 10 (Ultra Optimized)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian ripgrep
+            dpkg-dev fakeroot lintian ripgrep upx-ucl
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -310,27 +310,24 @@ jobs:
             echo "⚠️ No extensions directory found in source"
           fi
 
-      - name: 🧹 Analyze and strip down build (preserve dev)
+      - name: 🧹 Ultra cleanup
         run: |
           echo "=========================================="
-          echo "🧹 Analyzing and stripping down build"
+          echo "🧹 Ultra cleanup"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR/resources/app"
 
           echo "📊 Size before cleanup:"
-          du -sh .
-          echo ""
-          echo "📌 Top 20 largest packages BEFORE cleanup:"
-          du -sh node_modules/* 2>/dev/null | sort -hr | head -20
+          du -sh node_modules
 
-          # 删除 devDependencies
+          # 1. 删除 devDependencies
           echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # 删除测试工具（不影响开发）
+          # 2. 删除测试工具
           echo ""
           echo "📌 Removing test tools..."
           sudo rm -rf node_modules/jest 2>/dev/null || true
@@ -340,8 +337,10 @@ jobs:
           sudo rm -rf node_modules/sinon 2>/dev/null || true
           sudo rm -rf node_modules/@wdio 2>/dev/null || true
           sudo rm -rf node_modules/@appium 2>/dev/null || true
+          sudo rm -rf node_modules/webdriverio 2>/dev/null || true
+          sudo rm -rf node_modules/webdriver 2>/dev/null || true
 
-          # 删除浏览器自动化工具（不影响开发）
+          # 3. 删除浏览器自动化工具
           echo ""
           echo "📌 Removing browser automation tools..."
           sudo rm -rf node_modules/@playwright 2>/dev/null || true
@@ -350,12 +349,12 @@ jobs:
           sudo rm -rf node_modules/puppeteer 2>/dev/null || true
           sudo rm -rf node_modules/agent-browser 2>/dev/null || true
 
-          # 删除本地化测试工具
+          # 4. 删除本地化测试工具
           echo ""
           echo "📌 Removing localization test tools..."
           sudo rm -rf node_modules/pseudo-localization 2>/dev/null || true
 
-          # 删除构建工具（不影响运行时）
+          # 5. 删除构建工具
           echo ""
           echo "📌 Removing build tools..."
           sudo rm -rf node_modules/webpack 2>/dev/null || true
@@ -365,10 +364,11 @@ jobs:
           sudo rm -rf node_modules/@esbuild 2>/dev/null || true
           sudo rm -rf node_modules/terser 2>/dev/null || true
           sudo rm -rf node_modules/uglify-js 2>/dev/null || true
+          sudo rm -rf node_modules/@parcel 2>/dev/null || true
 
-          # 删除 TypeScript 相关（VSCode 内置了 TS 服务）
+          # 6. 删除 TypeScript 相关
           echo ""
-          echo "📌 Removing TypeScript tools (VSCode has built-in support)..."
+          echo "📌 Removing TypeScript tools..."
           sudo rm -rf node_modules/typescript 2>/dev/null || true
           sudo rm -rf node_modules/tslib 2>/dev/null || true
           sudo rm -rf node_modules/@typescript 2>/dev/null || true
@@ -376,7 +376,7 @@ jobs:
           sudo rm -rf node_modules/@ts-morph 2>/dev/null || true
           sudo rm -rf node_modules/@types 2>/dev/null || true
 
-          # 删除代码质量工具
+          # 7. 删除代码质量工具
           echo ""
           echo "📌 Removing code quality tools..."
           sudo rm -rf node_modules/prettier 2>/dev/null || true
@@ -384,31 +384,43 @@ jobs:
           sudo rm -rf node_modules/stylelint 2>/dev/null || true
           sudo rm -rf node_modules/nodemon 2>/dev/null || true
 
-          # 删除可选依赖（不影响核心功能）
+          # 8. 删除可选依赖
           echo ""
-          echo "📌 Removing optional large dependencies..."
+          echo "📌 Removing optional dependencies..."
           sudo rm -rf node_modules/electron 2>/dev/null || true
           sudo rm -rf node_modules/aws-sdk 2>/dev/null || true
           sudo rm -rf node_modules/innosetup 2>/dev/null || true
           sudo rm -rf node_modules/@zip.js 2>/dev/null || true
+          sudo rm -rf node_modules/katex 2>/dev/null || true
+          sudo rm -rf node_modules/@modelcontextprotocol 2>/dev/null || true
+          sudo rm -rf node_modules/caniuse-lite 2>/dev/null || true
+          sudo rm -rf node_modules/hono 2>/dev/null || true
+          sudo rm -rf node_modules/@anthropic-ai 2>/dev/null || true
+          sudo rm -rf node_modules/zod 2>/dev/null || true
+          sudo rm -rf node_modules/@promptbook 2>/dev/null || true
+          sudo rm -rf node_modules/@microsoft 2>/dev/null || true
+          sudo rm -rf node_modules/@azure 2>/dev/null || true
 
-          # ⚠️ 保留以下核心包（影响开发功能）
-          # @vscode     - VSCode 核心（必须保留）
-          # @github     - Git 功能（必须保留）
-          # @octokit    - GitHub API（必须保留）
-          # @xterm      - 终端功能（必须保留）
-          # @babel      - 可能被其他包依赖
-          # lodash      - 被许多包依赖
-
-          # 删除 TypeScript 源文件和文档
+          # 9. 删除 React（如果不需要）
           echo ""
-          echo "📌 Removing TypeScript source files and docs..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          echo "📌 Removing React..."
+          sudo rm -rf node_modules/react 2>/dev/null || true
+          sudo rm -rf node_modules/react-dom 2>/dev/null || true
+
+          # 10. 删除所有 .ts 和 .d.ts 文件
+          echo ""
+          echo "📌 Removing TypeScript source and definition files..."
+          find node_modules -name "*.ts" -type f -delete 2>/dev/null || true
+          find node_modules -name "*.d.ts" -type f -delete 2>/dev/null || true
+
+          # 11. 删除文档
+          echo ""
+          echo "📌 Removing documentation..."
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
 
-          # 删除测试和示例目录
+          # 12. 删除测试和示例目录
           echo ""
           echo "📌 Removing test and example directories..."
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
@@ -417,31 +429,48 @@ jobs:
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
 
-          # 删除 source maps
+          # 13. 删除 source maps
           echo ""
           echo "📌 Removing source maps..."
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
 
-          # 删除 .git
+          # 15. 删除缓存
           echo ""
-          echo "📌 Removing .git directories..."
-          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+          echo "📌 Removing cache..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf .vscode-test 2>/dev/null || true
 
           echo ""
-          echo "📊 Size AFTER cleanup:"
-          du -sh .
-          echo ""
-          echo "📌 Total node_modules size AFTER cleanup:"
+          echo "📊 Size after cleanup:"
           du -sh node_modules
-          echo ""
-          echo "📌 Top 20 largest packages AFTER cleanup:"
-          du -sh node_modules/* 2>/dev/null | sort -hr | head -20
+          du -sh .
 
           cd -
 
-          echo ""
-          echo "📌 Total build size:"
-          du -sh "$BUILD_DIR"
+      - name: 📦 Compress binaries with UPX
+        run: |
+          echo "=========================================="
+          echo "📦 Compressing binaries with UPX"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 压缩主程序
+          if [ -f "$BUILD_DIR/tscode" ]; then
+            echo "📌 Compressing tscode..."
+            SIZE_BEFORE=$(stat -c%s "$BUILD_DIR/tscode" 2>/dev/null || echo "0")
+            upx -1 "$BUILD_DIR/tscode" 2>/dev/null || true
+            SIZE_AFTER=$(stat -c%s "$BUILD_DIR/tscode" 2>/dev/null || echo "0")
+            echo "   Before: $SIZE_BEFORE -> After: $SIZE_AFTER"
+          fi
+
+          # 压缩 chrome-sandbox
+          if [ -f "$BUILD_DIR/chrome-sandbox" ]; then
+            echo "📌 Compressing chrome-sandbox..."
+            upx -1 "$BUILD_DIR/chrome-sandbox" 2>/dev/null || true
+          fi
+
+          echo "✅ Binary compression completed"
 
       - name: 📄 Create launcher and fix all issues
         run: |
@@ -918,16 +947,15 @@ jobs:
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "Format: DEB (Debian 10)"
           echo ""
-          echo "✅ Optimizations applied:"
-          echo "   - npm install --production (skip devDependencies)"
-          echo "   - Build tools installed separately"
-          echo "   - Self-built node_modules (not from official)"
-          echo "   - Extensions from source (not from official)"
+          echo "✅ Ultra optimizations applied:"
+          echo "   - npm install --production"
+          echo "   - Removed all dev tools and test frameworks"
           echo "   - Removed TypeScript sources and .d.ts"
+          echo "   - Removed browser automation tools"
+          echo "   - Removed optional dependencies"
+          echo "   - UPX compressed binaries"
           echo "   - Removed documentation, tests, examples"
           echo "   - Removed source maps"
-          echo "   - Removed development tools and optional dependencies"
-          echo "   - Analyzed node_modules structure"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
