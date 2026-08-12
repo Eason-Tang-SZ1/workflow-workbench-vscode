@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debug DEB Package - Optimized)
+name: Build for Debian 10 (DEB Package - Self-Contained)
 
 on:
   workflow_dispatch:
@@ -292,61 +292,24 @@ jobs:
             exit 1
           fi
 
-      - name: 📂 Copy official extensions (minimal set)
+      - name: 📂 Use built-in extensions (from source)
         run: |
           echo "=========================================="
-          echo "📂 Copying official extensions (minimal set)"
+          echo "📂 Using built-in extensions from source"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 下载官方 VSCode 获取扩展
-          echo "📌 Downloading official VSCode for extensions..."
-          wget -q --show-progress "https://update.code.visualstudio.com/1.116.0/linux-x64/stable" -O /tmp/official.tar.gz
-
-          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
-            echo "⚠️ Failed to download version, trying latest..."
-            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+          # 使用源码中的扩展
+          if [ -d "./extensions" ]; then
+            echo "📌 Copying extensions from source..."
+            mkdir -p "$BUILD_DIR/resources/app/extensions"
+            cp -r ./extensions/* "$BUILD_DIR/resources/app/extensions/"
+            echo "✅ Extensions copied from source"
+            echo "📌 Extensions count: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+          else
+            echo "⚠️ No extensions directory found in source"
           fi
-
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "⚠️ Could not find official extensions"
-            exit 0
-          fi
-
-          echo "✅ Official VSCode at: $OFFICIAL_DIR"
-
-          # 只复制核心扩展（减少体积）
-          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
-
-          mkdir -p "$BUILD_DIR/resources/app/extensions"
-
-          echo "📌 Copying core extensions only..."
-          for ext in $CORE_EXTS; do
-            if [ -d "$OFFICIAL_DIR/resources/app/extensions/$ext" ]; then
-              echo "   ✅ Copying: $ext"
-              rm -rf "$BUILD_DIR/resources/app/extensions/$ext"
-              cp -r "$OFFICIAL_DIR/resources/app/extensions/$ext" \
-                    "$BUILD_DIR/resources/app/extensions/"
-            fi
-          done
-
-          # 复制 @builtin
-          if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
-            echo "   ✅ Copying: @builtin"
-            rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
-            cp -r "$OFFICIAL_DIR/resources/app/extensions/@builtin" \
-                  "$BUILD_DIR/resources/app/extensions/"
-          fi
-
-          rm -rf /tmp/official.tar.gz /tmp/VSCode-linux-x64
-
-          echo ""
-          echo "✅ Extensions copied"
-          echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
       - name: 🧹 Strip down build for release
         run: |
@@ -418,11 +381,19 @@ jobs:
           rm -rf node_modules/terser 2>/dev/null || true
           rm -rf node_modules/typescript 2>/dev/null || true
           rm -rf node_modules/esbuild 2>/dev/null || true
+          rm -rf node_modules/electron 2>/dev/null || true
+          rm -rf node_modules/aws-sdk 2>/dev/null || true
+          rm -rf node_modules/puppeteer 2>/dev/null || true
+          rm -rf node_modules/playwright 2>/dev/null || true
 
           echo ""
           echo "📌 Final size after cleanup:"
           du -sh .
           cd -
+
+          echo ""
+          echo "📌 Total build size:"
+          du -sh "$BUILD_DIR"
 
       - name: 📄 Create launcher and fix all issues
         run: |
@@ -902,7 +873,8 @@ jobs:
           echo "✅ Optimizations applied:"
           echo "   - npm install --production (skip devDependencies)"
           echo "   - Build tools installed separately"
-          echo "   - Minimal extensions set"
+          echo "   - Self-built node_modules (not from official)"
+          echo "   - Extensions from source (not from official)"
           echo "   - Removed TypeScript sources and .d.ts"
           echo "   - Removed documentation, tests, examples"
           echo "   - Removed source maps"
