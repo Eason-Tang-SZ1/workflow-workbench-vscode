@@ -682,40 +682,38 @@ jobs:
           echo "   ✅ All permissions fixed"
 
           # ============================================================
-          # 创建符号链接 - 指向 run.sh（无需密码）
+          # 创建符号链接
           # ============================================================
-            echo ""
-            echo "📌 Creating symlink..."
-            cd "$DEB_ROOT/usr/bin"
-            # 删除旧链接，创建新链接指向 run.sh
-            rm -f tscode
-            ln -sf /opt/tscode/run.sh tscode
-            cd -
-            echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
+          echo ""
+          echo "📌 Creating symlink..."
+          cd "$DEB_ROOT/usr/bin"
+          ln -sf /opt/tscode/run.sh tscode
+          cd -
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
-            # ============================================================
-            # 创建桌面文件 - 使用 run.sh（无需密码）
-            # ============================================================
-            echo ""
-            echo "📌 Creating desktop file..."
+          # ============================================================
+          # 创建桌面文件
+          # ============================================================
+          echo ""
+          echo "📌 Creating desktop file..."
 
-            cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
-            [Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name=TSCode
-            GenericName=Code Editor
-            Comment=Code Editing. Redefined.
-            Exec=/opt/tscode/run.sh %F
-            Icon=tscode
-            Terminal=false
-            Categories=Development;IDE
-            MimeType=text/plain;inode/directory
-            StartupNotify=true
-            StartupWMClass=Code
-            DESKTOPEOF
+          cat > "$DEB_ROOT/usr/share/applications/tscode.desktop" << 'DESKTOPEOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=TSCode
+          GenericName=Code Editor
+          Comment=Code Editing. Redefined.
+          Exec=/opt/tscode/run.sh %F
+          Icon=tscode
+          Terminal=false
+          Categories=Development;IDE
+          MimeType=text/plain;inode/directory
+          StartupNotify=true
+          StartupWMClass=Code
+          DESKTOPEOF
 
-            echo "   ✅ Desktop file created"
+          echo "   ✅ Desktop file created"
 
           # ============================================================
           # 复制图标
@@ -729,10 +727,10 @@ jobs:
           # ============================================================
           # 创建 DEBIAN/control
           # ============================================================
-          cat > "$DEB_ROOT/DEBIAN/control" << CONTROLEOF
+          cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
-          Version: $DEB_VERSION
-          Architecture: $DEB_ARCH
+          Version: REPLACE_VERSION
+          Architecture: REPLACE_ARCH
           Maintainer: TSCode Team <tscode@example.com>
           Description: TSCode - Code Editing. Redefined.
            TSCode is a code editor redefined and optimized for building
@@ -743,6 +741,10 @@ jobs:
           Section: devel
           Priority: optional
           CONTROLEOF
+
+          # 替换版本和架构
+          sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
+          sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
           # 创建 postinst 脚本
