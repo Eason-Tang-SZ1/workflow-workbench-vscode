@@ -252,19 +252,38 @@ jobs:
           echo "Build size:"
           du -sh "$BUILD_DIR"
 
-      - name: 📦 Install production dependencies
+      - name: 📦 Fix package.json and install dependencies
         run: |
           echo "=========================================="
-          echo "📦 Installing production dependencies"
+          echo "📦 Fixing package.json and installing dependencies"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           cd "$BUILD_DIR/resources/app"
 
-          # 清理并重新安装生产依赖
-          echo "📌 Installing production dependencies..."
-          npm install --legacy-peer-deps --production 2>/dev/null || npm install --legacy-peer-deps
+          # 移除 preinstall 和 postinstall 脚本（它们已经在构建时执行过了）
+          echo "📌 Removing preinstall/postinstall scripts from package.json..."
+          npx json -I -f package.json -e 'delete this.scripts.preinstall' 2>/dev/null || true
+          npx json -I -f package.json -e 'delete this.scripts.postinstall' 2>/dev/null || true
+
+          # 删除 devDependencies
+          echo "📌 Removing devDependencies..."
+          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
+
+          # 安装生产依赖（跳过 preinstall/postinstall）
+          echo "📌 Installing production dependencies (skip scripts)..."
+          npm install --legacy-peer-deps --production --ignore-scripts 2>/dev/null || \
+          npm install --legacy-peer-deps --ignore-scripts
+
+          # 确保关键依赖存在
+          echo "📌 Ensuring critical dependencies..."
+          for dep in @vscode/ripgrep @vscode/sqlite3 @vscode/spdlog keytar node-pty vscode-oniguruma vscode-textmate native-watchdog; do
+            if [ ! -d "node_modules/$dep" ]; then
+              echo "  Installing $dep..."
+              npm install $dep --legacy-peer-deps --ignore-scripts 2>/dev/null || true
+            fi
+          done
 
           cd -
 
@@ -282,10 +301,6 @@ jobs:
           du -sh "$BUILD_DIR"
 
           cd "$BUILD_DIR/resources/app"
-
-          echo ""
-          echo "📌 Removing devDependencies..."
-          npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
           echo ""
           echo "📌 Cleaning node_modules..."
