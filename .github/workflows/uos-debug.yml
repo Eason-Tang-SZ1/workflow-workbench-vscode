@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debuge Official DEB Package)
+name: Build for Debian 10 (Debug Official DEB Package)
 
 on:
   workflow_dispatch:
@@ -480,44 +480,117 @@ jobs:
             echo "✅ Already named tscode"
           fi
 
-          # 创建启动包装脚本（解决密码输入问题）
+          # 创建启动包装脚本（完全禁用 crashpad）
           echo ""
-          echo "📌 Creating startup wrapper script (no password)..."
+          echo "📌 Creating startup wrapper script..."
 
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          # TSCode 启动包装脚本 - 绕过沙箱密码提示
+          # TSCode 启动脚本 - Debian 10 优化 (完全禁用 crashpad)
+
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
+          # 完全禁用 crashpad
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
+          export ELECTRON_ENABLE_STACK_DUMPING=0
+          export CHROME_DEVEL_SANDBOX="$SCRIPT_DIR/chrome-sandbox"
 
+          # 禁用 GPU
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          # 禁用 sandbox (Debian 10 兼容)
+          export ELECTRON_DISABLE_SANDBOX=1
+          export ELECTRON_NO_SANDBOX=1
+
+          # X11 设置
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export DISPLAY=${DISPLAY:-:0}
+          export ELECTRON_OZONE_PLATFORM_HINT=x11
+
+          # 直接启动，完全禁用所有可能出问题的功能
           exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
               --disable-gpu \
+              --disable-gpu-compositing \
+              --disable-software-rasterizer \
+              --disable-accelerated-2d-canvas \
+              --disable-accelerated-video-decode \
+              --disable-gpu-sandbox \
               --disable-crash-reporter \
               --disable-breakpad \
+              --disable-dev-shm-usage \
+              --disable-setuid-sandbox \
+              --use-gl=swiftshader \
+              --in-process-gpu \
               "$@"
           RUNEOF
 
           chmod +x run.sh
           echo "   ✅ run.sh created"
 
-          # 设置所有可执行文件权限
-          chmod +x tscode
-          chmod +x chrome-sandbox 2>/dev/null || true
+          echo ""
+          echo "✅ Launcher created"
+
+      - name: 🔧 Fix all permissions (critical for Debian 10)
+        run: |
+          echo "=========================================="
+          echo "🔧 Fixing all permissions for Debian 10"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 1. 修复所有可执行文件权限
+          echo "📌 Fixing executable permissions..."
+          find "$BUILD_DIR" -type f -executable -exec chmod 755 {} \;
+
+          # 2. 特别修复 chrome_crashpad_handler (关键!)
+          if [ -f "$BUILD_DIR/chrome_crashpad_handler" ]; then
+            chmod 755 "$BUILD_DIR/chrome_crashpad_handler"
+            echo "   ✅ chrome_crashpad_handler: 755"
+          fi
+
+          # 3. chrome-sandbox 需要 SUID
+          if [ -f "$BUILD_DIR/chrome-sandbox" ]; then
+            sudo chown root:root "$BUILD_DIR/chrome-sandbox"
+            sudo chmod 4755 "$BUILD_DIR/chrome-sandbox"
+            echo "   ✅ chrome-sandbox: SUID 4755"
+          fi
+
+          # 4. 主可执行文件
+          if [ -f "$BUILD_DIR/tscode" ]; then
+            chmod 755 "$BUILD_DIR/tscode"
+            echo "   ✅ tscode: 755"
+          fi
+
+          # 5. run.sh
+          if [ -f "$BUILD_DIR/run.sh" ]; then
+            chmod 755 "$BUILD_DIR/run.sh"
+            echo "   ✅ run.sh: 755"
+          fi
+
+          # 6. 所有二进制工具 (ripgrep, node, etc.)
+          find "$BUILD_DIR" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$BUILD_DIR" -name "node" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$BUILD_DIR" -name "*.node" -type f -exec chmod 644 {} \; 2>/dev/null || true
+
+          # 7. 所有 .so 库文件
+          find "$BUILD_DIR" -name "*.so" -type f -exec chmod 644 {} \; 2>/dev/null || true
+          find "$BUILD_DIR" -name "*.so.*" -type f -exec chmod 644 {} \; 2>/dev/null || true
 
           echo ""
-          echo "✅ Launcher and scripts created"
+          echo "📌 Verifying key files:"
+          ls -la "$BUILD_DIR"/tscode 2>/dev/null || echo "   tscode not found"
+          ls -la "$BUILD_DIR"/chrome_crashpad_handler 2>/dev/null || echo "   chrome_crashpad_handler not found"
+          ls -la "$BUILD_DIR"/chrome-sandbox 2>/dev/null || echo "   chrome-sandbox not found"
+          ls -la "$BUILD_DIR"/run.sh 2>/dev/null || echo "   run.sh not found"
+
+          echo ""
+          echo "✅ All permissions fixed"
 
       - name: 📄 Create desktop entry
         run: |
@@ -538,7 +611,7 @@ jobs:
             echo "   ✅ Icon copied"
           fi
 
-          # 创建桌面文件（指向 run.sh，无需密码）
+          # 创建桌面文件
           cat > "$BUILD_DIR/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -582,7 +655,7 @@ jobs:
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
           # ============================================================
-          # 修复权限 (官方标准)
+          # 修复权限 (官方标准) - 关键步骤!
           # ============================================================
           echo ""
           echo "📌 Setting standard permissions..."
@@ -594,18 +667,28 @@ jobs:
             echo "   ✅ chrome-sandbox SUID set (4755)"
           fi
 
-          # 可执行文件: 755
+          # chrome_crashpad_handler: 755 (关键!)
+          if [ -f "$DEB_ROOT/opt/tscode/chrome_crashpad_handler" ]; then
+            chmod 755 "$DEB_ROOT/opt/tscode/chrome_crashpad_handler"
+            echo "   ✅ chrome_crashpad_handler set (755)"
+          fi
+
+          # 所有可执行文件: 755
+          find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \;
+
+          # 主可执行文件
           chmod 755 "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod 755 "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
 
           # 所有文件: 644, 目录: 755
-          find "$DEB_ROOT/opt/tscode" -type f -exec chmod 644 {} \;
+          find "$DEB_ROOT/opt/tscode" -type f ! -executable -exec chmod 644 {} \;
           find "$DEB_ROOT/opt/tscode" -type d -exec chmod 755 {} \;
 
-          # 重新设置可执行文件权限
+          # 重新设置可执行文件权限（确保不被覆盖）
           chmod 755 "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod 755 "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
-          chmod 755 "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
+          chmod 755 "$DEB_ROOT/opt/tscode/chrome_crashpad_handler" 2>/dev/null || true
+          chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox" 2>/dev/null || true
 
           # ripgrep 等二进制文件
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
@@ -624,23 +707,20 @@ jobs:
           echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
           # ============================================================
-          # 复制图标
-          # ============================================================
-          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
-            cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
-               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            chmod 644 "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
-            echo "   ✅ Icon copied"
-          fi
-
-          # ============================================================
-          # 复制桌面文件
+          # 复制图标和桌面文件
           # ============================================================
           if [ -f "$BUILD_DIR/usr/share/applications/tscode.desktop" ]; then
             cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
                "$DEB_ROOT/usr/share/applications/"
             chmod 644 "$DEB_ROOT/usr/share/applications/tscode.desktop"
             echo "   ✅ Desktop file copied"
+          fi
+
+          if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
+            cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
+            chmod 644 "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
           fi
 
           # ============================================================
@@ -670,14 +750,11 @@ jobs:
           echo "   ✅ control file created"
 
           # ============================================================
-          # 创建 DEBIAN/postinst (官方格式)
+          # 创建 DEBIAN/postinst
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
-
-          # DEBIAN 标准 postinst 脚本
-          # 根据 Debian Policy 4.5.0
 
           echo "Setting up TSCode ($2)..."
 
@@ -690,9 +767,18 @@ jobs:
                 echo "  ✅ chrome-sandbox: SUID fixed"
               fi
 
+              # 修复 chrome_crashpad_handler 权限 (关键!)
+              if [ -f "/opt/tscode/chrome_crashpad_handler" ]; then
+                chmod 755 /opt/tscode/chrome_crashpad_handler 2>/dev/null || true
+                echo "  ✅ chrome_crashpad_handler: permissions fixed"
+              fi
+
               # 确保可执行文件权限正确
               chmod 755 /opt/tscode/tscode 2>/dev/null || true
               chmod 755 /opt/tscode/run.sh 2>/dev/null || true
+
+              # 修复所有可执行文件
+              find /opt/tscode -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
 
               # 更新桌面数据库
               if command -v update-desktop-database >/dev/null 2>&1; then
@@ -723,7 +809,6 @@ jobs:
               ;;
           esac
 
-          # DEBIAN 标准: postinst 必须成功返回
           exit 0
           POSTINSTEOF
 
@@ -731,13 +816,11 @@ jobs:
           echo "   ✅ postinst script created"
 
           # ============================================================
-          # 创建 DEBIAN/prerm (官方格式)
+          # 创建 DEBIAN/prerm
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
-
-          # DEBIAN 标准 prerm 脚本
 
           case "$1" in
             remove|upgrade|deconfigure)
@@ -752,7 +835,7 @@ jobs:
           echo "   ✅ prerm script created"
 
           # ============================================================
-          # 创建 DEBIAN/postrm (官方格式)
+          # 创建 DEBIAN/postrm
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postrm" << 'POSTRMEOF'
           #!/bin/bash
@@ -761,7 +844,6 @@ jobs:
           case "$1" in
             remove|purge)
               echo "TSCode has been removed."
-              # 清除可能的临时文件
               rm -rf /tmp/tscode-* 2>/dev/null || true
               ;;
           esac
@@ -773,7 +855,7 @@ jobs:
           echo "   ✅ postrm script created"
 
           # ============================================================
-          # 创建 DEBIAN/md5sums (官方标准)
+          # 创建 DEBIAN/md5sums
           # ============================================================
           echo ""
           echo "📌 Generating md5sums..."
@@ -783,7 +865,7 @@ jobs:
           echo "   ✅ md5sums generated"
 
           # ============================================================
-          # 创建 copyright (官方标准)
+          # 创建 copyright
           # ============================================================
           cat > "$DEB_ROOT/usr/share/doc/tscode/copyright" << 'COPYRIGHTEOF'
           Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -820,7 +902,7 @@ jobs:
           echo "   ✅ copyright file created"
 
           # ============================================================
-          # 创建 changelog (官方标准)
+          # 创建 changelog
           # ============================================================
           cat > "$DEB_ROOT/usr/share/doc/tscode/changelog" << 'CHANGELOGEOF'
           tscode (1.116.0-1) stable; urgency=medium
@@ -828,6 +910,7 @@ jobs:
             * Initial release for Debian 10
             * Built from official VSCode source
             * Optimized for UOS/Debian compatibility
+            * Fixed chrome_crashpad_handler permissions
 
            -- TSCode Team <tscode@example.com>  Thu, 01 Jan 2024 00:00:00 +0000
           CHANGELOGEOF
@@ -836,10 +919,10 @@ jobs:
           echo "   ✅ changelog created"
 
           # ============================================================
-          # 构建 DEB 包 (官方方式)
+          # 构建 DEB 包
           # ============================================================
           echo ""
-          echo "📌 Building DEB package using official dpkg-deb..."
+          echo "📌 Building DEB package..."
 
           cd "$DEB_ROOT"
           fakeroot dpkg-deb -Zgzip -z9 --build . "../${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb"
@@ -849,24 +932,19 @@ jobs:
             echo ""
             echo "✅ DEB package built successfully!"
 
-            # 包信息
             echo ""
             echo "📦 Package Info:"
             dpkg-deb --info "${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb" 2>/dev/null || true
 
-            echo ""
-            echo "📦 Contents:"
-            dpkg-deb --contents "${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb" 2>/dev/null | head -20
-
             # 生成校验和
             sha256sum "${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb" > "${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb.sha256"
-            echo "   ✅ SHA256: $(cat ${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb.sha256)"
+            echo "   ✅ SHA256 generated"
           else
             echo "❌ Failed to build DEB package"
             exit 1
           fi
 
-          # 保存版本信息供后续使用
+          # 保存版本信息
           echo "DEB_FILE=${PACKAGE_NAME}_${DEB_VERSION}_${DEB_ARCH}.deb" >> $GITHUB_ENV
 
       - name: 🔍 Lintian check (optional)
@@ -903,14 +981,9 @@ jobs:
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "Format: DEB (Debian 10 / official standards)"
           echo ""
-          echo "✅ Includes:"
-          echo "   - DEBIAN/control (standard)"
-          echo "   - DEBIAN/postinst, prerm, postrm"
-          echo "   - DEBIAN/md5sums"
-          echo "   - usr/share/doc/tscode/copyright"
-          echo "   - usr/share/doc/tscode/changelog.gz"
-          echo ""
           echo "✅ Fixed Issues:"
+          echo "   - chrome_crashpad_handler permission fixed (755)"
+          echo "   - chrome-sandbox SUID set (4755)"
           echo "   - No password required on startup"
           echo "   - Desktop entry in application menu"
           echo "   - Official extensions preserved"
