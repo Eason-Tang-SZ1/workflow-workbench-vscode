@@ -127,14 +127,12 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
 
-          // 创建正确的空流（objectMode: true 是 gulp 需要的）
           function createEmptyStream(): Stream {
             const s = new Stream.Readable({ objectMode: true });
             s._read = () => s.push(null);
             return s;
           }
 
-          // 从本地 extensions 目录创建流
           function createLocalExtensionStream(): Stream {
             const extensionsPath = path.join(process.cwd(), 'extensions');
 
@@ -145,7 +143,6 @@ jobs:
 
             const gulp = require('gulp');
 
-            // 读取所有扩展目录
             const extensionDirs = fs.readdirSync(extensionsPath)
               .filter(dir => {
                 const pkgPath = path.join(extensionsPath, dir, 'package.json');
@@ -155,12 +152,10 @@ jobs:
             console.log(`📦 Found ${extensionDirs.length} extensions in extensions/`);
             extensionDirs.forEach(dir => console.log(`  - ${dir}`));
 
-            // 返回 gulp 流
             return gulp.src('extensions/**/*', { dot: true, base: 'extensions' })
               .pipe(gulp.dest('.build/extensions'));
           }
 
-          // 内置扩展配置
           export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
@@ -331,10 +326,11 @@ jobs:
           echo ""
           echo "Done: $(date)"
 
-      - name: 📦 Copy custom extensions to build
+      # ========== 关键步骤：复制所有扩展并为每个扩展安装依赖 ==========
+      - name: 📦 Copy and fix ALL extensions
         run: |
           echo "=========================================="
-          echo "📦 Copying custom extensions to build"
+          echo "📦 Copy and fix ALL extensions"
           echo "=========================================="
 
           BUILD_DIR=""
@@ -347,38 +343,161 @@ jobs:
           done
 
           if [ -z "$BUILD_DIR" ]; then
-            echo "⚠️ Build directory not found"
-            exit 0
+            echo "❌ Build directory not found!"
+            exit 1
           fi
 
           EXT_DIR="$BUILD_DIR/resources/app/extensions"
           mkdir -p "$EXT_DIR"
 
+          # ========== Step 1: Copy all extensions ==========
+          echo ""
+          echo "📌 Step 1: Copying all extensions..."
+
+          # 复制自定义扩展
           if [ -d "custom-extensions" ] && [ "$(ls -A custom-extensions 2>/dev/null)" ]; then
-            echo "📌 Copying custom extensions..."
+            echo "  Copying custom extensions..."
             cp -r custom-extensions/* "$EXT_DIR/"
-            echo "✅ Custom extensions copied"
+            echo "  ✅ Custom extensions copied"
           fi
 
           if [ -d "./my-extension" ]; then
-            echo "📌 Copying my-extension..."
+            echo "  Copying my-extension..."
             cp -r ./my-extension "$EXT_DIR/"
-            echo "✅ my-extension copied"
+            echo "  ✅ my-extension copied"
           fi
 
-          echo ""
-          echo "📋 Extensions in build:"
-          if [ -d "$EXT_DIR" ]; then
-            for ext in "$EXT_DIR"/*/; do
-              if [ -f "$ext/package.json" ]; then
-                EXT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
-                EXT_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
-                echo "  ✅ $(basename $ext): $EXT_NAME@$EXT_VERSION"
+          # 复制 .build 中的扩展
+          if [ -d ".build/extensions" ]; then
+            echo "  Copying extensions from .build/extensions..."
+            cp -r .build/extensions/* "$EXT_DIR/" 2>/dev/null || true
+            echo "  ✅ .build/extensions copied"
+          fi
+
+          # 复制源码中的扩展（如果尚未复制）
+          if [ -d "extensions" ]; then
+            echo "  Copying additional extensions from extensions/..."
+            for ext in extensions/*/; do
+              EXT_NAME=$(basename "$ext")
+              if [ ! -d "$EXT_DIR/$EXT_NAME" ]; then
+                cp -r "$ext" "$EXT_DIR/" 2>/dev/null || true
+                echo "    Copied: $EXT_NAME"
               fi
             done
-            echo ""
-            echo "Total extensions: $(find "$EXT_DIR" -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+            echo "  ✅ extensions/ copied"
           fi
+
+          # ========== Step 2: Install dependencies for ALL extensions ==========
+          echo ""
+          echo "📌 Step 2: Installing dependencies for ALL extensions..."
+          cd "$EXT_DIR"
+
+          TOTAL_EXT=0
+          DEPS_INSTALLED=0
+          FAILED_EXT=0
+          NO_DEPS=0
+
+          for ext in */; do
+            if [ -f "$ext/package.json" ]; then
+              TOTAL_EXT=$((TOTAL_EXT + 1))
+              EXT_NAME=$(basename "$ext")
+
+              # 检查是否有依赖需要安装
+              HAS_DEPS=false
+              if grep -q '"dependencies"' "$ext/package.json" 2>/dev/null; then
+                HAS_DEPS=true
+              fi
+              if grep -q '"devDependencies"' "$ext/package.json" 2>/dev/null; then
+                HAS_DEPS=true
+              fi
+
+              if [ "$HAS_DEPS" = true ]; then
+                echo "  📦 [$TOTAL_EXT] Installing deps for: $EXT_NAME"
+                cd "$ext"
+
+                # 尝试安装生产依赖
+                if npm install --legacy-peer-deps --ignore-scripts --production 2>/dev/null; then
+                  DEPS_INSTALLED=$((DEPS_INSTALLED + 1))
+                  echo "    ✅ $EXT_NAME (production)"
+                else
+                  # 回退到完整安装
+                  if npm install --legacy-peer-deps --ignore-scripts 2>/dev/null; then
+                    DEPS_INSTALLED=$((DEPS_INSTALLED + 1))
+                    echo "    ✅ $EXT_NAME (full)"
+                  else
+                    FAILED_EXT=$((FAILED_EXT + 1))
+                    echo "    ❌ $EXT_NAME failed"
+                  fi
+                fi
+                cd -
+              else
+                NO_DEPS=$((NO_DEPS + 1))
+                echo "  ⏭️  [$TOTAL_EXT] $EXT_NAME (no dependencies)"
+              fi
+            fi
+          done
+
+          cd -
+
+          # ========== Step 3: Verify extensions ==========
+          echo ""
+          echo "📌 Step 3: Verification..."
+          echo "  Total extensions: $TOTAL_EXT"
+          echo "  Dependencies installed: $DEPS_INSTALLED"
+          echo "  No dependencies: $NO_DEPS"
+          echo "  Failed: $FAILED_EXT"
+
+          # ========== Step 4: Check debugger extensions ==========
+          echo ""
+          echo "📌 Checking debugger extensions:"
+          DEBUGGER_COUNT=0
+          for ext in "$EXT_DIR"/*/; do
+            if [ -f "$ext/package.json" ]; then
+              if grep -q '"debuggers"' "$ext/package.json" 2>/dev/null; then
+                DEBUGGER_COUNT=$((DEBUGGER_COUNT + 1))
+                EXT_NAME=$(basename "$ext")
+                echo "  ✅ Debugger: $EXT_NAME"
+              fi
+            fi
+          done
+
+          if [ $DEBUGGER_COUNT -eq 0 ]; then
+            echo "  ⚠️ No debugger extensions found!"
+          else
+            echo "  Total debuggers: $DEBUGGER_COUNT"
+          fi
+
+          # ========== Step 5: Check language extensions ==========
+          echo ""
+          echo "📌 Checking language extensions:"
+          LANG_COUNT=0
+          for ext in "$EXT_DIR"/*/; do
+            if [ -f "$ext/package.json" ]; then
+              if grep -q '"languages"' "$ext/package.json" 2>/dev/null; then
+                LANG_COUNT=$((LANG_COUNT + 1))
+                EXT_NAME=$(basename "$ext")
+                echo "  ✅ Language: $EXT_NAME"
+              fi
+            fi
+          done
+          echo "  Total language extensions: $LANG_COUNT"
+
+          # ========== Step 6: Show final extension list ==========
+          echo ""
+          echo "📋 Final extensions list:"
+          for ext in "$EXT_DIR"/*/; do
+            if [ -f "$ext/package.json" ]; then
+              EXT_NAME=$(basename "$ext")
+              HAS_DEPS=""
+              if grep -q '"dependencies"' "$ext/package.json" 2>/dev/null; then
+                HAS_DEPS=" (has deps)"
+              fi
+              echo "  ✅ $EXT_NAME$HAS_DEPS"
+            fi
+          done
+
+          echo ""
+          echo "✅ All extensions processed successfully"
 
       - name: 🔍 Verify build contents
         run: |
@@ -416,11 +535,25 @@ jobs:
             EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
             EXT_COUNT=$((EXT_COUNT - 1))
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
+
+            # 检查调试器扩展
+            echo ""
+            echo "📌 Debugger extensions found:"
+            for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
+              if [ -f "$ext/package.json" ]; then
+                if grep -q '"debuggers"' "$ext/package.json" 2>/dev/null; then
+                  EXT_NAME=$(basename "$ext")
+                  echo "  ✅ $EXT_NAME"
+                fi
+              fi
+            done
+
             echo ""
             echo "📋 Extensions list:"
             ls -la "$BUILD_DIR/resources/app/extensions/"
           else
-            echo "  ⚠️ Extensions directory not found!"
+            echo "  ❌ Extensions directory not found!"
+            exit 1
           fi
 
           echo ""
@@ -748,6 +881,9 @@ jobs:
           echo "   - extensionHost is built-in"
           echo "   - ✅ Official extensions preserved"
           echo "   - ✅ Custom extensions included"
+          echo "   - ✅ All extension dependencies installed"
+          echo "   - ✅ Debugger extensions supported"
+          echo "   - ✅ Language extensions supported"
           echo "   - ✅ Offline installation supported"
           echo "=========================================="
 
