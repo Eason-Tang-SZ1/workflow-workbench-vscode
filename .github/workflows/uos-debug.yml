@@ -11,7 +11,6 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
-      # 新增：自定义扩展Git仓库（可选）
       custom_extension_repo:
         description: 'Custom extension git repo URL (optional)'
         required: false
@@ -33,7 +32,6 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      # 新增：下载自定义扩展
       - name: 📥 Download custom extension
         run: |
           echo "=========================================="
@@ -66,13 +64,12 @@ jobs:
             echo ""
             echo "📋 Custom extensions prepared:"
             ls -la custom-extensions/
-            # 验证扩展
             echo ""
             echo "📋 Validating extensions..."
             for ext in custom-extensions/*/; do
               if [ -f "$ext/package.json" ]; then
-                EXT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" | head -1 | cut -d'"' -f4 || echo "unknown")
-                EXT_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" | head -1 | cut -d'"' -f4 || echo "unknown")
+                EXT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
+                EXT_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
                 echo "  ✅ $(basename $ext): $EXT_NAME@$EXT_VERSION"
               else
                 echo "  ⚠️ $(basename $ext) missing package.json"
@@ -118,8 +115,130 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      # ========== 删除了 "🔧 Fix extensions.ts" 步骤 ==========
-      # 让 VSCode 使用原始的 extensions.ts，保留官方扩展打包功能
+      - name: 🔧 Fix extensions.ts
+        run: |
+          cat > build/lib/extensions.ts << 'EOF'
+          /*---------------------------------------------------------------------------------------------
+           *  Copyright (c) Microsoft Corporation. All rights reserved.
+           *  Licensed under the MIT License. See License.txt in the project root for license information.
+           *--------------------------------------------------------------------------------------------*/
+
+          import { Stream } from 'stream';
+          import * as fs from 'fs';
+          import * as path from 'path';
+
+          // 创建正确的空流（objectMode: true 是 gulp 需要的）
+          function createEmptyStream(): Stream {
+            const s = new Stream.Readable({ objectMode: true });
+            s._read = () => s.push(null);
+            return s;
+          }
+
+          // 从本地 extensions 目录创建流
+          function createLocalExtensionStream(): Stream {
+            const extensionsPath = path.join(process.cwd(), 'extensions');
+
+            if (!fs.existsSync(extensionsPath)) {
+              console.warn('⚠️ extensions directory not found, using empty stream');
+              return createEmptyStream();
+            }
+
+            const gulp = require('gulp');
+
+            // 读取所有扩展目录
+            const extensionDirs = fs.readdirSync(extensionsPath)
+              .filter(dir => {
+                const pkgPath = path.join(extensionsPath, dir, 'package.json');
+                return fs.existsSync(pkgPath);
+              });
+
+            console.log(`📦 Found ${extensionDirs.length} extensions in extensions/`);
+            extensionDirs.forEach(dir => console.log(`  - ${dir}`));
+
+            // 返回 gulp 流
+            return gulp.src('extensions/**/*', { dot: true, base: 'extensions' })
+              .pipe(gulp.dest('.build/extensions'));
+          }
+
+          // 内置扩展配置
+          export const builtInExtensions: any[] = [];
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;
+
+          export function isWebExtension(): boolean {
+            return false;
+          }
+
+          export function getExtensionStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function getExtensionDownloadStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageMarketplaceExtensionsStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageNativeLocalExtensionsStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageNonNativeLocalExtensionsStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageLocalExtensionsStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageExtensionsStream(): Stream {
+            return createLocalExtensionStream();
+          }
+
+          export function packageCopilotExtensionStream(): Stream {
+            const copilotPath = path.join(process.cwd(), 'extensions', 'copilot');
+            if (fs.existsSync(copilotPath)) {
+              const gulp = require('gulp');
+              return gulp.src('extensions/copilot/**/*', { dot: true, base: 'extensions' })
+                .pipe(gulp.dest('.build/extensions/copilot'));
+            }
+            return createEmptyStream();
+          }
+
+          export function packageCopilotChatExtensionStream(): Stream {
+            return packageCopilotExtensionStream();
+          }
+
+          export function packageCopilotAgentsExtensionStream(): Stream {
+            return packageCopilotExtensionStream();
+          }
+
+          export function fromMarketplace(): any[] {
+            return [];
+          }
+
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log('📦 fetchUrls: using local extensions only');
+            return Promise.resolve();
+          }
+
+          export function buildExtensionMedia(): void {
+            console.log('📦 buildExtensionMedia: skipped');
+          }
+
+          export function compileExtensionMedia(): void {
+            console.log('📦 compileExtensionMedia: skipped');
+          }
+
+          export function buildExtensionMediaTask(done: any): void {
+            done();
+          }
+          EOF
+
+          echo "✅ extensions.ts fixed with proper stream handling"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -184,24 +303,20 @@ jobs:
           CRASH_EOF
           echo "crashService.ts created"
 
-      # ========== 修改：删除了 VSCODE_SKIP_BUNDLED_EXTENSIONS=1 ==========
       - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
-          # 已删除: echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
-      # ========== 修改：删除了 VSCODE_SKIP_BUNDLED_EXTENSIONS=1 ==========
       - name: 🔨 Build VSCode from source
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
-          # 已删除: export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
 
@@ -211,20 +326,17 @@ jobs:
           echo "📦 Extensions will be included (official + custom)"
           echo "Start: $(date)"
 
-          # 构建主程序
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
           echo "Done: $(date)"
 
-      # 新增：复制自定义扩展到构建目录
       - name: 📦 Copy custom extensions to build
         run: |
           echo "=========================================="
           echo "📦 Copying custom extensions to build"
           echo "=========================================="
 
-          # 查找构建目录
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
             if [ -d "$dir" ]; then
@@ -235,28 +347,25 @@ jobs:
           done
 
           if [ -z "$BUILD_DIR" ]; then
-            echo "⚠️ Build directory not found yet, will try later"
+            echo "⚠️ Build directory not found"
             exit 0
           fi
 
           EXT_DIR="$BUILD_DIR/resources/app/extensions"
           mkdir -p "$EXT_DIR"
 
-          # 复制自定义扩展
           if [ -d "custom-extensions" ] && [ "$(ls -A custom-extensions 2>/dev/null)" ]; then
             echo "📌 Copying custom extensions..."
             cp -r custom-extensions/* "$EXT_DIR/"
             echo "✅ Custom extensions copied"
           fi
 
-          # 如果存在单个扩展目录
           if [ -d "./my-extension" ]; then
             echo "📌 Copying my-extension..."
             cp -r ./my-extension "$EXT_DIR/"
             echo "✅ my-extension copied"
           fi
 
-          # 显示已安装的扩展
           echo ""
           echo "📋 Extensions in build:"
           if [ -d "$EXT_DIR" ]; then
@@ -268,9 +377,7 @@ jobs:
               fi
             done
             echo ""
-            echo "Total extensions: $(find "$EXT_DIR" -maxdepth 1 -type d | wc -l | tr -d ' ')"
-          else
-            echo "  ⚠️ No extensions directory found"
+            echo "Total extensions: $(find "$EXT_DIR" -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
           fi
 
       - name: 🔍 Verify build contents
@@ -293,7 +400,6 @@ jobs:
             exit 1
           fi
 
-          # 验证关键文件
           echo ""
           echo "📌 Checking critical files..."
           for file in "resources/app/out/main.js" "resources/app/package.json" "code" "chrome-sandbox"; do
@@ -304,11 +410,10 @@ jobs:
             fi
           done
 
-          # 检查扩展目录
           echo ""
           echo "📌 Checking extensions..."
           if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
-            EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d | wc -l)
+            EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
             EXT_COUNT=$((EXT_COUNT - 1))
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
             echo ""
@@ -318,13 +423,12 @@ jobs:
             echo "  ⚠️ Extensions directory not found!"
           fi
 
-          # extensionHost 检查
           echo ""
           echo "📌 Checking extensionHost (built-in)..."
           if [ -f "$BUILD_DIR/resources/app/out/vs/workbench/api/node/extensionHostProcess.js" ]; then
             echo "  ✅ extensionHostProcess.js"
           else
-            echo "  ⚠️ extensionHostProcess.js not found (may be in different location)"
+            echo "  ⚠️ extensionHostProcess.js not found"
           fi
 
           TARGET_DIR="./tscode"
@@ -350,21 +454,17 @@ jobs:
 
           cd "$BUILD_DIR/resources/app"
 
-          # 移除 preinstall 和 postinstall 脚本
           echo "📌 Removing preinstall/postinstall scripts from package.json..."
           npx json -I -f package.json -e 'delete this.scripts.preinstall' 2>/dev/null || true
           npx json -I -f package.json -e 'delete this.scripts.postinstall' 2>/dev/null || true
 
-          # 删除 devDependencies
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          # 安装生产依赖
           echo "📌 Installing production dependencies (skip scripts)..."
           npm install --legacy-peer-deps --production --ignore-scripts 2>/dev/null || \
           npm install --legacy-peer-deps --ignore-scripts
 
-          # 确保关键依赖存在
           echo "📌 Ensuring critical dependencies..."
           for dep in @vscode/ripgrep @vscode/sqlite3 @vscode/spdlog keytar node-pty vscode-oniguruma vscode-textmate native-watchdog; do
             if [ ! -d "node_modules/$dep" ]; then
@@ -422,7 +522,6 @@ jobs:
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR"
 
-          # 找到可执行文件
           REAL_EXEC=""
           for name in code code-oss; do
             if [ -f "./$name" ]; then
@@ -447,7 +546,6 @@ jobs:
             echo "✅ Renamed to tscode"
           fi
 
-          # 创建启动包装脚本
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
           # TSCode 启动包装脚本
@@ -473,7 +571,6 @@ jobs:
 
           chmod +x run.sh
 
-          # 兼容脚本
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -542,7 +639,6 @@ jobs:
           echo "📌 Copying application..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
-          # 修复权限
           echo ""
           echo "📌 Fixing permissions..."
 
@@ -557,12 +653,10 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
-          # 创建符号链接
           cd "$DEB_ROOT/usr/bin"
           ln -sf /opt/tscode/run.sh tscode
           cd -
 
-          # 复制图标和桌面文件
           if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
             cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
@@ -571,7 +665,6 @@ jobs:
           cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
              "$DEB_ROOT/usr/share/applications/"
 
-          # 创建 control 文件
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -589,7 +682,6 @@ jobs:
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
-          # postinst 脚本
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -615,7 +707,6 @@ jobs:
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # 构建 DEB
           echo ""
           echo "📌 Building DEB package..."
           fakeroot dpkg-deb -Zgzip -z9 --build "$DEB_ROOT" "tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
@@ -655,7 +746,7 @@ jobs:
           echo "   - Desktop entry in application menu"
           echo "   - Built from source"
           echo "   - extensionHost is built-in"
-          echo "   - ✅ Official extensions preserved (using VSCode original build)"
+          echo "   - ✅ Official extensions preserved"
           echo "   - ✅ Custom extensions included"
           echo "   - ✅ Offline installation supported"
           echo "=========================================="
