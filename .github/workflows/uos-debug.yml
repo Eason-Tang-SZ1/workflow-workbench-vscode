@@ -32,7 +32,6 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      # ========== 下载自定义扩展 ==========
       - name: 📥 Download custom extension
         run: |
           echo "=========================================="
@@ -59,12 +58,6 @@ jobs:
             echo "✅ VSIX extracted"
           else
             echo "ℹ️ No custom extension provided"
-          fi
-
-          if [ -d "custom-extensions" ] && [ "$(ls -A custom-extensions 2>/dev/null)" ]; then
-            echo ""
-            echo "📋 Custom extensions prepared:"
-            ls -la custom-extensions/
           fi
 
       - name: 📦 Setup Node.js
@@ -105,8 +98,96 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      # ========== 关键：不修改 extensions.ts，使用原始文件 ==========
-      # 但需要修复 gulpfile 中的 spawn 调用
+      # ========== 关键修复：让 extensions.ts 返回空流 ==========
+      - name: 🔧 Fix extensions.ts
+        run: |
+          echo "=========================================="
+          echo "🔧 Fixing extensions.ts"
+          echo "=========================================="
+
+          # 备份原始文件
+          cp build/lib/extensions.ts build/lib/extensions.ts.bak
+
+          # 创建修复脚本
+          cat > /tmp/fix_extensions.py << 'PY_END'
+          import re
+          import sys
+
+          with open('build/lib/extensions.ts', 'r') as f:
+              content = f.read()
+
+          # 定义空流函数
+          empty_stream_func = '''
+          function createEmptyStream(): Stream {
+            const s = new Stream.Readable({ objectMode: true });
+            s._read = () => s.push(null);
+            return s;
+          }
+          '''
+
+          # 如果文件中没有 createEmptyStream，添加它
+          if 'createEmptyStream' not in content:
+              # 在 import 语句后插入
+              content = re.sub(
+                  r'(import \{ Stream \} from \'stream\';)',
+                  r'\1\n\n' + empty_stream_func,
+                  content
+              )
+
+          # 替换所有扩展打包函数为空流
+          functions_to_replace = [
+              'packageMarketplaceExtensionsStream',
+              'packageNativeLocalExtensionsStream',
+              'packageNonNativeLocalExtensionsStream',
+              'packageLocalExtensionsStream',
+              'packageExtensionsStream',
+              'getExtensionStream',
+              'getExtensionDownloadStream'
+          ]
+
+          for func in functions_to_replace:
+              # 匹配函数定义并替换
+              pattern = rf'export function {func}\([^)]*\)\s*:\s*Stream\s*\{{\s*[^}}]*\}}'
+              replacement = f'''export function {func}(): Stream {{
+                console.log('📦 {func}: disabled for build');
+                return createEmptyStream();
+              }}'''
+              content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+          # 处理 packageCopilotExtensionStream
+          pattern = r'export function packageCopilotExtensionStream\([^)]*\)\s*:\s*Stream\s*\{[^}]*\}'
+          replacement = '''export function packageCopilotExtensionStream(): Stream {
+            console.log('📦 packageCopilotExtensionStream: disabled for build');
+            return createEmptyStream();
+          }'''
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+          # 处理 packageCopilotChatExtensionStream
+          pattern = r'export function packageCopilotChatExtensionStream\([^)]*\)\s*:\s*Stream\s*\{[^}]*\}'
+          replacement = '''export function packageCopilotChatExtensionStream(): Stream {
+            console.log('📦 packageCopilotChatExtensionStream: disabled for build');
+            return createEmptyStream();
+          }'''
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+          # 处理 packageCopilotAgentsExtensionStream
+          pattern = r'export function packageCopilotAgentsExtensionStream\([^)]*\)\s*:\s*Stream\s*\{[^}]*\}'
+          replacement = '''export function packageCopilotAgentsExtensionStream(): Stream {
+            console.log('📦 packageCopilotAgentsExtensionStream: disabled for build');
+            return createEmptyStream();
+          }'''
+          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+          with open('build/lib/extensions.ts', 'w') as f:
+              f.write(content)
+
+          print("✅ extensions.ts patched successfully")
+          PY_END
+
+          python3 /tmp/fix_extensions.py
+
+          echo "✅ extensions.ts fixed"
+
       - name: 🔧 Fix gulpfile spawn calls
         run: |
           python3 << 'PY_END'
@@ -180,7 +261,6 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
-      # ========== 关键：删除 VSCODE_SKIP_BUNDLED_EXTENSIONS ==========
       - name: 🔨 Build VSCode from source
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
@@ -202,7 +282,7 @@ jobs:
           echo ""
           echo "Done: $(date)"
 
-      # ========== 复制自定义扩展（如果有） ==========
+      # ========== 复制自定义扩展到构建目录 ==========
       - name: 📦 Copy custom extensions
         run: |
           echo "=========================================="
@@ -627,7 +707,6 @@ jobs:
           echo "   - Desktop entry in application menu"
           echo "   - Built from source"
           echo "   - extensionHost is built-in"
-          echo "   - ✅ Built-in extensions from extensions/ (preserved)"
           echo "   - ✅ Custom extensions included (if provided)"
           echo "   - ✅ Offline installation supported"
           echo "=========================================="
