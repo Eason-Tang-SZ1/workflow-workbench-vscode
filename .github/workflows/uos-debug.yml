@@ -98,14 +98,8 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 使用完整替换 ==========
       - name: 🔧 Fix extensions.ts
         run: |
-          echo "=========================================="
-          echo "🔧 Fixing extensions.ts"
-          echo "=========================================="
-
-          # 直接替换整个文件，确保没有语法错误
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -116,14 +110,12 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
 
-          // 创建空流 - 用于禁用扩展打包
           function createEmptyStream(): Stream {
             const s = new Stream.Readable({ objectMode: true });
             s._read = () => s.push(null);
             return s;
           }
 
-          // 内置扩展配置 - 使用本地扩展
           export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
@@ -204,7 +196,6 @@ jobs:
             done();
           }
 
-          // 导出其他可能需要的函数
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
             console.log('📦 packageAllLocalExtensionsStream: disabled for build');
             return createEmptyStream();
@@ -259,8 +250,6 @@ jobs:
             return input;
           }
           EOF
-
-          echo "✅ extensions.ts completely replaced"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -325,7 +314,6 @@ jobs:
           CRASH_EOF
           echo "crashService.ts created"
 
-      # ========== 删除 VSCODE_SKIP_BUNDLED_EXTENSIONS ==========
       - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
@@ -354,7 +342,6 @@ jobs:
           echo ""
           echo "Done: $(date)"
 
-      # ========== 复制自定义扩展 ==========
       - name: 📦 Copy custom extensions
         run: |
           echo "=========================================="
@@ -477,74 +464,110 @@ jobs:
           echo "Build size:"
           du -sh "$BUILD_DIR"
 
-      - name: 📦 Fix package.json and install dependencies
+      # ========== 关键步骤：在构建环境中编译原生模块 ==========
+      - name: 📦 Compile native modules for offline use
         run: |
           echo "=========================================="
-          echo "📦 Fixing package.json and installing dependencies"
+          echo "📦 Compiling native modules for offline use"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Removing preinstall/postinstall scripts from package.json..."
+          echo "📌 Removing preinstall/postinstall scripts..."
           npx json -I -f package.json -e 'delete this.scripts.preinstall' 2>/dev/null || true
           npx json -I -f package.json -e 'delete this.scripts.postinstall' 2>/dev/null || true
 
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          echo "📌 Installing production dependencies (skip scripts)..."
+          echo "📌 Installing production dependencies..."
           npm install --legacy-peer-deps --production --ignore-scripts 2>/dev/null || \
           npm install --legacy-peer-deps --ignore-scripts
 
-          echo "📌 Ensuring critical dependencies..."
-          for dep in @vscode/ripgrep @vscode/sqlite3 @vscode/spdlog keytar node-pty vscode-oniguruma vscode-textmate native-watchdog; do
-            if [ ! -d "node_modules/$dep" ]; then
-              echo "  Installing $dep..."
-              npm install $dep --legacy-peer-deps --ignore-scripts 2>/dev/null || true
+          # ========== 获取 Electron 版本 ==========
+          ELECTRON_VERSION=$(node -p "require('electron/package.json').version" 2>/dev/null || echo "22.14.0")
+          echo "📌 Electron version: $ELECTRON_VERSION"
+
+          # ========== 下载 Electron 头文件 ==========
+          echo "📌 Downloading Electron headers..."
+          npm install --ignore-scripts --save-dev electron@$ELECTRON_VERSION 2>/dev/null || true
+
+          # 设置编译环境变量
+          export npm_config_target=$ELECTRON_VERSION
+          export npm_config_arch=x64
+          export npm_config_target_platform=linux
+          export npm_config_disturl=https://electronjs.org/headers
+          export npm_config_runtime=electron
+          export npm_config_build_from_source=true
+
+          # ========== 编译所有原生模块 ==========
+          echo ""
+          echo "📌 Compiling native modules..."
+
+          # 需要编译的模块列表
+          modules_to_rebuild=(
+            "@vscode/spdlog"
+            "@vscode/sqlite3"
+            "keytar"
+            "node-pty"
+            "vscode-oniguruma"
+            "native-watchdog"
+            "native-keymap"
+          )
+
+          for module in "${modules_to_rebuild[@]}"; do
+            if [ -d "node_modules/$module" ]; then
+              echo "  🔨 Building $module..."
+              cd "node_modules/$module"
+              # 使用 electron-rebuild 或 node-gyp
+              npm run install 2>/dev/null || \
+              npm run build 2>/dev/null || \
+              npx electron-rebuild --force --only $module 2>/dev/null || \
+              node-gyp rebuild \
+                --target=$ELECTRON_VERSION \
+                --arch=x64 \
+                --dist-url=https://electronjs.org/headers \
+                --runtime=electron 2>/dev/null || \
+              echo "    ⚠️ $module build failed"
+              cd ../..
+            fi
+          done
+
+          # ========== 使用 electron-rebuild 批量编译 ==========
+          echo ""
+          echo "📌 Running electron-rebuild..."
+          npx electron-rebuild --force --module-dir . 2>/dev/null || true
+
+          # ========== 清理编译临时文件 ==========
+          echo ""
+          echo "📌 Cleaning up build artifacts..."
+          find node_modules -name "*.o" -delete 2>/dev/null || true
+          find node_modules -name "*.a" -delete 2>/dev/null || true
+          find node_modules -name "*.Makefile" -delete 2>/dev/null || true
+          find node_modules -name "*.gypch" -delete 2>/dev/null || true
+          find node_modules -name "*.d" -delete 2>/dev/null || true
+          find node_modules -type d -name "obj" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "obj.target" -exec rm -rf {} + 2>/dev/null || true
+
+          # ========== 验证 .node 文件存在 ==========
+          echo ""
+          echo "📌 Verifying native modules:"
+          for module in "${modules_to_rebuild[@]}"; do
+            if [ -d "node_modules/$module" ]; then
+              FOUND=$(find "node_modules/$module" -name "*.node" 2>/dev/null | head -1)
+              if [ -n "$FOUND" ]; then
+                echo "  ✅ $module: $FOUND"
+              else
+                echo "  ⚠️ $module: No .node file found"
+              fi
             fi
           done
 
           cd -
 
-          echo "✅ Dependencies installed"
-
-      - name: 🧹 Cleanup
-        run: |
-          echo "=========================================="
-          echo "🧹 Cleanup"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode}"
-
-          echo "📊 Before cleanup:"
-          du -sh "$BUILD_DIR"
-
-          cd "$BUILD_DIR/resources/app"
-
-          echo ""
-          echo "📌 Cleaning node_modules..."
-          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
-          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
-          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
-          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
-          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
-          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
-
-          echo ""
-          echo "📌 Removing build temp..."
-          rm -rf .cache 2>/dev/null || true
-          rm -rf build 2>/dev/null || true
-
-          cd -
-
-          echo ""
-          echo "📊 After cleanup:"
-          du -sh "$BUILD_DIR"
+          echo "✅ Native modules compiled for offline use"
 
       - name: 📄 Create launcher
         run: |
@@ -780,6 +803,7 @@ jobs:
           echo "   - Built from source"
           echo "   - extensionHost is built-in"
           echo "   - ✅ Custom extensions included"
+          echo "   - ✅ Native modules compiled for offline use"
           echo "   - ✅ Offline installation supported"
           echo "=========================================="
 
