@@ -98,7 +98,7 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      - name: 🔧 Fix extensions.ts (保留内置扩展)
+      - name: 🔧 Fix extensions.ts (返回 Vinyl 流)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -109,9 +109,83 @@ jobs:
           import { Stream } from 'stream';
           import * as fs from 'fs';
           import * as path from 'path';
+          import * as vinyl from 'vinyl';
 
-          // ========== 读取内置扩展 ==========
-          function getBuiltInExtensions(): any[] {
+          // ========== 创建空的 Vinyl 流 ==========
+          function createEmptyVinylStream(): Stream {
+            const { Readable } = require('stream');
+            const stream = new Readable({ objectMode: true });
+            stream._read = function() {
+              this.push(null);
+            };
+            return stream;
+          }
+
+          // ========== 从目录创建 Vinyl 文件流 ==========
+          function createVinylStreamFromDirectory(dirPath: string): Stream {
+            const { Readable } = require('stream');
+            const stream = new Readable({ objectMode: true });
+            let files: vinyl.File[] = [];
+            let pushed = false;
+
+            try {
+              if (fs.existsSync(dirPath)) {
+                const items = fs.readdirSync(dirPath);
+                for (const item of items) {
+                  const itemPath = path.join(dirPath, item);
+                  const stat = fs.statSync(itemPath);
+                  if (stat.isDirectory()) {
+                    // 读取 package.json
+                    const pkgPath = path.join(itemPath, 'package.json');
+                    if (fs.existsSync(pkgPath)) {
+                      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                      // 创建 Vinyl 文件对象
+                      const file = new vinyl.File({
+                        cwd: dirPath,
+                        base: dirPath,
+                        path: itemPath,
+                        contents: Buffer.from(JSON.stringify(pkg, null, 2)),
+                        stat: stat,
+                        // 添加扩展元数据
+                        extname: '',
+                        relative: item,
+                        isDirectory: () => true,
+                        isFile: () => false,
+                        isSymbolic: () => false,
+                        isBuffer: () => false,
+                        isStream: () => false,
+                        isNull: () => false
+                      });
+                      // 存储扩展信息
+                      file['extension'] = {
+                        name: pkg.name || item,
+                        path: itemPath,
+                        packageJSON: pkg
+                      };
+                      files.push(file);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.log('📦 Error reading extensions:', e.message);
+            }
+
+            stream._read = function() {
+              if (!pushed) {
+                for (const file of files) {
+                  this.push(file);
+                }
+                pushed = true;
+              }
+              this.push(null);
+            };
+
+            return stream;
+          }
+
+          // ========== 导出扩展列表（用于其他函数） ==========
+          function getBuiltInExtensionsList(): any[] {
             try {
               const extensions: any[] = [];
               const extDir = path.join(__dirname, '../../extensions');
@@ -137,84 +211,66 @@ jobs:
             }
           }
 
-          // 导出内置扩展（不下载）
-          export const builtInExtensions = getBuiltInExtensions();
+          // ========== 导出 ==========
+          export const builtInExtensions = getBuiltInExtensionsList();
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
 
-          // ========== 辅助函数 ==========
-          function createEmptyStream(): Stream {
-            const s = new Stream.Readable({ objectMode: true });
-            s._read = () => s.push(null);
-            return s;
-          }
-
-          function getLocalExtensionStream(): Stream {
-            const { Readable } = require('stream');
-            const stream = new Readable({ objectMode: true });
-            stream._read = function() {
-              for (const ext of builtInExtensions) {
-                this.push(ext);
-              }
-              this.push(null);
-            };
-            return stream;
-          }
-
-          // ========== 导出函数 ==========
           export function isWebExtension(): boolean {
             return false;
           }
 
+          // 返回 Vinyl 流 - 用于 gulp 任务
           export function getExtensionStream(): Stream {
-            console.log('📦 getExtensionStream: returning built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 getExtensionStream: returning built-in extensions as Vinyl stream');
+            const extDir = path.join(__dirname, '../../extensions');
+            return createVinylStreamFromDirectory(extDir);
           }
 
           export function getExtensionDownloadStream(): Stream {
-            console.log('📦 getExtensionDownloadStream: using local extensions');
-            return getLocalExtensionStream();
+            console.log('📦 getExtensionDownloadStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageMarketplaceExtensionsStream(): Stream {
-            console.log('📦 packageMarketplaceExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageMarketplaceExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageNativeLocalExtensionsStream(): Stream {
-            console.log('📦 packageNativeLocalExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageNativeLocalExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageNonNativeLocalExtensionsStream(): Stream {
-            console.log('📦 packageNonNativeLocalExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageNonNativeLocalExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageLocalExtensionsStream(): Stream {
-            console.log('📦 packageLocalExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageLocalExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageExtensionsStream(): Stream {
-            console.log('📦 packageExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageCopilotExtensionStream(): Stream {
-            console.log('📦 packageCopilotExtensionStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageCopilotExtensionStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageCopilotChatExtensionStream(): Stream {
-            console.log('📦 packageCopilotChatExtensionStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageCopilotChatExtensionStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function packageCopilotAgentsExtensionStream(): Stream {
-            console.log('📦 packageCopilotAgentsExtensionStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageCopilotAgentsExtensionStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function fromMarketplace(): any[] {
@@ -239,8 +295,8 @@ jobs:
           }
 
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-            console.log('📦 packageAllLocalExtensionsStream: using built-in extensions');
-            return getLocalExtensionStream();
+            console.log('📦 packageAllLocalExtensionsStream: returning built-in extensions');
+            return getExtensionStream();
           }
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
@@ -265,23 +321,23 @@ jobs:
           }
 
           export function typeCheckExtensionStream(extensionPath: string, forWeb: boolean): Stream {
-            return getLocalExtensionStream();
+            return getExtensionStream();
           }
 
           export function fromLocal(extensionPath: string, forWeb: boolean, disableMangle: boolean): Stream {
-            return getLocalExtensionStream();
+            return getExtensionStream();
           }
 
           export function fromMarketplaceStream(serviceUrl: string, extension: any): Stream {
-            return getLocalExtensionStream();
+            return getExtensionStream();
           }
 
           export function fromGithub(extension: any): Stream {
-            return getLocalExtensionStream();
+            return getExtensionStream();
           }
 
           export function fromVsix(vsixPath: string, extension: any): Stream {
-            return getLocalExtensionStream();
+            return getExtensionStream();
           }
 
           export function minifyExtensionResources(input: Stream): Stream {
@@ -379,7 +435,7 @@ jobs:
           echo "📦 Extensions: using built-in extensions only"
           echo "Start: $(date)"
 
-          # 构建前确保 extensions 目录存在
+          # 确保 extensions 目录存在
           if [ ! -d "extensions" ]; then
             echo "⚠️ Extensions directory not found, creating..."
             mkdir -p extensions
@@ -647,14 +703,12 @@ jobs:
             echo "✅ Renamed to tscode"
           fi
 
-          # 创建无密码启动脚本
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
           # TSCode 启动包装脚本 - 无密码版本
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 环境变量设置
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -666,7 +720,6 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
-          # 使用 no-sandbox 模式运行
           "$SCRIPT_DIR/tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -689,7 +742,6 @@ jobs:
           chmod +x start-tscode.sh
           chmod +x tscode
 
-          # 设置 chrome-sandbox 权限
           if [ -f "chrome-sandbox" ]; then
             sudo chown root:root chrome-sandbox
             sudo chmod 4755 chrome-sandbox
@@ -757,25 +809,21 @@ jobs:
           echo ""
           echo "📌 Fixing permissions and SUID..."
 
-          # 设置 chrome-sandbox SUID
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
             sudo chmod 4755 "$DEB_ROOT/opt/tscode/chrome-sandbox"
             echo "   ✅ chrome-sandbox SUID set"
           fi
 
-          # 设置可执行权限
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
-          # 创建符号链接
           cd "$DEB_ROOT/usr/bin"
           ln -sf /opt/tscode/run.sh tscode
           cd -
 
-          # 复制图标和 desktop 文件
           if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
             cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
@@ -784,7 +832,6 @@ jobs:
           cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
              "$DEB_ROOT/usr/share/applications/"
 
-          # 创建 control 文件
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -802,7 +849,6 @@ jobs:
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
-          # 创建 postinst 脚本
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
@@ -811,22 +857,18 @@ jobs:
           echo "🔧 Configuring TSCode..."
           echo "=========================================="
 
-          # 设置 chrome-sandbox SUID
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
               echo "✅ chrome-sandbox SUID configured"
           fi
 
-          # 设置可执行权限
           chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
 
-          # 设置 ripgrep 权限
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
           fi
 
-          # 更新桌面数据库
           update-desktop-database /usr/share/applications/ 2>/dev/null || true
 
           echo ""
