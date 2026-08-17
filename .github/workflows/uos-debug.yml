@@ -135,18 +135,15 @@ jobs:
                   const itemPath = path.join(dirPath, item);
                   const stat = fs.statSync(itemPath);
                   if (stat.isDirectory()) {
-                    // 读取 package.json
                     const pkgPath = path.join(itemPath, 'package.json');
                     if (fs.existsSync(pkgPath)) {
                       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                      // 创建 Vinyl 文件对象
                       const file = new vinyl.File({
                         cwd: dirPath,
                         base: dirPath,
                         path: itemPath,
                         contents: Buffer.from(JSON.stringify(pkg, null, 2)),
                         stat: stat,
-                        // 添加扩展元数据
                         extname: '',
                         relative: item,
                         isDirectory: () => true,
@@ -156,7 +153,6 @@ jobs:
                         isStream: () => false,
                         isNull: () => false
                       });
-                      // 存储扩展信息
                       file['extension'] = {
                         name: pkg.name || item,
                         path: itemPath,
@@ -221,7 +217,6 @@ jobs:
             return false;
           }
 
-          // 返回 Vinyl 流 - 用于 gulp 任务
           export function getExtensionStream(): Stream {
             console.log('📦 getExtensionStream: returning built-in extensions as Vinyl stream');
             const extDir = path.join(__dirname, '../../extensions');
@@ -435,7 +430,6 @@ jobs:
           echo "📦 Extensions: using built-in extensions only"
           echo "Start: $(date)"
 
-          # 确保 extensions 目录存在
           if [ ! -d "extensions" ]; then
             echo "⚠️ Extensions directory not found, creating..."
             mkdir -p extensions
@@ -477,7 +471,6 @@ jobs:
           echo "📌 Copying custom extensions..."
           cp -r custom-extensions/* "$EXT_DIR/"
 
-          # 为自定义扩展安装依赖
           echo ""
           echo "📌 Installing dependencies for custom extensions..."
           cd "$EXT_DIR"
@@ -589,15 +582,12 @@ jobs:
           npm install --legacy-peer-deps --production --ignore-scripts 2>/dev/null || \
           npm install --legacy-peer-deps --ignore-scripts
 
-          # 获取 Electron 版本
           ELECTRON_VERSION=$(node -p "require('electron/package.json').version" 2>/dev/null || echo "22.14.0")
           echo "📌 Electron version: $ELECTRON_VERSION"
 
-          # 下载 Electron 头文件
           echo "📌 Downloading Electron headers..."
           npm install --ignore-scripts --save-dev electron@$ELECTRON_VERSION 2>/dev/null || true
 
-          # 设置编译环境变量
           export npm_config_target=$ELECTRON_VERSION
           export npm_config_arch=x64
           export npm_config_target_platform=linux
@@ -605,7 +595,6 @@ jobs:
           export npm_config_runtime=electron
           export npm_config_build_from_source=true
 
-          # 编译所有原生模块
           echo ""
           echo "📌 Compiling native modules..."
 
@@ -636,12 +625,10 @@ jobs:
             fi
           done
 
-          # 使用 electron-rebuild 批量编译
           echo ""
           echo "📌 Running electron-rebuild..."
           npx electron-rebuild --force --module-dir . 2>/dev/null || true
 
-          # 清理编译临时文件
           echo ""
           echo "📌 Cleaning up build artifacts..."
           find node_modules -name "*.o" -delete 2>/dev/null || true
@@ -652,7 +639,6 @@ jobs:
           find node_modules -type d -name "obj" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "obj.target" -exec rm -rf {} + 2>/dev/null || true
 
-          # 验证 .node 文件存在
           echo ""
           echo "📌 Verifying native modules:"
           for module in "${modules_to_rebuild[@]}"; do
@@ -670,7 +656,7 @@ jobs:
 
           echo "✅ Native modules compiled for offline use"
 
-      - name: 📄 Create launcher (无密码版本)
+      - name: 📄 Create launcher (修复递归调用)
         run: |
           echo "=========================================="
           echo "📄 Creating launcher"
@@ -703,9 +689,48 @@ jobs:
             echo "✅ Renamed to tscode"
           fi
 
+          # 确保二进制文件可执行
+          chmod +x tscode
+
+          # ====== 修复：创建不会递归的启动脚本 ======
+          # 在 /usr/bin 中创建独立包装脚本，而不是链接到 run.sh
+
+          cat > /usr/local/bin/tscode-wrapper << 'WRAPEOF'
+          #!/bin/bash
+          # TSCode 独立启动包装器 - 避免递归调用
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export ELECTRON_NO_SANDBOX=1
+
+          # 直接调用二进制文件（使用绝对路径，避免 PATH 查找）
+          exec /opt/tscode/tscode \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --disable-crash-reporter \
+              --disable-breakpad \
+              --password-store=basic \
+              "$@"
+          WRAPEOF
+
+          chmod +x /usr/local/bin/tscode-wrapper
+
+          # 创建 /usr/bin/tscode 指向包装器
+          ln -sf /usr/local/bin/tscode-wrapper /usr/bin/tscode
+
+          # 在 opt 目录中也创建一个包装器（备用）
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          # TSCode 启动包装脚本 - 无密码版本
+          # TSCode 启动包装脚本 - 直接调用二进制文件
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -720,7 +745,8 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
-          "$SCRIPT_DIR/tscode" \
+          # 直接调用同目录下的二进制文件
+          exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
@@ -733,6 +759,7 @@ jobs:
 
           chmod +x run.sh
 
+          # 创建简单的 start 脚本
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -740,15 +767,20 @@ jobs:
           STARTEOF
 
           chmod +x start-tscode.sh
-          chmod +x tscode
 
+          # 设置 chrome-sandbox SUID
           if [ -f "chrome-sandbox" ]; then
             sudo chown root:root chrome-sandbox
             sudo chmod 4755 chrome-sandbox
             echo "✅ chrome-sandbox SUID set"
           fi
 
-          echo "✅ Launcher created (no password required)"
+          echo "✅ Launcher created (no recursion)"
+          echo ""
+          echo "📋 Launcher structure:"
+          echo "  /usr/bin/tscode -> /usr/local/bin/tscode-wrapper"
+          echo "  /usr/local/bin/tscode-wrapper -> /opt/tscode/tscode (binary)"
+          echo "  /opt/tscode/run.sh -> /opt/tscode/tscode (binary)"
 
       - name: 📄 Create desktop entry
         run: |
@@ -774,7 +806,7 @@ jobs:
           Name=TSCode
           GenericName=Code Editor
           Comment=Code Editing. Redefined.
-          Exec=/opt/tscode/run.sh %F
+          Exec=/usr/bin/tscode %F
           Icon=tscode
           Terminal=false
           Categories=Development;IDE
@@ -800,6 +832,7 @@ jobs:
           mkdir -p "$DEB_ROOT/DEBIAN"
           mkdir -p "$DEB_ROOT/opt/tscode"
           mkdir -p "$DEB_ROOT/usr/bin"
+          mkdir -p "$DEB_ROOT/usr/local/bin"
           mkdir -p "$DEB_ROOT/usr/share/applications"
           mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps"
 
@@ -820,8 +853,38 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
+          # 创建包装器脚本
+          cat > "$DEB_ROOT/usr/local/bin/tscode-wrapper" << 'WRAPEOF'
+          #!/bin/bash
+          # TSCode 独立启动包装器 - 避免递归调用
+
+          export ELECTRON_ENABLE_GPU=0
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export ELECTRON_DISABLE_SANDBOX=1
+          export GDK_BACKEND=x11
+          export QT_QPA_PLATFORM=xcb
+          export ELECTRON_DISABLE_CRASH_REPORTER=1
+          export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export CRASHPAD_DISABLE=1
+          export ELECTRON_NO_SANDBOX=1
+
+          exec /opt/tscode/tscode \
+              --no-sandbox \
+              --disable-gpu-sandbox \
+              --disable-software-rasterizer \
+              --disable-gpu \
+              --disable-crash-reporter \
+              --disable-breakpad \
+              --password-store=basic \
+              "$@"
+          WRAPEOF
+
+          chmod +x "$DEB_ROOT/usr/local/bin/tscode-wrapper"
+
+          # 创建符号链接
           cd "$DEB_ROOT/usr/bin"
-          ln -sf /opt/tscode/run.sh tscode
+          ln -sf ../local/bin/tscode-wrapper tscode
           cd -
 
           if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
@@ -864,6 +927,7 @@ jobs:
           fi
 
           chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
+          chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
 
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
@@ -876,6 +940,10 @@ jobs:
           echo ""
           echo "🚀 Run 'tscode' to start (no password required)"
           echo "📂 Or use application menu: Development -> TSCode"
+          echo ""
+          echo "📋 Launcher structure:"
+          echo "  /usr/bin/tscode -> /usr/local/bin/tscode-wrapper"
+          echo "  /usr/local/bin/tscode-wrapper -> /opt/tscode/tscode"
           echo "=========================================="
           POSTINSTEOF
 
@@ -917,6 +985,7 @@ jobs:
           echo ""
           echo "✅ Features:"
           echo "   - ✅ No password required on startup"
+          echo "   - ✅ No shell recursion (fixed)"
           echo "   - ✅ Desktop entry in application menu"
           echo "   - ✅ Built from source"
           echo "   - ✅ extensionHost is built-in"
