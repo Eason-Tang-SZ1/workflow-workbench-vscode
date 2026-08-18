@@ -709,6 +709,15 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
+          # 禁用密钥环
+          export GNOME_KEYRING_CONTROL=
+          export DBUS_SESSION_BUS_ADDRESS=
+          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+          export SECRETS_BACKEND=basic
+          export DISABLE_VAULT=1
+          export VSCODE_PASSWORD_STORE=basic
+          export ELECTRON_PASSWORD_STORE=basic
+
           # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export XDG_CONFIG_HOME="$HOME/.tscode"
@@ -765,6 +774,15 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
+
+          # 禁用密钥环
+          export GNOME_KEYRING_CONTROL=
+          export DBUS_SESSION_BUS_ADDRESS=
+          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+          export SECRETS_BACKEND=basic
+          export DISABLE_VAULT=1
+          export VSCODE_PASSWORD_STORE=basic
+          export ELECTRON_PASSWORD_STORE=basic
 
           # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
@@ -916,6 +934,15 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
+          # 禁用密钥环
+          export GNOME_KEYRING_CONTROL=
+          export DBUS_SESSION_BUS_ADDRESS=
+          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+          export SECRETS_BACKEND=basic
+          export DISABLE_VAULT=1
+          export VSCODE_PASSWORD_STORE=basic
+          export ELECTRON_PASSWORD_STORE=basic
+
           # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export XDG_CONFIG_HOME="$HOME/.tscode"
@@ -949,10 +976,14 @@ jobs:
 
           chmod +x "$DEB_ROOT/usr/local/bin/tscode-wrapper"
 
-          # 创建符号链接
-          cd "$DEB_ROOT/usr/bin"
-          ln -sf ../local/bin/tscode-wrapper tscode
-          cd -
+          # 创建 /usr/bin/tscode 包装脚本（不是符号链接）
+          cat > "$DEB_ROOT/usr/bin/tscode" << 'BINWRAPEOF'
+          #!/bin/bash
+          # TSCode 启动包装器
+          exec /usr/local/bin/tscode-wrapper "$@"
+          BINWRAPEOF
+
+          chmod +x "$DEB_ROOT/usr/bin/tscode"
 
           # 保存内置插件备份供首次启动使用
           if [ -d "$DEB_ROOT/opt/tscode/resources/app/extensions" ]; then
@@ -1027,6 +1058,7 @@ jobs:
 
           chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
           chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
+          chmod +x /usr/bin/tscode 2>/dev/null || true
           chmod +x /opt/tscode/install-builtin-extensions.sh 2>/dev/null || true
 
           echo "📦 Preparing built-in extensions..."
@@ -1039,6 +1071,21 @@ jobs:
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
           fi
+
+          # 禁用密钥环
+          echo ""
+          echo "🔑 Disabling keyring for users..."
+          for USER_HOME in /home/* /root; do
+              if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
+                  mkdir -p "$USER_HOME/.local/share/keyrings" 2>/dev/null || true
+                  echo "[keyring]" > "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
+                  echo "display-name=Login" >> "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
+                  echo "locked=false" >> "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
+                  chown -R $(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "1000:1000") \
+                      "$USER_HOME/.local/share/keyrings" 2>/dev/null || true
+                  echo "  ✅ Keyring disabled for $(basename "$USER_HOME")"
+              fi
+          done
 
           update-desktop-database /usr/share/applications/ 2>/dev/null || true
 
@@ -1059,6 +1106,25 @@ jobs:
           POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
+
+          # 创建 prerm 脚本 - 不删除用户数据
+          cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
+          #!/bin/bash
+          set -e
+          echo "=========================================="
+          echo "TSCode is being removed..."
+          echo "=========================================="
+          echo ""
+          echo "📁 User data preserved at: ~/.tscode/"
+          echo "📦 Extensions preserved at: ~/.tscode/extensions/"
+          echo ""
+          echo "To completely remove user data:"
+          echo "  rm -rf ~/.tscode"
+          echo "=========================================="
+          exit 0
+          PRERMEOF
+
+          chmod +x "$DEB_ROOT/DEBIAN/prerm"
 
           echo ""
           echo "📌 Building DEB package..."
