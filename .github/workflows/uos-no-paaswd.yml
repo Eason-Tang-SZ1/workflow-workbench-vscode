@@ -314,21 +314,19 @@ jobs:
 
           echo "✅ Official VSCode at: $OFFICIAL_DIR"
 
-          # 核心扩展列表（必须保留）
+          # 核心扩展列表
           CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
 
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 复制所有扩展（保留自定义扩展）
+          # 复制所有扩展
           echo "📌 Copying extensions from official build..."
           for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
             if [ -d "$ext" ]; then
               ext_name=$(basename "$ext")
-              # 跳过 @builtin（单独处理）
               if [ "$ext_name" = "@builtin" ]; then
                 continue
               fi
-              # 如果扩展已存在（自定义扩展），跳过
               if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
                 echo "   ⏭️ Skipping (already exists): $ext_name"
                 continue
@@ -361,7 +359,6 @@ jobs:
             fi
           done
 
-          # 保存官方目录路径供后续使用
           echo "OFFICIAL_EXT_DIR=$OFFICIAL_DIR/resources/app/extensions" >> $GITHUB_ENV
 
       - name: 🧹 Safe cleanup (preserve core extensions)
@@ -491,6 +488,8 @@ jobs:
           # TSCode 启动包装脚本
           # 完全绕过沙箱密码提示和 GNOME Keyring
 
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
           # 禁用所有安全提示
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -509,8 +508,13 @@ jobs:
           export SECRETS_BACKEND=basic
           export DISABLE_VAULT=1
 
+          # 使用用户目录存储扩展和配置
+          export VSCODE_APPDATA="$HOME/.tscode"
+          export VSCODE_EXTENSIONS="$HOME/.tscode/extensions"
+          mkdir -p "$VSCODE_EXTENSIONS" 2>/dev/null || true
+
           # 使用 --password-store="basic" 参数直接指定使用基础密码存储
-          /opt/tscode/tscode \
+          exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
@@ -519,6 +523,8 @@ jobs:
               --disable-breakpad \
               --password-store="basic" \
               --disable-keyring \
+              --extensions-dir="$VSCODE_EXTENSIONS" \
+              --user-data-dir="$VSCODE_APPDATA" \
               "$@"
           RUNEOF
 
@@ -843,36 +849,76 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本 - 修复 HERE 文档语法错误
+          # 创建 postinst 脚本 - 预置扩展到用户目录
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
 
+          echo "=========================================="
           echo "Setting up TSCode for Debian 10..."
+          echo "=========================================="
 
+          # 1. 修复 chrome-sandbox SUID
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
               echo "  ✅ chrome-sandbox permissions fixed"
           fi
 
+          # 2. 设置可执行权限
           chmod +x /opt/tscode/run.sh 2>/dev/null || true
           chmod +x /opt/tscode/tscode 2>/dev/null || true
           chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
 
+          # 3. 修复 ripgrep 权限
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
               echo "  ✅ ripgrep permissions fixed"
           fi
 
-          # 为安装用户禁用密钥环
+          # 4. 为所有用户预置扩展到 ~/.tscode/extensions
+          echo ""
+          echo "📦 Pre-installing extensions for users..."
+
+          # 获取所有用户（包括将来可能创建的用户）
+          # 这里我们为当前用户和 root 预置扩展
+          for USER_HOME in /home/* /root; do
+              if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
+                  USER_NAME=$(basename "$USER_HOME")
+                  echo "  📌 Processing user: $USER_NAME"
+
+                  # 创建用户目录
+                  TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
+                  mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
+
+                  # 复制核心扩展到用户目录（如果不存在）
+                  if [ -d "/opt/tscode/resources/app/extensions" ]; then
+                      # 复制内置扩展到用户目录
+                      echo "    📂 Copying built-in extensions to $TSC_EXT_DIR..."
+                      cp -r /opt/tscode/resources/app/extensions/* "$TSC_EXT_DIR/" 2>/dev/null || true
+
+                      # 设置正确的所有权
+                      if [ "$USER_HOME" != "/root" ]; then
+                          USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
+                          if [ -n "$USER_OWNER" ]; then
+                              chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
+                          fi
+                          # 也设置 .tscode 目录所有权
+                          chown -R "$USER_OWNER" "$USER_HOME/.tscode" 2>/dev/null || true
+                      fi
+
+                      echo "    ✅ Extensions installed for $USER_NAME"
+                  fi
+              fi
+          done
+
+          # 5. 为安装用户禁用密钥环
           REAL_USER="${SUDO_USER:-$USER}"
           if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
               REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
               if [ -n "$REAL_HOME" ]; then
                   mkdir -p "$REAL_HOME/.local/share/keyrings" 2>/dev/null || true
-                  # 使用 echo 和重定向代替 HERE 文档，避免语法错误
                   echo "[keyring]" > "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
                   echo "display-name=Login" >> "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
                   echo "locked=false" >> "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
@@ -881,6 +927,7 @@ jobs:
               fi
           fi
 
+          # 6. 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/
               echo "  ✅ Desktop database updated"
@@ -892,10 +939,18 @@ jobs:
           fi
 
           echo ""
+          echo "=========================================="
           echo "✅ TSCode installed successfully!"
           echo ""
-          echo "Run 'tscode' to start (no password required)."
-          echo "Desktop entry available in application menu."
+          echo "📁 User data directory: ~/.tscode/"
+          echo "📦 Extensions directory: ~/.tscode/extensions/"
+          echo ""
+          echo "🚀 Run 'tscode' to start (no password required)"
+          echo "📂 Desktop entry available in application menu"
+          echo ""
+          echo "💡 Extensions are stored in user home directory:"
+          echo "   ~/.tscode/extensions/"
+          echo "   (They persist across reinstallations)"
           echo "=========================================="
 
           exit 0
@@ -904,13 +959,21 @@ jobs:
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
           # ============================================================
-          # 创建 prerm 脚本
+          # 创建 prerm 脚本 - 不删除用户数据
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
+          echo "=========================================="
           echo "TSCode is being removed..."
-          rm -f /tmp/tscode.lock
+          echo "=========================================="
+          echo ""
+          echo "📁 User data is preserved at: ~/.tscode/"
+          echo "📦 Extensions preserved at: ~/.tscode/extensions/"
+          echo ""
+          echo "To completely remove user data:"
+          echo "  rm -rf ~/.tscode"
+          echo "=========================================="
           exit 0
           PRERMEOF
 
@@ -954,6 +1017,8 @@ jobs:
           echo "   - No sandbox password prompt"
           echo "   - Desktop entry created in application menu"
           echo "   - Official extensions preserved"
+          echo "   - ✅ Extensions stored in user home: ~/.tscode/extensions/"
+          echo "   - ✅ Extensions persist across reinstallation"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -970,9 +1035,16 @@ jobs:
             echo "🚀 After installation:"
             echo "  - Run: tscode (no password)"
             echo "  - Find in application menu: TSCode"
-            echo "  - Extensions: TypeScript, Git, JSON, Markdown included"
+            echo "  - Extensions stored in: ~/.tscode/extensions/"
             echo ""
             echo "🔍 Verify:"
             echo "  /opt/tscode/validate.sh"
+            echo ""
+            echo "📁 User data location:"
+            echo "  ~/.tscode/"
+            echo "    ├── extensions/     # Installed extensions"
+            echo "    └── ...             # User settings and data"
+            echo ""
+            echo "📦 Extensions persist across reinstallations"
             echo "=========================================="
           fi
