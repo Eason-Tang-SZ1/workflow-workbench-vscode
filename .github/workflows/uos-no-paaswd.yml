@@ -843,15 +843,13 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本
+          # 创建 postinst 脚本 - 修复 HERE 文档语法错误
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
 
           echo "Setting up TSCode for Debian 10..."
-
-          rm -f /tmp/tscode.lock
 
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
@@ -868,18 +866,16 @@ jobs:
               echo "  ✅ ripgrep permissions fixed"
           fi
 
-          # 尝试为安装用户禁用密钥环
+          # 为安装用户禁用密钥环
           REAL_USER="${SUDO_USER:-$USER}"
           if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
               REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
               if [ -n "$REAL_HOME" ]; then
-                  # 创建空密钥环配置，避免首次启动提示
                   mkdir -p "$REAL_HOME/.local/share/keyrings" 2>/dev/null || true
-                  cat > "$REAL_HOME/.local/share/keyrings/login.keyring" << 'KEYRINGEOF' 2>/dev/null || true
-                  [keyring]
-                  display-name=Login
-                  locked=false
-                  KEYRINGEOF
+                  # 使用 echo 和重定向代替 HERE 文档，避免语法错误
+                  echo "[keyring]" > "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
+                  echo "display-name=Login" >> "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
+                  echo "locked=false" >> "$REAL_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
                   chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.local/share/keyrings" 2>/dev/null || true
                   echo "  ✅ Keyring pre-configured for $REAL_USER"
               fi
