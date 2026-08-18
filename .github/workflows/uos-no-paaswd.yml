@@ -290,10 +290,10 @@ jobs:
           echo ""
           echo "✅ Native modules replacement completed"
 
-      - name: 📂 Copy official extensions (preserve all including @builtin)
+      - name: 📂 Copy official extensions to system directory
         run: |
           echo "=========================================="
-          echo "📂 Copying official extensions"
+          echo "📂 Copying official extensions to system directory"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
@@ -319,8 +319,8 @@ jobs:
 
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 复制所有扩展
-          echo "📌 Copying extensions from official build..."
+          # 复制所有扩展到系统目录
+          echo "📌 Copying extensions from official build to system directory..."
           for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
             if [ -d "$ext" ]; then
               ext_name=$(basename "$ext")
@@ -331,35 +331,45 @@ jobs:
                 echo "   ⏭️ Skipping (already exists): $ext_name"
                 continue
               fi
-              echo "   ✅ Copying: $ext_name"
+              echo "   ✅ Copying to system: $ext_name"
               cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
             fi
           done
 
           # 复制 @builtin
           if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
-            echo "   ✅ Copying: @builtin"
+            echo "   ✅ Copying @builtin to system"
             rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
             cp -r "$OFFICIAL_DIR/resources/app/extensions/@builtin" \
                   "$BUILD_DIR/resources/app/extensions/"
           fi
 
           echo ""
-          echo "✅ Extensions copied"
-          echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+          echo "✅ Extensions copied to system directory"
+          echo "📌 Total system extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-          # 验证核心扩展
-          echo ""
-          echo "📌 Verifying core extensions:"
-          for ext in $CORE_EXTS; do
-            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
-              echo "   ✅ $ext"
-            else
-              echo "   ❌ $ext (MISSING!)"
-            fi
-          done
-
+          # 保存官方目录路径供后续使用
           echo "OFFICIAL_EXT_DIR=$OFFICIAL_DIR/resources/app/extensions" >> $GITHUB_ENV
+
+      - name: 📦 Copy custom extensions for pre-install
+        run: |
+          echo "=========================================="
+          echo "📦 Copying custom extensions for pre-install"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 创建自定义扩展目录（用于 postinst 复制到用户目录）
+          mkdir -p "$BUILD_DIR/resources/app/custom-extensions"
+
+          # 检查是否有自定义扩展（来自工作流输入）
+          if [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
+            echo "📌 Copying custom extensions from build context..."
+            cp -r ./custom-extensions/* "$BUILD_DIR/resources/app/custom-extensions/"
+            echo "✅ Custom extensions copied"
+          else
+            echo "ℹ️ No custom extensions found"
+          fi
 
       - name: 🧹 Safe cleanup (preserve core extensions)
         run: |
@@ -478,19 +488,18 @@ jobs:
           fi
 
           # ============================================================
-          # 创建启动包装脚本（完全绕过密钥环和沙箱密码提示）
+          # 创建启动包装脚本 (run.sh)
           # ============================================================
           echo ""
-          echo "📌 Creating startup wrapper script (no password, no keyring)..."
+          echo "📌 Creating startup wrapper script (run.sh)..."
 
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          # TSCode 启动包装脚本
-          # 完全绕过沙箱密码提示和 GNOME Keyring
+          # TSCode 启动脚本
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-          # 禁用所有安全提示
+          # 环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -501,42 +510,44 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
 
-          # 禁用 GNOME Keyring
+          # 禁用密钥环
           export GNOME_KEYRING_CONTROL=
           export DBUS_SESSION_BUS_ADDRESS=
           export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
           export SECRETS_BACKEND=basic
           export DISABLE_VAULT=1
+          export VSCODE_PASSWORD_STORE=basic
+          export ELECTRON_PASSWORD_STORE=basic
 
-          # 使用用户目录存储扩展和配置
+          # 用户目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export VSCODE_EXTENSIONS="$HOME/.tscode/extensions"
           mkdir -p "$VSCODE_EXTENSIONS" 2>/dev/null || true
 
-          # 使用 --password-store="basic" 参数直接指定使用基础密码存储
+          # 系统扩展目录（内置扩展）
+          export VSCODE_SYSTEM_EXTENSIONS="$SCRIPT_DIR/resources/app/extensions"
+
+          # 启动
           exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
-              --disable-software-rasterizer \
               --disable-gpu \
               --disable-crash-reporter \
-              --disable-breakpad \
               --password-store="basic" \
-              --disable-keyring \
               --extensions-dir="$VSCODE_EXTENSIONS" \
               --user-data-dir="$VSCODE_APPDATA" \
+              --builtin-extensions-dir="$VSCODE_SYSTEM_EXTENSIONS" \
               "$@"
           RUNEOF
 
           chmod +x run.sh
-          echo "   ✅ run.sh created with keyring disabled"
+          echo "   ✅ run.sh created"
 
           # ============================================================
-          # 创建启动脚本（兼容旧版本，指向 run.sh）
+          # 创建 start-tscode.sh（兼容脚本）
           # ============================================================
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
-          # TSCode 启动脚本 (兼容版本)
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           exec "$SCRIPT_DIR/run.sh" "$@"
           STARTEOF
@@ -545,41 +556,10 @@ jobs:
           echo "   ✅ start-tscode.sh created"
 
           # ============================================================
-          # 创建 Git 查找脚本
+          # 设置二进制文件权限
           # ============================================================
-          mkdir -p bin
-          cat > bin/git-finder << 'GITFINDER'
-          #!/bin/bash
-          # Git auto-discovery for TSCode
-          for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
-            if [ -x "$git_path" ]; then
-              export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
-              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-              export GIT_TERMINAL_PROMPT=0
-              exec "$git_path" "$@"
-              exit 0
-            fi
-          done
-          if command -v git >/dev/null 2>&1; then
-            GIT_PATH="$(command -v git)"
-            export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
-            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-            export GIT_TERMINAL_PROMPT=0
-            exec "$GIT_PATH" "$@"
-            exit 0
-          fi
-          echo "ERROR: Git not found!" >&2
-          exit 1
-          GITFINDER
-
-          chmod +x bin/git-finder
-          echo "   ✅ git-finder created"
-
-          # 设置所有可执行文件权限
           chmod +x tscode
           chmod +x chrome-sandbox 2>/dev/null || true
-          chmod +x run.sh
-          chmod +x start-tscode.sh
 
           echo ""
           echo "✅ Launcher and scripts created"
@@ -592,18 +572,15 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 创建桌面文件目录
           mkdir -p "$BUILD_DIR/usr/share/applications"
           mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
 
-          # 复制图标
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
-          # 创建桌面文件（指向 run.sh，无需密码）
           cat > "$BUILD_DIR/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -662,7 +639,17 @@ jobs:
           fi
 
           echo ""
-          echo "3️⃣ Checking desktop file..."
+          echo "3️⃣ Checking start-tscode.sh..."
+          if [ -x "$SCRIPT_DIR/start-tscode.sh" ]; then
+            echo "   ✅ start-tscode.sh exists"
+            ((PASSED++))
+          else
+            echo "   ❌ start-tscode.sh missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "4️⃣ Checking desktop file..."
           if [ -f "$SCRIPT_DIR/usr/share/applications/tscode.desktop" ]; then
             echo "   ✅ Desktop file exists"
             ((PASSED++))
@@ -672,7 +659,7 @@ jobs:
           fi
 
           echo ""
-          echo "4️⃣ Checking icon..."
+          echo "5️⃣ Checking icon..."
           if [ -f "$SCRIPT_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
             echo "   ✅ Icon exists"
             ((PASSED++))
@@ -681,7 +668,7 @@ jobs:
           fi
 
           echo ""
-          echo "5️⃣ Checking Chrome sandbox..."
+          echo "6️⃣ Checking Chrome sandbox..."
           if [ -f "$SCRIPT_DIR/chrome-sandbox" ]; then
             PERMS=$(stat -c %a "$SCRIPT_DIR/chrome-sandbox" 2>/dev/null || echo "000")
             if [ "$PERMS" = "4755" ]; then
@@ -695,16 +682,26 @@ jobs:
           fi
 
           echo ""
-          echo "6️⃣ Checking core extensions..."
+          echo "7️⃣ Checking core extensions..."
           for ext in typescript-language-features git json-language-features; do
             if [ -d "$SCRIPT_DIR/resources/app/extensions/$ext" ]; then
-              echo "   ✅ $ext"
+              echo "   ✅ $ext (system)"
               ((PASSED++))
             else
               echo "   ❌ $ext (missing)"
               ((FAILED++))
             fi
           done
+
+          echo ""
+          echo "8️⃣ Checking custom extensions..."
+          if [ -d "$SCRIPT_DIR/resources/app/custom-extensions" ]; then
+            CUSTOM_COUNT=$(ls -1 $SCRIPT_DIR/resources/app/custom-extensions 2>/dev/null | wc -l)
+            echo "   ✅ Custom extensions directory exists ($CUSTOM_COUNT extensions)"
+            ((PASSED++))
+          else
+            echo "   ℹ️ No custom extensions"
+          fi
 
           echo ""
           echo "=========================================="
@@ -748,7 +745,6 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_NAME="tscode"
           DEB_VERSION="${VERSION}-1"
           DEB_ARCH="amd64"
           DEB_ROOT="$(pwd)/deb_root"
@@ -777,7 +773,6 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
-          chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
 
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
@@ -786,14 +781,19 @@ jobs:
           echo "   ✅ All permissions fixed"
 
           # ============================================================
-          # 创建符号链接
+          # 创建 /usr/bin/tscode 包装脚本（不是符号链接！）
           # ============================================================
           echo ""
-          echo "📌 Creating symlink..."
-          cd "$DEB_ROOT/usr/bin"
-          ln -sf /opt/tscode/run.sh tscode
-          cd -
-          echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
+          echo "📌 Creating /usr/bin/tscode wrapper script..."
+
+          cat > "$DEB_ROOT/usr/bin/tscode" << 'WRAPEOF'
+          #!/bin/bash
+          # TSCode 启动包装器
+          exec /opt/tscode/run.sh "$@"
+          WRAPEOF
+
+          chmod +x "$DEB_ROOT/usr/bin/tscode"
+          echo "   ✅ /usr/bin/tscode wrapper created"
 
           # ============================================================
           # 创建桌面文件
@@ -849,7 +849,7 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本 - 预置扩展到用户目录
+          # 创建 postinst 脚本 - 只复制预构建自定义扩展到用户目录
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
@@ -869,7 +869,8 @@ jobs:
           # 2. 设置可执行权限
           chmod +x /opt/tscode/run.sh 2>/dev/null || true
           chmod +x /opt/tscode/tscode 2>/dev/null || true
-          chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
+          chmod +x /opt/tscode/start-tscode.sh 2>/dev/null || true
+          chmod +x /usr/bin/tscode 2>/dev/null || true
 
           # 3. 修复 ripgrep 权限
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
@@ -877,38 +878,39 @@ jobs:
               echo "  ✅ ripgrep permissions fixed"
           fi
 
-          # 4. 为所有用户预置扩展到 ~/.tscode/extensions
+          # ============================================================
+          # 4. 只复制预构建的自定义扩展到用户目录
+          # 官方内置扩展保持在 /opt/tscode/resources/app/extensions/
+          # ============================================================
           echo ""
-          echo "📦 Pre-installing extensions for users..."
+          echo "📦 Copying prebuilt custom extensions to user directories..."
 
-          # 获取所有用户（包括将来可能创建的用户）
-          # 这里我们为当前用户和 root 预置扩展
+          CUSTOM_EXT_DIR="/opt/tscode/resources/app/custom-extensions"
+
           for USER_HOME in /home/* /root; do
               if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
                   USER_NAME=$(basename "$USER_HOME")
                   echo "  📌 Processing user: $USER_NAME"
 
-                  # 创建用户目录
                   TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
                   mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
 
-                  # 复制核心扩展到用户目录（如果不存在）
-                  if [ -d "/opt/tscode/resources/app/extensions" ]; then
-                      # 复制内置扩展到用户目录
-                      echo "    📂 Copying built-in extensions to $TSC_EXT_DIR..."
-                      cp -r /opt/tscode/resources/app/extensions/* "$TSC_EXT_DIR/" 2>/dev/null || true
+                  # 只复制自定义扩展（如果有）
+                  if [ -d "$CUSTOM_EXT_DIR" ] && [ "$(ls -A $CUSTOM_EXT_DIR 2>/dev/null)" ]; then
+                      echo "    📂 Copying custom extensions to $TSC_EXT_DIR..."
+                      cp -r "$CUSTOM_EXT_DIR"/* "$TSC_EXT_DIR/" 2>/dev/null || true
+                      echo "    ✅ Custom extensions copied for $USER_NAME"
+                  else
+                      echo "    ℹ️ No custom extensions found"
+                  fi
 
-                      # 设置正确的所有权
-                      if [ "$USER_HOME" != "/root" ]; then
-                          USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
-                          if [ -n "$USER_OWNER" ]; then
-                              chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
-                          fi
-                          # 也设置 .tscode 目录所有权
+                  # 设置正确的所有权
+                  if [ "$USER_HOME" != "/root" ]; then
+                      USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
+                      if [ -n "$USER_OWNER" ]; then
+                          chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
                           chown -R "$USER_OWNER" "$USER_HOME/.tscode" 2>/dev/null || true
                       fi
-
-                      echo "    ✅ Extensions installed for $USER_NAME"
                   fi
               fi
           done
@@ -942,15 +944,16 @@ jobs:
           echo "=========================================="
           echo "✅ TSCode installed successfully!"
           echo ""
-          echo "📁 User data directory: ~/.tscode/"
-          echo "📦 Extensions directory: ~/.tscode/extensions/"
+          echo "📁 System extensions (built-in): /opt/tscode/resources/app/extensions/"
+          echo "📂 User extensions directory: ~/.tscode/extensions/"
+          echo ""
+          echo "📦 Extension types:"
+          echo "   System (built-in):  /opt/tscode/resources/app/extensions/"
+          echo "   User (custom):      ~/.tscode/extensions/ (prebuilt custom)"
+          echo "   User (installed):   ~/.tscode/extensions/ (from VS Code market)"
           echo ""
           echo "🚀 Run 'tscode' to start (no password required)"
           echo "📂 Desktop entry available in application menu"
-          echo ""
-          echo "💡 Extensions are stored in user home directory:"
-          echo "   ~/.tscode/extensions/"
-          echo "   (They persist across reinstallations)"
           echo "=========================================="
 
           exit 0
@@ -968,7 +971,7 @@ jobs:
           echo "TSCode is being removed..."
           echo "=========================================="
           echo ""
-          echo "📁 User data is preserved at: ~/.tscode/"
+          echo "📁 User data preserved at: ~/.tscode/"
           echo "📦 Extensions preserved at: ~/.tscode/extensions/"
           echo ""
           echo "To completely remove user data:"
@@ -1012,13 +1015,18 @@ jobs:
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "Format: DEB (Debian 10)"
           echo ""
-          echo "✅ Fixed Issues:"
-          echo "   - No password required on startup (Keyring disabled)"
+          echo "✅ Features:"
+          echo "   - No password required on startup"
           echo "   - No sandbox password prompt"
-          echo "   - Desktop entry created in application menu"
-          echo "   - Official extensions preserved"
-          echo "   - ✅ Extensions stored in user home: ~/.tscode/extensions/"
-          echo "   - ✅ Extensions persist across reinstallation"
+          echo "   - Desktop entry in application menu"
+          echo "   - /usr/bin/tscode is a wrapper script (not a symlink)"
+          echo ""
+          echo "📂 Extension directories:"
+          echo "   System (built-in): /opt/tscode/resources/app/extensions/"
+          echo "   User (custom):     ~/.tscode/extensions/"
+          echo "   User (installed):  ~/.tscode/extensions/"
+          echo ""
+          echo "💡 Extensions persist across reinstallation"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -1028,23 +1036,16 @@ jobs:
             echo "📦 DEB Package:"
             ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
             echo ""
-            echo "📖 Installation on Debian 10:"
+            echo "📖 Installation:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
             echo ""
             echo "🚀 After installation:"
             echo "  - Run: tscode (no password)"
             echo "  - Find in application menu: TSCode"
-            echo "  - Extensions stored in: ~/.tscode/extensions/"
             echo ""
-            echo "🔍 Verify:"
-            echo "  /opt/tscode/validate.sh"
-            echo ""
-            echo "📁 User data location:"
-            echo "  ~/.tscode/"
-            echo "    ├── extensions/     # Installed extensions"
-            echo "    └── ...             # User settings and data"
-            echo ""
-            echo "📦 Extensions persist across reinstallations"
+            echo "📂 Extension directories:"
+            echo "  System (built-in): /opt/tscode/resources/app/extensions/"
+            echo "  User (custom + installed): ~/.tscode/extensions/"
             echo "=========================================="
           fi
