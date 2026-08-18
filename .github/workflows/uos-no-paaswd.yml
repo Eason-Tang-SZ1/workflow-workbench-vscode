@@ -314,9 +314,6 @@ jobs:
 
           echo "✅ Official VSCode at: $OFFICIAL_DIR"
 
-          # 核心扩展列表
-          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
-
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
           # 复制所有扩展到系统目录
@@ -348,28 +345,50 @@ jobs:
           echo "✅ Extensions copied to system directory"
           echo "📌 Total system extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
 
-          # 保存官方目录路径供后续使用
-          echo "OFFICIAL_EXT_DIR=$OFFICIAL_DIR/resources/app/extensions" >> $GITHUB_ENV
-
-      - name: 📦 Copy custom extensions for pre-install
+      - name: 📦 Download and prepare custom extensions
         run: |
           echo "=========================================="
-          echo "📦 Copying custom extensions for pre-install"
+          echo "📦 Downloading and preparing custom extensions"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 创建自定义扩展目录（用于 postinst 复制到用户目录）
+          # 创建自定义扩展目录
           mkdir -p "$BUILD_DIR/resources/app/custom-extensions"
 
-          # 检查是否有自定义扩展（来自工作流输入）
-          if [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
-            echo "📌 Copying custom extensions from build context..."
+          # 从工作流输入下载自定义扩展
+          if [ -n "${{ github.event.inputs.custom_extension_repo }}" ]; then
+            echo "📌 Cloning custom extension from: ${{ github.event.inputs.custom_extension_repo }}"
+            git clone --depth 1 \
+              --branch ${{ github.event.inputs.custom_extension_branch || 'main' }} \
+              "${{ github.event.inputs.custom_extension_repo }}" \
+              /tmp/custom-ext-temp
+            if [ -d "/tmp/custom-ext-temp" ]; then
+              cp -r /tmp/custom-ext-temp/* "$BUILD_DIR/resources/app/custom-extensions/"
+              echo "✅ Custom extension cloned"
+              rm -rf /tmp/custom-ext-temp
+            fi
+          elif [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
+            echo "📌 Copying local custom extensions..."
             cp -r ./custom-extensions/* "$BUILD_DIR/resources/app/custom-extensions/"
-            echo "✅ Custom extensions copied"
+            echo "✅ Local custom extensions copied"
+          elif [ -f "./my-extension.vsix" ]; then
+            echo "📌 Extracting VSIX: my-extension.vsix"
+            mkdir -p /tmp/extract-vsix
+            unzip -q ./my-extension.vsix -d /tmp/extract-vsix
+            cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
+            echo "✅ VSIX extracted"
+            rm -rf /tmp/extract-vsix
           else
-            echo "ℹ️ No custom extensions found"
+            echo "ℹ️ No custom extensions provided"
+            # 创建一个空目录标记
+            touch "$BUILD_DIR/resources/app/custom-extensions/.empty"
           fi
+
+          # 显示复制的内容
+          echo ""
+          echo "📋 Custom extensions prepared:"
+          ls -la "$BUILD_DIR/resources/app/custom-extensions/" 2>/dev/null || echo "  (empty)"
 
       - name: 🧹 Safe cleanup (preserve core extensions)
         run: |
@@ -697,10 +716,14 @@ jobs:
           echo "8️⃣ Checking custom extensions..."
           if [ -d "$SCRIPT_DIR/resources/app/custom-extensions" ]; then
             CUSTOM_COUNT=$(ls -1 $SCRIPT_DIR/resources/app/custom-extensions 2>/dev/null | wc -l)
-            echo "   ✅ Custom extensions directory exists ($CUSTOM_COUNT extensions)"
-            ((PASSED++))
+            if [ "$CUSTOM_COUNT" -gt 0 ]; then
+              echo "   ✅ Custom extensions directory exists ($CUSTOM_COUNT extensions)"
+              ((PASSED++))
+            else
+              echo "   ℹ️ No custom extensions"
+            fi
           else
-            echo "   ℹ️ No custom extensions"
+            echo "   ℹ️ No custom extensions directory"
           fi
 
           echo ""
@@ -774,6 +797,7 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/resources/app/custom-extensions" 2>/dev/null || true
 
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
@@ -849,7 +873,7 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本 - 只复制预构建自定义扩展到用户目录
+          # 创建 postinst 脚本 - 复制预构建自定义扩展到用户目录
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
@@ -879,41 +903,60 @@ jobs:
           fi
 
           # ============================================================
-          # 4. 只复制预构建的自定义扩展到用户目录
-          # 官方内置扩展保持在 /opt/tscode/resources/app/extensions/
+          # 4. 复制预构建的自定义扩展到用户目录
           # ============================================================
           echo ""
           echo "📦 Copying prebuilt custom extensions to user directories..."
 
           CUSTOM_EXT_DIR="/opt/tscode/resources/app/custom-extensions"
 
-          for USER_HOME in /home/* /root; do
-              if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
-                  USER_NAME=$(basename "$USER_HOME")
-                  echo "  📌 Processing user: $USER_NAME"
+          # 检查是否有自定义扩展
+          if [ -d "$CUSTOM_EXT_DIR" ]; then
+              # 移除 .empty 标记文件（如果有）
+              rm -f "$CUSTOM_EXT_DIR/.empty" 2>/dev/null || true
 
-                  TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
-                  mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
+              # 检查是否有实际内容
+              EXT_COUNT=$(ls -1 "$CUSTOM_EXT_DIR" 2>/dev/null | wc -l)
 
-                  # 只复制自定义扩展（如果有）
-                  if [ -d "$CUSTOM_EXT_DIR" ] && [ "$(ls -A $CUSTOM_EXT_DIR 2>/dev/null)" ]; then
-                      echo "    📂 Copying custom extensions to $TSC_EXT_DIR..."
-                      cp -r "$CUSTOM_EXT_DIR"/* "$TSC_EXT_DIR/" 2>/dev/null || true
-                      echo "    ✅ Custom extensions copied for $USER_NAME"
-                  else
-                      echo "    ℹ️ No custom extensions found"
-                  fi
+              if [ "$EXT_COUNT" -gt 0 ]; then
+                  echo "  📌 Found $EXT_COUNT custom extension(s)"
 
-                  # 设置正确的所有权
-                  if [ "$USER_HOME" != "/root" ]; then
-                      USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
-                      if [ -n "$USER_OWNER" ]; then
-                          chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
-                          chown -R "$USER_OWNER" "$USER_HOME/.tscode" 2>/dev/null || true
+                  for USER_HOME in /home/* /root; do
+                      if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
+                          USER_NAME=$(basename "$USER_HOME")
+                          echo "  📌 Processing user: $USER_NAME"
+
+                          TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
+                          mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
+
+                          echo "    📂 Copying custom extensions to $TSC_EXT_DIR..."
+
+                          # 复制每个自定义扩展
+                          for ext in "$CUSTOM_EXT_DIR"/*; do
+                              if [ -d "$ext" ]; then
+                                  ext_name=$(basename "$ext")
+                                  echo "      ✅ Copying: $ext_name"
+                                  cp -r "$ext" "$TSC_EXT_DIR/" 2>/dev/null || true
+                              fi
+                          done
+
+                          # 设置正确的所有权
+                          if [ "$USER_HOME" != "/root" ]; then
+                              USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
+                              if [ -n "$USER_OWNER" ]; then
+                                  chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
+                                  chown -R "$USER_OWNER" "$USER_HOME/.tscode" 2>/dev/null || true
+                              fi
+                          fi
+                          echo "    ✅ Custom extensions installed for $USER_NAME"
                       fi
-                  fi
+                  done
+              else
+                  echo "  ℹ️ No custom extensions found"
               fi
-          done
+          else
+              echo "  ℹ️ No custom extensions directory"
+          fi
 
           # 5. 为安装用户禁用密钥环
           REAL_USER="${SUDO_USER:-$USER}"
