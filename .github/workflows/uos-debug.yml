@@ -692,12 +692,11 @@ jobs:
           # 确保二进制文件可执行
           chmod +x tscode
 
-          # ====== 修复：创建不会递归的启动脚本 ======
-          # 在 /usr/bin 中创建独立包装脚本，而不是链接到 run.sh
-
+          # ====== 创建不会递归的启动脚本 ======
           cat > /usr/local/bin/tscode-wrapper << 'WRAPEOF'
           #!/bin/bash
           # TSCode 独立启动包装器 - 避免递归调用
+          # 数据目录: ~/.tscode
 
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -710,6 +709,24 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
+          # 设置 TSCode 数据目录
+          export VSCODE_APPDATA="$HOME/.tscode"
+          export XDG_CONFIG_HOME="$HOME/.tscode"
+          export VSCODE_PORTABLE="$HOME/.tscode"
+
+          # 创建目录结构
+          mkdir -p "$HOME/.tscode"
+          mkdir -p "$HOME/.tscode/extensions"
+          mkdir -p "$HOME/.tscode/user-data"
+          mkdir -p "$HOME/.tscode/cached-extensions"
+
+          # 复制预构建插件到用户目录（如果存在且未安装）
+          if [ -d "/opt/tscode/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
+            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+            cp -r "/opt/tscode/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
+            echo "✅ Built-in extensions installed"
+          fi
+
           # 直接调用二进制文件（使用绝对路径，避免 PATH 查找）
           exec /opt/tscode/tscode \
               --no-sandbox \
@@ -718,7 +735,10 @@ jobs:
               --disable-gpu \
               --disable-crash-reporter \
               --disable-breakpad \
+              --disable-keychain \
               --password-store=basic \
+              --user-data-dir="$HOME/.tscode/user-data" \
+              --extensions-dir="$HOME/.tscode/extensions" \
               "$@"
           WRAPEOF
 
@@ -731,6 +751,7 @@ jobs:
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
           # TSCode 启动包装脚本 - 直接调用二进制文件
+          # 数据目录: ~/.tscode
 
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -745,6 +766,23 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
+          # 设置 TSCode 数据目录
+          export VSCODE_APPDATA="$HOME/.tscode"
+          export XDG_CONFIG_HOME="$HOME/.tscode"
+          export VSCODE_PORTABLE="$HOME/.tscode"
+
+          # 创建目录结构
+          mkdir -p "$HOME/.tscode"
+          mkdir -p "$HOME/.tscode/extensions"
+          mkdir -p "$HOME/.tscode/user-data"
+
+          # 复制预构建插件到用户目录（如果存在且未安装）
+          if [ -d "$SCRIPT_DIR/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
+            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+            cp -r "$SCRIPT_DIR/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
+            echo "✅ Built-in extensions installed"
+          fi
+
           # 直接调用同目录下的二进制文件
           exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
@@ -753,7 +791,10 @@ jobs:
               --disable-gpu \
               --disable-crash-reporter \
               --disable-breakpad \
+              --disable-keychain \
               --password-store=basic \
+              --user-data-dir="$HOME/.tscode/user-data" \
+              --extensions-dir="$HOME/.tscode/extensions" \
               "$@"
           RUNEOF
 
@@ -781,6 +822,11 @@ jobs:
           echo "  /usr/bin/tscode -> /usr/local/bin/tscode-wrapper"
           echo "  /usr/local/bin/tscode-wrapper -> /opt/tscode/tscode (binary)"
           echo "  /opt/tscode/run.sh -> /opt/tscode/tscode (binary)"
+          echo ""
+          echo "📁 Data directory: ~/.tscode/"
+          echo "   - Extensions: ~/.tscode/extensions/"
+          echo "   - User data: ~/.tscode/user-data/"
+          echo "🔑 Keychain/Password input disabled"
 
       - name: 📄 Create desktop entry
         run: |
@@ -853,10 +899,11 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
-          # 创建包装器脚本
+          # 创建包装器脚本 - 数据目录在 ~/.tscode
           cat > "$DEB_ROOT/usr/local/bin/tscode-wrapper" << 'WRAPEOF'
           #!/bin/bash
           # TSCode 独立启动包装器 - 避免递归调用
+          # 数据目录: ~/.tscode
 
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -869,6 +916,23 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
+          # 设置 TSCode 数据目录
+          export VSCODE_APPDATA="$HOME/.tscode"
+          export XDG_CONFIG_HOME="$HOME/.tscode"
+          export VSCODE_PORTABLE="$HOME/.tscode"
+
+          # 创建目录结构
+          mkdir -p "$HOME/.tscode"
+          mkdir -p "$HOME/.tscode/extensions"
+          mkdir -p "$HOME/.tscode/user-data"
+
+          # 复制预构建插件到用户目录（如果存在且未安装）
+          if [ -d "/opt/tscode/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
+            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+            cp -r "/opt/tscode/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
+            echo "✅ Built-in extensions installed"
+          fi
+
           exec /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -876,7 +940,10 @@ jobs:
               --disable-gpu \
               --disable-crash-reporter \
               --disable-breakpad \
+              --disable-keychain \
               --password-store=basic \
+              --user-data-dir="$HOME/.tscode/user-data" \
+              --extensions-dir="$HOME/.tscode/extensions" \
               "$@"
           WRAPEOF
 
@@ -887,6 +954,15 @@ jobs:
           ln -sf ../local/bin/tscode-wrapper tscode
           cd -
 
+          # 保存内置插件备份供首次启动使用
+          if [ -d "$DEB_ROOT/opt/tscode/resources/app/extensions" ]; then
+            echo "📌 Creating backup of built-in extensions..."
+            mkdir -p "$DEB_ROOT/opt/tscode/resources/app/extensions.builtin"
+            cp -r "$DEB_ROOT/opt/tscode/resources/app/extensions"/* \
+                  "$DEB_ROOT/opt/tscode/resources/app/extensions.builtin/" 2>/dev/null || true
+            echo "   ✅ Built-in extensions backup created"
+          fi
+
           if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
             cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
                "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
@@ -894,6 +970,27 @@ jobs:
 
           cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
              "$DEB_ROOT/usr/share/applications/"
+
+          # 创建首次安装插件脚本
+          cat > "$DEB_ROOT/opt/tscode/install-builtin-extensions.sh" << 'INSTALLEOF'
+          #!/bin/bash
+          # 安装内置插件到用户目录
+          # 数据目录: ~/.tscode
+
+          USER_EXT_DIR="$HOME/.tscode/extensions"
+          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions.builtin"
+
+          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -d "$USER_EXT_DIR/builtin" ]; then
+            echo "📦 Installing built-in extensions..."
+            mkdir -p "$USER_EXT_DIR"
+            cp -r "$SYSTEM_EXT_DIR" "$USER_EXT_DIR/builtin"
+            echo "✅ Built-in extensions installed to ~/.tscode/extensions/builtin"
+          else
+            echo "ℹ️ Built-in extensions already installed or not found"
+          fi
+          INSTALLEOF
+
+          chmod +x "$DEB_ROOT/opt/tscode/install-builtin-extensions.sh"
 
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
@@ -903,6 +1000,8 @@ jobs:
           Description: TSCode - Code Editing. Redefined.
            TSCode is a code editor redefined and optimized for building
            and debugging modern web and cloud applications.
+           All data stored in ~/.tscode directory.
+           No password/keychain required.
           Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
           Recommends: git, python3
           Section: devel
@@ -928,6 +1027,14 @@ jobs:
 
           chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
           chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
+          chmod +x /opt/tscode/install-builtin-extensions.sh 2>/dev/null || true
+
+          echo "📦 Preparing built-in extensions..."
+          if [ -d "/opt/tscode/resources/app/extensions" ]; then
+              mkdir -p /opt/tscode/resources/app/extensions.builtin
+              cp -r /opt/tscode/resources/app/extensions/* /opt/tscode/resources/app/extensions.builtin/ 2>/dev/null || true
+              echo "✅ Built-in extensions prepared"
+          fi
 
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
@@ -938,12 +1045,16 @@ jobs:
           echo ""
           echo "✅ TSCode installed successfully!"
           echo ""
-          echo "🚀 Run 'tscode' to start (no password required)"
+          echo "📁 Data directory: ~/.tscode/"
+          echo "   - Extensions: ~/.tscode/extensions/"
+          echo "   - User data: ~/.tscode/user-data/"
+          echo "   - Built-in extensions will be auto-installed on first run"
+          echo ""
+          echo "🚀 Run 'tscode' to start"
           echo "📂 Or use application menu: Development -> TSCode"
           echo ""
-          echo "📋 Launcher structure:"
-          echo "  /usr/bin/tscode -> /usr/local/bin/tscode-wrapper"
-          echo "  /usr/local/bin/tscode-wrapper -> /opt/tscode/tscode"
+          echo "🔑 No password/keychain required (disabled)"
+          echo "📦 Built-in extensions installed to user directory on first launch"
           echo "=========================================="
           POSTINSTEOF
 
@@ -985,6 +1096,11 @@ jobs:
           echo ""
           echo "✅ Features:"
           echo "   - ✅ No password required on startup"
+          echo "   - ✅ Keychain/Password input disabled (--disable-keychain)"
+          echo "   - ✅ Data stored in ~/.tscode/"
+          echo "   - ✅ Extensions stored in ~/.tscode/extensions/"
+          echo "   - ✅ User data stored in ~/.tscode/user-data/"
+          echo "   - ✅ Built-in extensions auto-installed on first run"
           echo "   - ✅ No shell recursion (fixed)"
           echo "   - ✅ Desktop entry in application menu"
           echo "   - ✅ Built from source"
@@ -1007,5 +1123,8 @@ jobs:
             echo "  sudo apt-get install -f"
             echo ""
             echo "🚀 Run: tscode"
+            echo ""
+            echo "📁 Data location: ~/.tscode/"
+            echo "🔑 No password/keychain prompts"
             echo "=========================================="
           fi
