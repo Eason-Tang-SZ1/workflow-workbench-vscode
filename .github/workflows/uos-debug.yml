@@ -415,6 +415,97 @@ jobs:
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
 
+      # ========== 新增：编译官方内置扩展 ==========
+      - name: 🔨 Build official built-in extensions
+        run: |
+          echo "=========================================="
+          echo "🔨 Building official built-in extensions"
+          echo "=========================================="
+
+          export NODE_OPTIONS="--max-old-space-size=8192"
+
+          # 官方扩展列表
+          OFFICIAL_EXTENSIONS=(
+            "git"
+            "github"
+            "json-language-features"
+            "markdown-language-features"
+            "npm"
+            "search-result"
+            "typescript-language-features"
+            "theme-defaults"
+            "html-language-features"
+            "css-language-features"
+            "emmet"
+            "jake"
+            "gulp"
+            "grunt"
+            "debug-auto-launch"
+            "debug-server-ready"
+            "ipynb"
+            "notebook-renderers"
+            "microsoft-authentication"
+            "github-authentication"
+            "merge-conflict"
+            "extension-editing"
+            "html"
+            "css"
+            "json"
+            "markdown"
+            "typescript"
+            "javascript"
+            "php"
+            "python"
+            "rust"
+            "go"
+            "csharp"
+            "cpp"
+            "java"
+            "ruby"
+            "swift"
+            "kotlin"
+            "dart"
+            "lua"
+            "r"
+            "shell"
+            "xml"
+            "yaml"
+            "toml"
+            "docker"
+            "kubernetes"
+            "terraform"
+            "ansible"
+            "jenkins"
+            "gitlab"
+            "bitbucket"
+            "jira"
+            "confluence"
+            "slack"
+            "teams"
+            "discord"
+          )
+
+          echo "📦 Building official extensions..."
+
+          # 使用 gulp 编译所有扩展
+          npx tsx node_modules/gulp/bin/gulp.js compile-extensions --no-color || true
+
+          # 逐个编译确保所有扩展都构建成功
+          for ext in extensions/*/; do
+            if [ -f "$ext/package.json" ]; then
+              ext_name=$(basename "$ext")
+              echo "  📦 Building $ext_name..."
+              (cd "$ext" && npm install --legacy-peer-deps --ignore-scripts 2>/dev/null || true)
+              (cd "$ext" && npm run compile 2>/dev/null || true)
+            fi
+          done
+
+          echo ""
+          echo "📋 Built extensions:"
+          ls -la extensions/ | grep "^d" | head -20
+
+          echo "✅ Official extensions built"
+
       - name: 🔨 Build VSCode from source
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
@@ -435,6 +526,7 @@ jobs:
             mkdir -p extensions
           fi
 
+          # 构建主应用（会包含已编译的扩展）
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -528,11 +620,16 @@ jobs:
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
 
             echo ""
-            echo "📋 Extensions list:"
+            echo "📋 Extensions list (official + custom):"
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                echo "  ✅ $EXT_NAME"
+                # 检查是否是官方扩展（有 out 目录）
+                if [ -d "$ext/out" ]; then
+                  echo "  ✅ $EXT_NAME (compiled)"
+                else
+                  echo "  ✅ $EXT_NAME"
+                fi
               fi
             done
           else
@@ -656,7 +753,7 @@ jobs:
 
           echo "✅ Native modules compiled for offline use"
 
-      - name: 📄 Create launcher (修复递归调用)
+      - name: 📄 Create launcher (修复递归调用 + 插件合并)
         run: |
           echo "=========================================="
           echo "📄 Creating launcher"
@@ -689,11 +786,9 @@ jobs:
             echo "✅ Renamed to tscode"
           fi
 
-          # 确保二进制文件可执行
           chmod +x tscode
 
-          # ====== 创建不会递归的启动脚本 ======
-          # 使用 sudo 创建到 /usr/local/bin
+          # ====== 创建不会递归的启动脚本（包含插件合并逻辑） ======
           sudo tee /usr/local/bin/tscode-wrapper > /dev/null << 'WRAPEOF'
           #!/bin/bash
           # TSCode 独立启动包装器 - 避免递归调用
@@ -710,7 +805,6 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
-          # 禁用密钥环
           export GNOME_KEYRING_CONTROL=
           export DBUS_SESSION_BUS_ADDRESS=
           export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
@@ -719,25 +813,63 @@ jobs:
           export VSCODE_PASSWORD_STORE=basic
           export ELECTRON_PASSWORD_STORE=basic
 
-          # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export XDG_CONFIG_HOME="$HOME/.tscode"
           export VSCODE_PORTABLE="$HOME/.tscode"
 
-          # 创建目录结构
           mkdir -p "$HOME/.tscode"
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
-          mkdir -p "$HOME/.tscode/cached-extensions"
 
-          # 复制预构建插件到用户目录（如果存在且未安装）
-          if [ -d "/opt/tscode/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
-            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-            cp -r "/opt/tscode/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
-            echo "✅ Built-in extensions installed"
+          # ====== 合并所有插件到 extensions 根目录 ======
+          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions"
+          USER_EXT_DIR="$HOME/.tscode/extensions"
+          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
+
+          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
+              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+
+              # 复制官方扩展（排除自定义扩展，避免覆盖）
+              for ext in "$SYSTEM_EXT_DIR"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      # 跳过自定义扩展（保留用户安装的版本）
+                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
+                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
+                         [[ "$ext_name" == "test-tech.testagent" ]] || \
+                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
+                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                          echo "  ⏭️ Skipping custom extension: $ext_name"
+                          continue
+                      fi
+
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          cp -r "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ $ext_name"
+                      fi
+                  fi
+              done
+
+              echo "Installed on $(date)" > "$INSTALL_MARKER"
+              echo "✅ Built-in extensions installed"
           fi
 
-          # 直接调用二进制文件（使用绝对路径，避免 PATH 查找）
+          # 迁移 builtin 子目录中的插件到根目录
+          if [ -d "$USER_EXT_DIR/builtin" ]; then
+              echo "📦 Migrating extensions from builtin/ to root..."
+              for ext in "$USER_EXT_DIR/builtin"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          mv "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ migrated $ext_name"
+                      fi
+                  fi
+              done
+              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
+              echo "✅ Migration complete"
+          fi
+
           exec /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -754,10 +886,9 @@ jobs:
 
           sudo chmod +x /usr/local/bin/tscode-wrapper
 
-          # 使用 sudo 创建 /usr/bin/tscode 指向包装器
           sudo ln -sf /usr/local/bin/tscode-wrapper /usr/bin/tscode
 
-          # 在 opt 目录中也创建一个包装器（备用）
+          # 在 opt 目录中也创建一个包装器
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
           # TSCode 启动包装脚本 - 直接调用二进制文件
@@ -776,7 +907,6 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
-          # 禁用密钥环
           export GNOME_KEYRING_CONTROL=
           export DBUS_SESSION_BUS_ADDRESS=
           export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
@@ -785,24 +915,60 @@ jobs:
           export VSCODE_PASSWORD_STORE=basic
           export ELECTRON_PASSWORD_STORE=basic
 
-          # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export XDG_CONFIG_HOME="$HOME/.tscode"
           export VSCODE_PORTABLE="$HOME/.tscode"
 
-          # 创建目录结构
           mkdir -p "$HOME/.tscode"
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
 
-          # 复制预构建插件到用户目录（如果存在且未安装）
-          if [ -d "$SCRIPT_DIR/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
-            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-            cp -r "$SCRIPT_DIR/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
-            echo "✅ Built-in extensions installed"
+          # ====== 合并所有插件到 extensions 根目录 ======
+          SYSTEM_EXT_DIR="$SCRIPT_DIR/resources/app/extensions"
+          USER_EXT_DIR="$HOME/.tscode/extensions"
+          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
+
+          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
+              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+
+              for ext in "$SYSTEM_EXT_DIR"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
+                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
+                         [[ "$ext_name" == "test-tech.testagent" ]] || \
+                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
+                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                          echo "  ⏭️ Skipping custom extension: $ext_name"
+                          continue
+                      fi
+
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          cp -r "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ $ext_name"
+                      fi
+                  fi
+              done
+
+              echo "Installed on $(date)" > "$INSTALL_MARKER"
+              echo "✅ Built-in extensions installed"
           fi
 
-          # 直接调用同目录下的二进制文件
+          if [ -d "$USER_EXT_DIR/builtin" ]; then
+              echo "📦 Migrating extensions from builtin/ to root..."
+              for ext in "$USER_EXT_DIR/builtin"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          mv "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ migrated $ext_name"
+                      fi
+                  fi
+              done
+              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
+              echo "✅ Migration complete"
+          fi
+
           exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -819,7 +985,6 @@ jobs:
 
           chmod +x run.sh
 
-          # 创建简单的 start 脚本
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -828,7 +993,6 @@ jobs:
 
           chmod +x start-tscode.sh
 
-          # 设置 chrome-sandbox SUID
           if [ -f "chrome-sandbox" ]; then
             sudo chown root:root chrome-sandbox
             sudo chmod 4755 chrome-sandbox
@@ -935,7 +1099,6 @@ jobs:
           export CRASHPAD_DISABLE=1
           export ELECTRON_NO_SANDBOX=1
 
-          # 禁用密钥环
           export GNOME_KEYRING_CONTROL=
           export DBUS_SESSION_BUS_ADDRESS=
           export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
@@ -944,21 +1107,59 @@ jobs:
           export VSCODE_PASSWORD_STORE=basic
           export ELECTRON_PASSWORD_STORE=basic
 
-          # 设置 TSCode 数据目录
           export VSCODE_APPDATA="$HOME/.tscode"
           export XDG_CONFIG_HOME="$HOME/.tscode"
           export VSCODE_PORTABLE="$HOME/.tscode"
 
-          # 创建目录结构
           mkdir -p "$HOME/.tscode"
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
 
-          # 复制预构建插件到用户目录（如果存在且未安装）
-          if [ -d "/opt/tscode/resources/app/extensions" ] && [ ! -d "$HOME/.tscode/extensions/builtin" ]; then
-            echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-            cp -r "/opt/tscode/resources/app/extensions" "$HOME/.tscode/extensions/builtin" 2>/dev/null || true
-            echo "✅ Built-in extensions installed"
+          # ====== 合并所有插件到 extensions 根目录 ======
+          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions"
+          USER_EXT_DIR="$HOME/.tscode/extensions"
+          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
+
+          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
+              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
+
+              for ext in "$SYSTEM_EXT_DIR"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      # 跳过自定义扩展（保留用户安装的版本）
+                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
+                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
+                         [[ "$ext_name" == "test-tech.testagent" ]] || \
+                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
+                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                          echo "  ⏭️ Skipping custom extension: $ext_name"
+                          continue
+                      fi
+
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          cp -r "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ $ext_name"
+                      fi
+                  fi
+              done
+
+              echo "Installed on $(date)" > "$INSTALL_MARKER"
+              echo "✅ Built-in extensions installed"
+          fi
+
+          if [ -d "$USER_EXT_DIR/builtin" ]; then
+              echo "📦 Migrating extensions from builtin/ to root..."
+              for ext in "$USER_EXT_DIR/builtin"/*; do
+                  if [ -d "$ext" ]; then
+                      ext_name=$(basename "$ext")
+                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
+                          mv "$ext" "$USER_EXT_DIR/"
+                          echo "  ✅ migrated $ext_name"
+                      fi
+                  fi
+              done
+              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
+              echo "✅ Migration complete"
           fi
 
           exec /opt/tscode/tscode \
@@ -977,10 +1178,8 @@ jobs:
 
           chmod +x "$DEB_ROOT/usr/local/bin/tscode-wrapper"
 
-          # 创建 /usr/bin/tscode 包装脚本（不是符号链接）
           cat > "$DEB_ROOT/usr/bin/tscode" << 'BINWRAPEOF'
           #!/bin/bash
-          # TSCode 启动包装器
           exec /usr/local/bin/tscode-wrapper "$@"
           BINWRAPEOF
 
@@ -1003,27 +1202,6 @@ jobs:
           cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
              "$DEB_ROOT/usr/share/applications/"
 
-          # 创建首次安装插件脚本
-          cat > "$DEB_ROOT/opt/tscode/install-builtin-extensions.sh" << 'INSTALLEOF'
-          #!/bin/bash
-          # 安装内置插件到用户目录
-          # 数据目录: ~/.tscode
-
-          USER_EXT_DIR="$HOME/.tscode/extensions"
-          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions.builtin"
-
-          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -d "$USER_EXT_DIR/builtin" ]; then
-            echo "📦 Installing built-in extensions..."
-            mkdir -p "$USER_EXT_DIR"
-            cp -r "$SYSTEM_EXT_DIR" "$USER_EXT_DIR/builtin"
-            echo "✅ Built-in extensions installed to ~/.tscode/extensions/builtin"
-          else
-            echo "ℹ️ Built-in extensions already installed or not found"
-          fi
-          INSTALLEOF
-
-          chmod +x "$DEB_ROOT/opt/tscode/install-builtin-extensions.sh"
-
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -1034,6 +1212,7 @@ jobs:
            and debugging modern web and cloud applications.
            All data stored in ~/.tscode directory.
            No password/keychain required.
+           Includes all official @builtin extensions.
           Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
           Recommends: git, python3
           Section: devel
@@ -1060,7 +1239,6 @@ jobs:
           chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
           chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
           chmod +x /usr/bin/tscode 2>/dev/null || true
-          chmod +x /opt/tscode/install-builtin-extensions.sh 2>/dev/null || true
 
           echo "📦 Preparing built-in extensions..."
           if [ -d "/opt/tscode/resources/app/extensions" ]; then
@@ -1073,7 +1251,6 @@ jobs:
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
           fi
 
-          # 禁用密钥环
           echo ""
           echo "🔑 Disabling keyring for users..."
           for USER_HOME in /home/* /root; do
@@ -1096,19 +1273,18 @@ jobs:
           echo "📁 Data directory: ~/.tscode/"
           echo "   - Extensions: ~/.tscode/extensions/"
           echo "   - User data: ~/.tscode/user-data/"
-          echo "   - Built-in extensions will be auto-installed on first run"
+          echo "   - Official @builtin extensions included"
+          echo "   - Custom extensions preserved"
           echo ""
           echo "🚀 Run 'tscode' to start"
           echo "📂 Or use application menu: Development -> TSCode"
           echo ""
           echo "🔑 No password/keychain required (disabled)"
-          echo "📦 Built-in extensions installed to user directory on first launch"
           echo "=========================================="
           POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
-          # 创建 prerm 脚本 - 不删除用户数据
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
@@ -1167,13 +1343,12 @@ jobs:
           echo "   - ✅ Data stored in ~/.tscode/"
           echo "   - ✅ Extensions stored in ~/.tscode/extensions/"
           echo "   - ✅ User data stored in ~/.tscode/user-data/"
-          echo "   - ✅ Built-in extensions auto-installed on first run"
+          echo "   - ✅ Official @builtin extensions included"
+          echo "   - ✅ Custom extensions preserved"
           echo "   - ✅ No shell recursion (fixed)"
           echo "   - ✅ Desktop entry in application menu"
           echo "   - ✅ Built from source"
           echo "   - ✅ extensionHost is built-in"
-          echo "   - ✅ Built-in extensions (@builtin) included"
-          echo "   - ✅ Custom extensions included"
           echo "   - ✅ Native modules compiled for offline use"
           echo "   - ✅ Offline installation supported"
           echo "=========================================="
