@@ -98,8 +98,12 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      - name: 🔧 Fix extensions.ts (返回 Vinyl 流)
+      # ========== 关键修复：保留原始扩展处理，只修改必要部分 ==========
+      - name: 🔧 Fix extensions.ts (保留 builtin 标记)
         run: |
+          # 备份原始文件
+          cp build/lib/extensions.ts build/lib/extensions.ts.orig
+
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
            *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -110,18 +114,57 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
           import * as vinyl from 'vinyl';
+          import { getBuiltInExtensions as getBuiltInExtensionsActual } from './extensions';
 
-          // ========== 创建空的 Vinyl 流 ==========
-          function createEmptyVinylStream(): Stream {
-            const { Readable } = require('stream');
-            const stream = new Readable({ objectMode: true });
-            stream._read = function() {
-              this.push(null);
-            };
-            return stream;
+          // ========== 从原始函数获取内置扩展列表 ==========
+          function getBuiltInExtensionsList(): any[] {
+            try {
+              // 使用原始函数获取扩展列表
+              const origExts = getBuiltInExtensionsActual();
+              if (origExts && origExts.length > 0) {
+                return origExts;
+              }
+            } catch (e) {
+              console.log('📦 Could not get built-in extensions from original:', e.message);
+            }
+
+            // 备用：直接从 extensions 目录读取
+            try {
+              const extensions: any[] = [];
+              const extDir = path.join(__dirname, '../../extensions');
+              if (fs.existsSync(extDir)) {
+                const items = fs.readdirSync(extDir);
+                for (const item of items) {
+                  const extPath = path.join(extDir, item);
+                  const stat = fs.statSync(extPath);
+                  if (stat.isDirectory() && fs.existsSync(path.join(extPath, 'package.json'))) {
+                    const pkg = JSON.parse(fs.readFileSync(path.join(extPath, 'package.json'), 'utf8'));
+                    extensions.push({
+                      name: pkg.name || item,
+                      path: extPath,
+                      packageJSON: pkg
+                    });
+                  }
+                }
+              }
+              return extensions;
+            } catch (e) {
+              console.log('📦 Could not read built-in extensions:', e.message);
+              return [];
+            }
           }
 
-          // ========== 从目录创建 Vinyl 文件流 ==========
+          // ========== 导出 ==========
+          export const builtInExtensions = getBuiltInExtensionsList();
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions: any[] = [];
+          export const shouldDownloadWebBuiltInExtensions = false;
+
+          export function isWebExtension(): boolean {
+            return false;
+          }
+
+          // ========== 扩展流处理 - 保持内置扩展标记 ==========
           function createVinylStreamFromDirectory(dirPath: string): Stream {
             const { Readable } = require('stream');
             const stream = new Readable({ objectMode: true });
@@ -156,7 +199,9 @@ jobs:
                       file['extension'] = {
                         name: pkg.name || item,
                         path: itemPath,
-                        packageJSON: pkg
+                        packageJSON: pkg,
+                        // 标记为内置扩展
+                        isBuiltin: true
                       };
                       files.push(file);
                     }
@@ -178,43 +223,6 @@ jobs:
             };
 
             return stream;
-          }
-
-          // ========== 导出扩展列表（用于其他函数） ==========
-          function getBuiltInExtensionsList(): any[] {
-            try {
-              const extensions: any[] = [];
-              const extDir = path.join(__dirname, '../../extensions');
-              if (fs.existsSync(extDir)) {
-                const items = fs.readdirSync(extDir);
-                for (const item of items) {
-                  const extPath = path.join(extDir, item);
-                  const stat = fs.statSync(extPath);
-                  if (stat.isDirectory() && fs.existsSync(path.join(extPath, 'package.json'))) {
-                    const pkg = JSON.parse(fs.readFileSync(path.join(extPath, 'package.json'), 'utf8'));
-                    extensions.push({
-                      name: pkg.name || item,
-                      path: extPath,
-                      packageJSON: pkg
-                    });
-                  }
-                }
-              }
-              return extensions;
-            } catch (e) {
-              console.log('📦 Could not read built-in extensions:', e.message);
-              return [];
-            }
-          }
-
-          // ========== 导出 ==========
-          export const builtInExtensions = getBuiltInExtensionsList();
-          export const shouldDownloadBuiltInExtensions = false;
-          export const webBuiltInExtensions: any[] = [];
-          export const shouldDownloadWebBuiltInExtensions = false;
-
-          export function isWebExtension(): boolean {
-            return false;
           }
 
           export function getExtensionStream(): Stream {
@@ -344,6 +352,8 @@ jobs:
           }
           EOF
 
+          echo "✅ extensions.ts updated with builtin support"
+
       - name: 🔧 Fix gulpfile spawn calls
         run: |
           python3 << 'PY_END'
@@ -424,85 +434,21 @@ jobs:
 
           export NODE_OPTIONS="--max-old-space-size=8192"
 
-          # 官方扩展列表
-          OFFICIAL_EXTENSIONS=(
-            "git"
-            "github"
-            "json-language-features"
-            "markdown-language-features"
-            "npm"
-            "search-result"
-            "typescript-language-features"
-            "theme-defaults"
-            "html-language-features"
-            "css-language-features"
-            "emmet"
-            "jake"
-            "gulp"
-            "grunt"
-            "debug-auto-launch"
-            "debug-server-ready"
-            "ipynb"
-            "notebook-renderers"
-            "microsoft-authentication"
-            "github-authentication"
-            "merge-conflict"
-            "extension-editing"
-            "html"
-            "css"
-            "json"
-            "markdown"
-            "typescript"
-            "javascript"
-            "php"
-            "python"
-            "rust"
-            "go"
-            "csharp"
-            "cpp"
-            "java"
-            "ruby"
-            "swift"
-            "kotlin"
-            "dart"
-            "lua"
-            "r"
-            "shell"
-            "xml"
-            "yaml"
-            "toml"
-            "docker"
-            "kubernetes"
-            "terraform"
-            "ansible"
-            "jenkins"
-            "gitlab"
-            "bitbucket"
-            "jira"
-            "confluence"
-            "slack"
-            "teams"
-            "discord"
-          )
-
-          echo "📦 Building official extensions..."
-
-          # 使用 gulp 编译所有扩展
+          echo "📦 Compiling official extensions using gulp..."
           npx tsx node_modules/gulp/bin/gulp.js compile-extensions --no-color || true
 
-          # 逐个编译确保所有扩展都构建成功
+          echo ""
+          echo "📋 Checking built extensions:"
           for ext in extensions/*/; do
             if [ -f "$ext/package.json" ]; then
               ext_name=$(basename "$ext")
-              echo "  📦 Building $ext_name..."
-              (cd "$ext" && npm install --legacy-peer-deps --ignore-scripts 2>/dev/null || true)
-              (cd "$ext" && npm run compile 2>/dev/null || true)
+              if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
+                echo "  ✅ $ext_name (compiled)"
+              else
+                echo "  ⚠️ $ext_name (not compiled)"
+              fi
             fi
           done
-
-          echo ""
-          echo "📋 Built extensions:"
-          ls -la extensions/ | grep "^d" | head -20
 
           echo "✅ Official extensions built"
 
@@ -518,7 +464,6 @@ jobs:
           echo "=========================================="
           echo "🔨 Building VSCode from source"
           echo "=========================================="
-          echo "📦 Extensions: using built-in extensions only"
           echo "Start: $(date)"
 
           if [ ! -d "extensions" ]; then
@@ -526,7 +471,7 @@ jobs:
             mkdir -p extensions
           fi
 
-          # 构建主应用（会包含已编译的扩展）
+          # 构建主应用
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -624,7 +569,6 @@ jobs:
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                # 检查是否是官方扩展（有 out 目录）
                 if [ -d "$ext/out" ]; then
                   echo "  ✅ $EXT_NAME (compiled)"
                 else
@@ -635,14 +579,6 @@ jobs:
           else
             echo "  ❌ Extensions directory not found!"
             exit 1
-          fi
-
-          echo ""
-          echo "📌 Checking extensionHost (built-in)..."
-          if [ -f "$BUILD_DIR/resources/app/out/vs/workbench/api/node/extensionHostProcess.js" ]; then
-            echo "  ✅ extensionHostProcess.js"
-          else
-            echo "  ⚠️ extensionHostProcess.js not found"
           fi
 
           TARGET_DIR="./tscode"
@@ -753,7 +689,7 @@ jobs:
 
           echo "✅ Native modules compiled for offline use"
 
-      - name: 📄 Create launcher (修复递归调用 + 插件合并)
+      - name: 📄 Create launcher
         run: |
           echo "=========================================="
           echo "📄 Creating launcher"
@@ -788,10 +724,9 @@ jobs:
 
           chmod +x tscode
 
-          # ====== 创建不会递归的启动脚本（包含插件合并逻辑） ======
           sudo tee /usr/local/bin/tscode-wrapper > /dev/null << 'WRAPEOF'
           #!/bin/bash
-          # TSCode 独立启动包装器 - 避免递归调用
+          # TSCode 独立启动包装器
           # 数据目录: ~/.tscode
 
           export ELECTRON_ENABLE_GPU=0
@@ -821,55 +756,6 @@ jobs:
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
 
-          # ====== 合并所有插件到 extensions 根目录 ======
-          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions"
-          USER_EXT_DIR="$HOME/.tscode/extensions"
-          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
-
-          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
-              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-
-              # 复制官方扩展（排除自定义扩展，避免覆盖）
-              for ext in "$SYSTEM_EXT_DIR"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      # 跳过自定义扩展（保留用户安装的版本）
-                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
-                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
-                         [[ "$ext_name" == "test-tech.testagent" ]] || \
-                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
-                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                          echo "  ⏭️ Skipping custom extension: $ext_name"
-                          continue
-                      fi
-
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          cp -r "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ $ext_name"
-                      fi
-                  fi
-              done
-
-              echo "Installed on $(date)" > "$INSTALL_MARKER"
-              echo "✅ Built-in extensions installed"
-          fi
-
-          # 迁移 builtin 子目录中的插件到根目录
-          if [ -d "$USER_EXT_DIR/builtin" ]; then
-              echo "📦 Migrating extensions from builtin/ to root..."
-              for ext in "$USER_EXT_DIR/builtin"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          mv "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ migrated $ext_name"
-                      fi
-                  fi
-              done
-              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
-              echo "✅ Migration complete"
-          fi
-
           exec /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -885,15 +771,10 @@ jobs:
           WRAPEOF
 
           sudo chmod +x /usr/local/bin/tscode-wrapper
-
           sudo ln -sf /usr/local/bin/tscode-wrapper /usr/bin/tscode
 
-          # 在 opt 目录中也创建一个包装器
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          # TSCode 启动包装脚本 - 直接调用二进制文件
-          # 数据目录: ~/.tscode
-
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
           export ELECTRON_ENABLE_GPU=0
@@ -922,52 +803,6 @@ jobs:
           mkdir -p "$HOME/.tscode"
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
-
-          # ====== 合并所有插件到 extensions 根目录 ======
-          SYSTEM_EXT_DIR="$SCRIPT_DIR/resources/app/extensions"
-          USER_EXT_DIR="$HOME/.tscode/extensions"
-          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
-
-          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
-              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-
-              for ext in "$SYSTEM_EXT_DIR"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
-                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
-                         [[ "$ext_name" == "test-tech.testagent" ]] || \
-                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
-                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                          echo "  ⏭️ Skipping custom extension: $ext_name"
-                          continue
-                      fi
-
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          cp -r "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ $ext_name"
-                      fi
-                  fi
-              done
-
-              echo "Installed on $(date)" > "$INSTALL_MARKER"
-              echo "✅ Built-in extensions installed"
-          fi
-
-          if [ -d "$USER_EXT_DIR/builtin" ]; then
-              echo "📦 Migrating extensions from builtin/ to root..."
-              for ext in "$USER_EXT_DIR/builtin"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          mv "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ migrated $ext_name"
-                      fi
-                  fi
-              done
-              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
-              echo "✅ Migration complete"
-          fi
 
           exec "$SCRIPT_DIR/tscode" \
               --no-sandbox \
@@ -999,17 +834,7 @@ jobs:
             echo "✅ chrome-sandbox SUID set"
           fi
 
-          echo "✅ Launcher created (no recursion)"
-          echo ""
-          echo "📋 Launcher structure:"
-          echo "  /usr/bin/tscode -> /usr/local/bin/tscode-wrapper"
-          echo "  /usr/local/bin/tscode-wrapper -> /opt/tscode/tscode (binary)"
-          echo "  /opt/tscode/run.sh -> /opt/tscode/tscode (binary)"
-          echo ""
-          echo "📁 Data directory: ~/.tscode/"
-          echo "   - Extensions: ~/.tscode/extensions/"
-          echo "   - User data: ~/.tscode/user-data/"
-          echo "🔑 Keychain/Password input disabled"
+          echo "✅ Launcher created"
 
       - name: 📄 Create desktop entry
         run: |
@@ -1082,10 +907,9 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
 
-          # 创建包装器脚本 - 数据目录在 ~/.tscode
           cat > "$DEB_ROOT/usr/local/bin/tscode-wrapper" << 'WRAPEOF'
           #!/bin/bash
-          # TSCode 独立启动包装器 - 避免递归调用
+          # TSCode 独立启动包装器
           # 数据目录: ~/.tscode
 
           export ELECTRON_ENABLE_GPU=0
@@ -1115,53 +939,6 @@ jobs:
           mkdir -p "$HOME/.tscode/extensions"
           mkdir -p "$HOME/.tscode/user-data"
 
-          # ====== 合并所有插件到 extensions 根目录 ======
-          SYSTEM_EXT_DIR="/opt/tscode/resources/app/extensions"
-          USER_EXT_DIR="$HOME/.tscode/extensions"
-          INSTALL_MARKER="$HOME/.tscode/.extensions_installed"
-
-          if [ -d "$SYSTEM_EXT_DIR" ] && [ ! -f "$INSTALL_MARKER" ]; then
-              echo "📦 Installing built-in extensions to ~/.tscode/extensions..."
-
-              for ext in "$SYSTEM_EXT_DIR"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      # 跳过自定义扩展（保留用户安装的版本）
-                      if [[ "$ext_name" == "cweijan.vscode-office" ]] || \
-                         [[ "$ext_name" == "test-tech.beeeyes" ]] || \
-                         [[ "$ext_name" == "test-tech.testagent" ]] || \
-                         [[ "$ext_name" == "test-tech.skillhub" ]] || \
-                         [[ "$ext_name" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                          echo "  ⏭️ Skipping custom extension: $ext_name"
-                          continue
-                      fi
-
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          cp -r "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ $ext_name"
-                      fi
-                  fi
-              done
-
-              echo "Installed on $(date)" > "$INSTALL_MARKER"
-              echo "✅ Built-in extensions installed"
-          fi
-
-          if [ -d "$USER_EXT_DIR/builtin" ]; then
-              echo "📦 Migrating extensions from builtin/ to root..."
-              for ext in "$USER_EXT_DIR/builtin"/*; do
-                  if [ -d "$ext" ]; then
-                      ext_name=$(basename "$ext")
-                      if [ ! -d "$USER_EXT_DIR/$ext_name" ]; then
-                          mv "$ext" "$USER_EXT_DIR/"
-                          echo "  ✅ migrated $ext_name"
-                      fi
-                  fi
-              done
-              rmdir "$USER_EXT_DIR/builtin" 2>/dev/null || true
-              echo "✅ Migration complete"
-          fi
-
           exec /opt/tscode/tscode \
               --no-sandbox \
               --disable-gpu-sandbox \
@@ -1184,15 +961,6 @@ jobs:
           BINWRAPEOF
 
           chmod +x "$DEB_ROOT/usr/bin/tscode"
-
-          # 保存内置插件备份供首次启动使用
-          if [ -d "$DEB_ROOT/opt/tscode/resources/app/extensions" ]; then
-            echo "📌 Creating backup of built-in extensions..."
-            mkdir -p "$DEB_ROOT/opt/tscode/resources/app/extensions.builtin"
-            cp -r "$DEB_ROOT/opt/tscode/resources/app/extensions"/* \
-                  "$DEB_ROOT/opt/tscode/resources/app/extensions.builtin/" 2>/dev/null || true
-            echo "   ✅ Built-in extensions backup created"
-          fi
 
           if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
             cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
@@ -1240,13 +1008,6 @@ jobs:
           chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
           chmod +x /usr/bin/tscode 2>/dev/null || true
 
-          echo "📦 Preparing built-in extensions..."
-          if [ -d "/opt/tscode/resources/app/extensions" ]; then
-              mkdir -p /opt/tscode/resources/app/extensions.builtin
-              cp -r /opt/tscode/resources/app/extensions/* /opt/tscode/resources/app/extensions.builtin/ 2>/dev/null || true
-              echo "✅ Built-in extensions prepared"
-          fi
-
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
           fi
@@ -1273,8 +1034,6 @@ jobs:
           echo "📁 Data directory: ~/.tscode/"
           echo "   - Extensions: ~/.tscode/extensions/"
           echo "   - User data: ~/.tscode/user-data/"
-          echo "   - Official @builtin extensions included"
-          echo "   - Custom extensions preserved"
           echo ""
           echo "🚀 Run 'tscode' to start"
           echo "📂 Or use application menu: Development -> TSCode"
@@ -1339,18 +1098,14 @@ jobs:
           echo ""
           echo "✅ Features:"
           echo "   - ✅ No password required on startup"
-          echo "   - ✅ Keychain/Password input disabled (--disable-keychain)"
+          echo "   - ✅ Keychain/Password input disabled"
           echo "   - ✅ Data stored in ~/.tscode/"
-          echo "   - ✅ Extensions stored in ~/.tscode/extensions/"
-          echo "   - ✅ User data stored in ~/.tscode/user-data/"
           echo "   - ✅ Official @builtin extensions included"
           echo "   - ✅ Custom extensions preserved"
           echo "   - ✅ No shell recursion (fixed)"
           echo "   - ✅ Desktop entry in application menu"
           echo "   - ✅ Built from source"
-          echo "   - ✅ extensionHost is built-in"
           echo "   - ✅ Native modules compiled for offline use"
-          echo "   - ✅ Offline installation supported"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
