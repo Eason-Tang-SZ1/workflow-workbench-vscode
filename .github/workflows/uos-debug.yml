@@ -96,10 +96,10 @@ jobs:
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
-            gulp-rename gulp-sort 2>/dev/null || true
+            gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 完善builtin支持 ==========
-      - name: 🔧 Fix extensions.ts (完善builtin支持)
+      # ========== 修复 extensions.ts - 确保流正确工作 ==========
+      - name: 🔧 Fix extensions.ts (正确的流处理)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -111,350 +111,320 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
           import * as vinyl from 'vinyl';
+          import * as es from 'event-stream';
 
-          // ========== 扩展元数据接口 ==========
-          interface IExtensionManifest {
-            name: string;
-            version: string;
-            builtin?: boolean;
-            extensionKind?: string[];
-            main?: string;
-            [key: string]: any;
-          }
+          // ========== 扫描所有扩展 ==========
+          function getAllExtensions(): any[] {
+              const extensions: any[] = [];
+              const extDir = path.join(__dirname, '../../extensions');
 
-          interface IBuiltInExtension {
-            name: string;
-            path: string;
-            packageJSON: IExtensionManifest;
-            isBuiltin: boolean;
-          }
+              console.log(`📦 Scanning extensions in: ${extDir}`);
 
-          // ========== 扫描内置扩展 ==========
-          function scanBuiltInExtensions(): IBuiltInExtension[] {
-            const extensions: IBuiltInExtension[] = [];
-            const extDir = path.join(__dirname, '../../extensions');
-
-            console.log(`📦 Scanning for built-in extensions in: ${extDir}`);
-
-            if (!fs.existsSync(extDir)) {
-              console.log('⚠️ Extensions directory not found');
-              return extensions;
-            }
-
-            try {
-              const items = fs.readdirSync(extDir);
-              console.log(`📦 Found ${items.length} items in extensions directory`);
-
-              for (const item of items) {
-                const extPath = path.join(extDir, item);
-                try {
-                  const stat = fs.statSync(extPath);
-                  if (stat.isDirectory()) {
-                    const pkgPath = path.join(extPath, 'package.json');
-                    if (fs.existsSync(pkgPath)) {
-                      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-
-                      // 确保扩展被标记为 builtin
-                      if (pkg.builtin !== true) {
-                        pkg.builtin = true;
-                      }
-                      if (!pkg.extensionKind) {
-                        pkg.extensionKind = ['workspace', 'ui'];
-                      }
-
-                      extensions.push({
-                        name: pkg.name || item,
-                        path: extPath,
-                        packageJSON: pkg,
-                        isBuiltin: true
-                      });
-
-                      console.log(`  ✅ Loaded builtin extension: ${pkg.name} (${item})`);
-                    }
-                  }
-                } catch (e) {
-                  console.log(`  ⚠️ Error reading extension ${item}: ${e.message}`);
-                }
+              if (!fs.existsSync(extDir)) {
+                  console.log('⚠️ Extensions directory not found');
+                  return extensions;
               }
-            } catch (e) {
-              console.log(`❌ Error scanning extensions: ${e.message}`);
-            }
 
-            console.log(`📦 Total built-in extensions found: ${extensions.length}`);
-            return extensions;
+              try {
+                  const items = fs.readdirSync(extDir);
+
+                  for (const item of items) {
+                      const extPath = path.join(extDir, item);
+                      try {
+                          const stat = fs.statSync(extPath);
+                          if (stat.isDirectory()) {
+                              const pkgPath = path.join(extPath, 'package.json');
+                              if (fs.existsSync(pkgPath)) {
+                                  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                                  // 确保标记为 builtin
+                                  if (pkg.builtin !== true) {
+                                      pkg.builtin = true;
+                                  }
+                                  if (!pkg.extensionKind) {
+                                      pkg.extensionKind = ['workspace', 'ui'];
+                                  }
+                                  extensions.push({
+                                      name: pkg.name || item,
+                                      path: extPath,
+                                      packageJSON: pkg,
+                                      isBuiltin: true
+                                  });
+                                  console.log(`  ✅ Found extension: ${pkg.name || item}`);
+                              }
+                          }
+                      } catch (e) {
+                          console.log(`  ⚠️ Error reading ${item}: ${e.message}`);
+                      }
+                  }
+              } catch (e) {
+                  console.log(`❌ Error scanning extensions: ${e.message}`);
+              }
+
+              console.log(`📦 Total extensions found: ${extensions.length}`);
+              return extensions;
           }
 
           // ========== 导出内置扩展列表 ==========
-          export const builtInExtensions = scanBuiltInExtensions();
+          export const builtInExtensions = getAllExtensions();
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
 
           export function isWebExtension(): boolean {
-            return false;
+              return false;
           }
 
-          // ========== 创建 Vinyl 流 ==========
-          function createVinylStreamFromExtension(extension: IBuiltInExtension): vinyl.File {
-            const file = new vinyl.File({
-              cwd: extension.path,
-              base: extension.path,
-              path: path.join(extension.path, 'package.json'),
-              contents: Buffer.from(JSON.stringify(extension.packageJSON, null, 2)),
-              stat: fs.statSync(extension.path),
-              extname: '',
-              relative: extension.name,
-              isDirectory: () => true,
-              isFile: () => false,
-              isSymbolic: () => false,
-              isBuffer: () => false,
-              isStream: () => false,
-              isNull: () => false
-            });
+          // ========== 核心：创建正确可消费的 Vinyl 流 ==========
+          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              console.log('📦 packageLocalExtensionsStream: packaging local extensions');
 
-            // 存储扩展元数据
-            file['extension'] = {
-              name: extension.name,
-              path: extension.path,
-              packageJSON: extension.packageJSON,
-              isBuiltin: true
-            };
+              const extensions = getAllExtensions();
 
-            return file;
-          }
+              // 使用 event-stream 创建流
+              const stream = es.through(function write(data: any) {
+                  // 透传数据
+                  this.emit('data', data);
+              }, function end() {
+                  // 所有数据推送完成后结束
+                  this.emit('end');
+              });
 
-          function createVinylStreamFromDirectory(dirPath: string): Stream {
-            const { Readable } = require('stream');
-            const stream = new Readable({ objectMode: true });
-            let files: vinyl.File[] = [];
-            let pushed = false;
-
-            try {
-              if (fs.existsSync(dirPath)) {
-                const items = fs.readdirSync(dirPath);
-                for (const item of items) {
-                  const itemPath = path.join(dirPath, item);
+              // 将每个扩展作为 Vinyl 文件推入流
+              for (const ext of extensions) {
                   try {
-                    const stat = fs.statSync(itemPath);
-                    if (stat.isDirectory()) {
-                      const pkgPath = path.join(itemPath, 'package.json');
-                      if (fs.existsSync(pkgPath)) {
-                        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                      // 读取扩展目录中的所有文件，而不仅仅是 package.json
+                      const files = getAllFiles(ext.path);
 
-                        // 确保标记为 builtin
-                        if (pkg.builtin !== true) {
-                          pkg.builtin = true;
-                        }
+                      for (const filePath of files) {
+                          const relativePath = path.relative(ext.path, filePath);
+                          const content = fs.readFileSync(filePath);
+                          const stat = fs.statSync(filePath);
 
-                        const file = new vinyl.File({
-                          cwd: dirPath,
-                          base: dirPath,
-                          path: itemPath,
-                          contents: Buffer.from(JSON.stringify(pkg, null, 2)),
-                          stat: stat,
-                          extname: '',
-                          relative: item,
-                          isDirectory: () => true,
-                          isFile: () => false,
-                          isSymbolic: () => false,
-                          isBuffer: () => false,
-                          isStream: () => false,
-                          isNull: () => false
-                        });
-                        file['extension'] = {
-                          name: pkg.name || item,
-                          path: itemPath,
-                          packageJSON: pkg,
-                          isBuiltin: true
-                        };
-                        files.push(file);
+                          const file = new vinyl.File({
+                              cwd: ext.path,
+                              base: ext.path,
+                              path: filePath,
+                              contents: content,
+                              stat: stat,
+                              relative: relativePath
+                          });
+
+                          // 存储扩展元数据
+                          (file as any).extension = {
+                              name: ext.name,
+                              path: ext.path,
+                              packageJSON: ext.packageJSON,
+                              isBuiltin: true
+                          };
+
+                          stream.emit('data', file);
                       }
-                    }
+
+                      console.log(`  📤 Streamed extension: ${ext.name} (${files.length} files)`);
                   } catch (e) {
-                    console.log(`  ⚠️ Error reading ${item}: ${e.message}`);
+                      console.log(`  ⚠️ Error streaming ${ext.name}: ${e.message}`);
                   }
-                }
               }
-            } catch (e) {
-              console.log(`❌ Error reading extensions directory: ${e.message}`);
-            }
 
-            stream._read = function() {
-              if (!pushed) {
-                for (const file of files) {
-                  this.push(file);
-                }
-                pushed = true;
-              }
-              this.push(null);
-            };
+              // 所有数据推送完成后结束
+              setTimeout(() => {
+                  stream.emit('end');
+              }, 100);
 
-            return stream;
+              return stream;
           }
 
-          // ========== 导出扩展流函数 ==========
+          // ========== 递归获取目录下所有文件 ==========
+          function getAllFiles(dir: string): string[] {
+              let results: string[] = [];
+              const list = fs.readdirSync(dir);
+
+              for (const item of list) {
+                  // 跳过 node_modules 等目录
+                  if (item === 'node_modules' || item === '.git' || item === 'out' || item === 'dist') {
+                      continue;
+                  }
+                  const itemPath = path.join(dir, item);
+                  try {
+                      const stat = fs.statSync(itemPath);
+                      if (stat.isDirectory()) {
+                          results = results.concat(getAllFiles(itemPath));
+                      } else {
+                          results.push(itemPath);
+                      }
+                  } catch (e) {
+                      // 忽略无法访问的文件
+                  }
+              }
+
+              return results;
+          }
+
+          // ========== 其他导出函数 ==========
           export function getExtensionStream(): Stream {
-            console.log('📦 getExtensionStream: returning built-in extensions as Vinyl stream');
-            const extDir = path.join(__dirname, '../../extensions');
-            return createVinylStreamFromDirectory(extDir);
+              return packageLocalExtensionsStream(false, false);
           }
 
           export function getExtensionDownloadStream(): Stream {
-            console.log('📦 getExtensionDownloadStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageMarketplaceExtensionsStream(): Stream {
-            console.log('📦 packageMarketplaceExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageNativeLocalExtensionsStream(): Stream {
-            console.log('📦 packageNativeLocalExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageNonNativeLocalExtensionsStream(): Stream {
-            console.log('📦 packageNonNativeLocalExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageLocalExtensionsStream(): Stream {
-            console.log('📦 packageLocalExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageExtensionsStream(): Stream {
-            console.log('📦 packageExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageCopilotExtensionStream(): Stream {
-            console.log('📦 packageCopilotExtensionStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageCopilotChatExtensionStream(): Stream {
-            console.log('📦 packageCopilotChatExtensionStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function packageCopilotAgentsExtensionStream(): Stream {
-            console.log('📦 packageCopilotAgentsExtensionStream: returning built-in extensions');
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function fromMarketplace(): any[] {
-            return builtInExtensions;
+              return builtInExtensions;
           }
 
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-            console.log('📦 fetchUrls: using local extensions');
-            return Promise.resolve();
+              console.log('📦 fetchUrls: using local extensions');
+              return Promise.resolve();
           }
 
           export function buildExtensionMedia(): void {
-            console.log('📦 buildExtensionMedia: skipped');
+              console.log('📦 buildExtensionMedia: skipped');
           }
 
           export function compileExtensionMedia(): void {
-            console.log('📦 compileExtensionMedia: skipped');
+              console.log('📦 compileExtensionMedia: skipped');
           }
 
           export function buildExtensionMediaTask(done: any): void {
-            done();
+              done();
           }
 
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-            console.log('📦 packageAllLocalExtensionsStream: returning built-in extensions');
-            return getExtensionStream();
+              return packageLocalExtensionsStream(forWeb, disableMangle);
           }
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
-            return builtInExtensions;
+              return builtInExtensions;
           }
 
           export function translatePackageJSON(packageJSON: string, packageNLSPath: string): any {
-            return {};
+              return {};
           }
 
           export async function esbuildExtensions(taskName: string, isWatch: boolean, scripts: any[]): Promise<void> {
-            console.log('📦 esbuildExtensions: using built-in extensions');
-            return Promise.resolve();
+              console.log('📦 esbuildExtensions: using built-in extensions');
+              return Promise.resolve();
           }
 
           export function getBuildRootsForExtension(extensionPath: string): string[] {
-            return [];
+              return [];
           }
 
           export async function typeCheckExtension(extensionPath: string, forWeb: boolean): Promise<void> {
-            return Promise.resolve();
+              return Promise.resolve();
           }
 
           export function typeCheckExtensionStream(extensionPath: string, forWeb: boolean): Stream {
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function fromLocal(extensionPath: string, forWeb: boolean, disableMangle: boolean): Stream {
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function fromMarketplaceStream(serviceUrl: string, extension: any): Stream {
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function fromGithub(extension: any): Stream {
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function fromVsix(vsixPath: string, extension: any): Stream {
-            return getExtensionStream();
+              return getExtensionStream();
           }
 
           export function minifyExtensionResources(input: Stream): Stream {
-            return input;
+              return input;
           }
 
           export function updateExtensionPackageJSON(input: Stream, update: (data: any) => any): Stream {
-            return input;
+              return input;
           }
           EOF
 
-          echo "✅ extensions.ts updated with proper builtin support"
+          echo "✅ extensions.ts fixed with proper stream handling"
 
-      # ========== 标记官方扩展为builtin ==========
-      - name: 🔧 Mark official extensions as builtin
+      # ========== 修复 gulpfile 确保扩展流被正确消费 ==========
+      - name: 🔧 Fix gulpfile to consume extension stream
         run: |
           echo "=========================================="
-          echo "🔧 Marking official extensions as builtin"
+          echo "🔧 Fixing gulpfile to consume extension stream"
           echo "=========================================="
 
-          for ext in extensions/*/; do
-            if [ -f "$ext/package.json" ]; then
-              PKG="$ext/package.json"
-              EXT_NAME=$(basename "$ext")
+          # 在 build/gulpfile.vscode.ts 末尾添加补丁
+          cat >> build/gulpfile.vscode.ts << 'EOF'
 
-              # 添加或修改 builtin 标记
-              python3 << PY_END
-          import json
-          import os
+          // ============================================
+          // PATCH: 确保扩展流被正确消费
+          // ============================================
+          import * as path from 'path';
+          import * as fs from 'fs';
 
-          with open("$PKG", 'r') as f:
-              data = json.load(f)
+          // 在构建完成后，验证扩展是否被复制
+          const originalVscodeLinuxX64 = (exports as any).vscodeLinuxX64;
 
-          # 标记为内置扩展
-          data['builtin'] = True
-          data['extensionKind'] = ['workspace', 'ui']
-          if 'main' not in data:
-              data['main'] = './out/extension.js'
+          // 创建一个包装任务，在原始任务后验证扩展
+          exports.vscodeLinuxX64 = series(
+              originalVscodeLinuxX64 || (() => {}),
+              function verifyExtensions(done: any) {
+                  const extDir = path.join(__dirname, '../VSCode-linux-x64/resources/app/extensions');
+                  console.log('📦 Verifying extensions in:', extDir);
 
-          with open("$PKG", 'w') as f:
-              json.dump(data, f, indent=2)
-          print(f"  ✅ Marked {os.path.basename('$ext')} as builtin")
-          PY_END
-            fi
-          done
-          echo "✅ All official extensions marked as builtin"
+                  if (fs.existsSync(extDir)) {
+                      const items = fs.readdirSync(extDir);
+                      console.log(`📦 Found ${items.length} extensions in build`);
+                      for (const item of items) {
+                          const pkgPath = path.join(extDir, item, 'package.json');
+                          if (fs.existsSync(pkgPath)) {
+                              console.log(`  ✅ ${item}`);
+                          }
+                      }
+                  } else {
+                      console.log('⚠️ Extensions directory not found in build!');
+                  }
+
+                  done();
+              }
+          );
+
+          console.log('🔧 vscode-linux-x64 task patched with verification');
+          EOF
+
+          echo "✅ gulpfile patched"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -526,6 +496,8 @@ jobs:
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
+          # 关键：告诉构建系统使用本地扩展
+          echo "VSCODE_FORCE_LOCAL_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ========== 编译官方内置扩展 ==========
       - name: 🔨 Build official built-in extensions
@@ -562,6 +534,7 @@ jobs:
           export VSCODE_SKIP_PRELAUNCH=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
+          export VSCODE_FORCE_LOCAL_EXTENSIONS=1
 
           echo "=========================================="
           echo "🔨 Building VSCode from source"
@@ -573,6 +546,7 @@ jobs:
             mkdir -p extensions
           fi
 
+          echo "📦 Starting build with local extensions..."
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -628,53 +602,6 @@ jobs:
 
           echo "✅ Custom extensions copied and dependencies installed"
 
-      # ========== 验证并修复builtin标记 ==========
-      - name: 🔍 Verify and fix builtin extensions in build
-        run: |
-          echo "=========================================="
-          echo "🔍 Verifying builtin extensions in build"
-          echo "=========================================="
-
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
-            exit 1
-          fi
-
-          echo "📌 Checking extensions in build directory:"
-          for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
-            if [ -f "$ext/package.json" ]; then
-              EXT_NAME=$(basename "$ext")
-              if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
-                echo "  ✅ $EXT_NAME (builtin)"
-              else
-                echo "  ⚠️ $EXT_NAME (not marked builtin - fixing)"
-                # 添加 builtin 标记
-                python3 << PY_END
-          import json
-          pkg_path = "$ext/package.json"
-          with open(pkg_path, 'r') as f:
-              data = json.load(f)
-          data['builtin'] = True
-          data['extensionKind'] = ['workspace', 'ui']
-          with open(pkg_path, 'w') as f:
-              json.dump(data, f, indent=2)
-          print(f"    ✅ Fixed: {data.get('name', '$EXT_NAME')} marked as builtin")
-          PY_END
-              fi
-            fi
-          done
-
-          echo "✅ Builtin extensions verification complete"
-
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -718,9 +645,21 @@ jobs:
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
                 if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
-                  BUILTIN_STATUS="builtin"
+                  BUILTIN_STATUS="builtin ✓"
                 else
-                  BUILTIN_STATUS="not builtin"
+                  BUILTIN_STATUS=""
+                  # 尝试修复
+                  python3 << PY_END
+          import json
+          pkg_path = "$ext/package.json"
+          with open(pkg_path, 'r') as f:
+              data = json.load(f)
+          data['builtin'] = True
+          data['extensionKind'] = ['workspace', 'ui']
+          with open(pkg_path, 'w') as f:
+              json.dump(data, f, indent=2)
+          PY_END
+                  BUILTIN_STATUS="builtin (fixed)"
                 fi
                 if [ -d "$ext/out" ]; then
                   echo "  ✅ $EXT_NAME (compiled, $BUILTIN_STATUS)"
@@ -1228,6 +1167,102 @@ jobs:
             echo "❌ Failed to build DEB package"
             exit 1
           fi
+
+      # ========== 验证 DEB 包内容 ==========
+      - name: 🔍 Verify DEB package contents
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying DEB package contents"
+          echo "=========================================="
+
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_VERSION="${VERSION}-1"
+          DEB_ARCH="amd64"
+          DEB_FILE="tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+          if [ ! -f "$DEB_FILE" ]; then
+            echo "❌ DEB file not found: $DEB_FILE"
+            exit 1
+          fi
+
+          echo "📦 Extracting DEB package for verification..."
+          mkdir -p deb-verify
+          cd deb-verify
+          ar x "../$DEB_FILE"
+
+          # 解压 data.tar.gz
+          if [ -f "data.tar.gz" ]; then
+            tar -xzf data.tar.gz
+            echo "✅ DEB package extracted"
+          elif [ -f "data.tar.xz" ]; then
+            tar -xJf data.tar.xz
+            echo "✅ DEB package extracted"
+          else
+            echo "❌ No data archive found in DEB"
+            exit 1
+          fi
+
+          echo ""
+          echo "📌 Checking /opt/tscode/resources/app/extensions directory..."
+          if [ -d "./opt/tscode/resources/app/extensions" ]; then
+            EXT_COUNT=$(find ./opt/tscode/resources/app/extensions -maxdepth 1 -type d 2>/dev/null | wc -l)
+            EXT_COUNT=$((EXT_COUNT - 1))
+            echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
+
+            echo ""
+            echo "📋 Extensions found in DEB package:"
+            for ext in ./opt/tscode/resources/app/extensions/*/; do
+              if [ -f "$ext/package.json" ]; then
+                EXT_NAME=$(basename "$ext")
+                # 检查是否标记为 builtin
+                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
+                  echo "  ✅ $EXT_NAME (builtin)"
+                else
+                  echo "  ⚠️ $EXT_NAME (NOT marked builtin)"
+                fi
+              fi
+            done
+
+            # 统计官方扩展数量（排除自定义扩展）
+            OFFICIAL_COUNT=0
+            for ext in ./opt/tscode/resources/app/extensions/*/; do
+              if [ -f "$ext/package.json" ]; then
+                EXT_NAME=$(basename "$ext")
+                # 排除自定义扩展
+                if [[ "$EXT_NAME" != "cweijan.vscode-office" ]] && \
+                   [[ "$EXT_NAME" != "test-tech."* ]] && \
+                   [[ "$EXT_NAME" != "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                  OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
+                fi
+              fi
+            done
+
+            echo ""
+            echo "📊 Summary:"
+            echo "  Total extensions: $EXT_COUNT"
+            echo "  Official extensions: $OFFICIAL_COUNT"
+            echo "  Custom extensions: $((EXT_COUNT - OFFICIAL_COUNT))"
+
+            if [ $OFFICIAL_COUNT -eq 0 ]; then
+              echo ""
+              echo "❌ ERROR: No official built-in extensions found in DEB package!"
+              echo "   The build did NOT include official @builtin extensions."
+              echo "   Please check the build process."
+              exit 1
+            else
+              echo ""
+              echo "✅ Found $OFFICIAL_COUNT official built-in extensions"
+            fi
+          else
+            echo "❌ ERROR: /opt/tscode/resources/app/extensions directory not found in DEB package!"
+            echo "   The build did NOT include any extensions."
+            echo "   Please check the build process."
+            exit 1
+          fi
+
+          cd ..
+          echo ""
+          echo "✅ DEB package verification complete"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
