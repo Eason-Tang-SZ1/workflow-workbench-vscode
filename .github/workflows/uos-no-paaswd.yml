@@ -366,20 +366,22 @@ jobs:
           echo "   📂 Target directory: $BUILD_DIR/resources/app/extensions"
           echo ""
 
-          # 先获取所有扩展列表（使用 find 避免通配符问题）
-          EXT_LIST=()
-          while IFS= read -r ext; do
-            if [ -d "$ext" ]; then
-              EXT_LIST+=("$(basename "$ext")")
-            fi
-          done < <(find "$OFFICIAL_EXT_DIR" -maxdepth 1 -type d ! -path "$OFFICIAL_EXT_DIR" | sort)
+          # 使用 find 获取所有扩展，并正确引用文件名
+          echo "   📊 Scanning official extensions..."
 
-          EXT_TOTAL=${#EXT_LIST[@]}
+          # 创建临时文件存储扩展列表
+          EXT_LIST_FILE="/tmp/ext_list.txt"
+          find "$OFFICIAL_EXT_DIR" -maxdepth 1 -type d ! -path "$OFFICIAL_EXT_DIR" -exec basename {} \; > "$EXT_LIST_FILE"
+
+          EXT_TOTAL=$(wc -l < "$EXT_LIST_FILE")
           echo "   📊 Found $EXT_TOTAL extensions in official build"
           echo ""
 
-          # 遍历并复制每个扩展
-          for ext_name in "${EXT_LIST[@]}"; do
+          # 使用 while 循环逐行读取
+          while IFS= read -r ext_name; do
+            # 跳过空行
+            [ -z "$ext_name" ] && continue
+
             ext_path="$OFFICIAL_EXT_DIR/$ext_name"
 
             # 检查是否已经存在
@@ -390,13 +392,28 @@ jobs:
             fi
 
             echo "      ✅ Copying: $ext_name"
-            if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/"; then
+
+            # 使用引号包裹路径，避免特殊字符问题
+            if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null; then
               ((EXT_COPIED++))
+              echo "         ✅ Success"
             else
-              echo "      ❌ Failed to copy: $ext_name"
+              echo "         ❌ Failed to copy: $ext_name"
               ((EXT_FAILED++))
+              # 尝试使用 rsync 作为备选
+              if command -v rsync &> /dev/null; then
+                echo "         🔄 Retrying with rsync..."
+                if rsync -a "$ext_path/" "$BUILD_DIR/resources/app/extensions/$ext_name/" 2>/dev/null; then
+                  echo "         ✅ Success with rsync"
+                  ((EXT_COPIED++))
+                  ((EXT_FAILED--))
+                fi
+              fi
             fi
-          done
+          done < "$EXT_LIST_FILE"
+
+          # 清理临时文件
+          rm -f "$EXT_LIST_FILE"
 
           echo ""
           echo "   📊 Extension copy summary:"
@@ -404,7 +421,10 @@ jobs:
           echo "      ✅ Copied: $EXT_COPIED extensions"
           echo "      ⏭️ Skipped: $EXT_SKIPPED extensions (already exist)"
           echo "      ❌ Failed: $EXT_FAILED extensions"
-          echo "      📂 Total in system: $(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l) extensions"
+
+          # 计算实际总数
+          ACTUAL_TOTAL=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
+          echo "      📂 Total in system: $ACTUAL_TOTAL extensions"
 
           # 如果复制失败，但仍然继续
           if [ $EXT_FAILED -gt 0 ]; then
@@ -432,12 +452,6 @@ jobs:
             echo "   This may cause issues when running TSCode."
             # 不退出，继续执行，但记录警告
           fi
-
-          # 保存官方扩展列表用于后续验证
-          echo "$OFFICIAL_EXT_DIR" > /tmp/official_ext_dir.txt
-          echo "$BUILD_DIR/resources/app/extensions" > /tmp/target_ext_dir.txt
-          ls -1 "$OFFICIAL_EXT_DIR" > /tmp/official_ext_list.txt
-          find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" -exec basename {} \; > /tmp/target_ext_list.txt
 
           # ============================================================
           # 4. 清理临时文件

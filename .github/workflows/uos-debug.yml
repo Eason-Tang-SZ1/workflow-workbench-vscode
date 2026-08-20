@@ -98,7 +98,7 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 确保流正确工作 ==========
+      # ========== 修复 extensions.ts - 正确的流处理 ==========
       - name: 🔧 Fix extensions.ts (正确的流处理)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
@@ -136,7 +136,6 @@ jobs:
                               const pkgPath = path.join(extPath, 'package.json');
                               if (fs.existsSync(pkgPath)) {
                                   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                                  // 确保标记为 builtin
                                   if (pkg.builtin !== true) {
                                       pkg.builtin = true;
                                   }
@@ -174,73 +173,12 @@ jobs:
               return false;
           }
 
-          // ========== 核心：创建正确可消费的 Vinyl 流 ==========
-          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 packageLocalExtensionsStream: packaging local extensions');
-
-              const extensions = getAllExtensions();
-
-              // 使用 event-stream 创建流
-              const stream = es.through(function write(data: any) {
-                  // 透传数据
-                  this.emit('data', data);
-              }, function end() {
-                  // 所有数据推送完成后结束
-                  this.emit('end');
-              });
-
-              // 将每个扩展作为 Vinyl 文件推入流
-              for (const ext of extensions) {
-                  try {
-                      // 读取扩展目录中的所有文件，而不仅仅是 package.json
-                      const files = getAllFiles(ext.path);
-
-                      for (const filePath of files) {
-                          const relativePath = path.relative(ext.path, filePath);
-                          const content = fs.readFileSync(filePath);
-                          const stat = fs.statSync(filePath);
-
-                          const file = new vinyl.File({
-                              cwd: ext.path,
-                              base: ext.path,
-                              path: filePath,
-                              contents: content,
-                              stat: stat,
-                              relative: relativePath
-                          });
-
-                          // 存储扩展元数据
-                          (file as any).extension = {
-                              name: ext.name,
-                              path: ext.path,
-                              packageJSON: ext.packageJSON,
-                              isBuiltin: true
-                          };
-
-                          stream.emit('data', file);
-                      }
-
-                      console.log(`  📤 Streamed extension: ${ext.name} (${files.length} files)`);
-                  } catch (e) {
-                      console.log(`  ⚠️ Error streaming ${ext.name}: ${e.message}`);
-                  }
-              }
-
-              // 所有数据推送完成后结束
-              setTimeout(() => {
-                  stream.emit('end');
-              }, 100);
-
-              return stream;
-          }
-
           // ========== 递归获取目录下所有文件 ==========
           function getAllFiles(dir: string): string[] {
               let results: string[] = [];
               const list = fs.readdirSync(dir);
 
               for (const item of list) {
-                  // 跳过 node_modules 等目录
                   if (item === 'node_modules' || item === '.git' || item === 'out' || item === 'dist') {
                       continue;
                   }
@@ -260,9 +198,66 @@ jobs:
               return results;
           }
 
-          // ========== 其他导出函数 ==========
+          // ========== 核心：创建正确可消费的 Vinyl 流 ==========
+          function createPackageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              console.log('📦 packageLocalExtensionsStream: packaging local extensions');
+
+              const extensions = getAllExtensions();
+
+              const stream = es.through(function write(data: any) {
+                  this.emit('data', data);
+              }, function end() {
+                  this.emit('end');
+              });
+
+              for (const ext of extensions) {
+                  try {
+                      const files = getAllFiles(ext.path);
+
+                      for (const filePath of files) {
+                          const relativePath = path.relative(ext.path, filePath);
+                          const content = fs.readFileSync(filePath);
+                          const stat = fs.statSync(filePath);
+
+                          const file = new vinyl.File({
+                              cwd: ext.path,
+                              base: ext.path,
+                              path: filePath,
+                              contents: content,
+                              stat: stat,
+                              relative: relativePath
+                          });
+
+                          (file as any).extension = {
+                              name: ext.name,
+                              path: ext.path,
+                              packageJSON: ext.packageJSON,
+                              isBuiltin: true
+                          };
+
+                          stream.emit('data', file);
+                      }
+
+                      console.log(`  📤 Streamed extension: ${ext.name} (${files.length} files)`);
+                  } catch (e) {
+                      console.log(`  ⚠️ Error streaming ${ext.name}: ${e.message}`);
+                  }
+              }
+
+              setTimeout(() => {
+                  stream.emit('end');
+              }, 100);
+
+              return stream;
+          }
+
+          // ========== 导出扩展流函数 ==========
+          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              return createPackageLocalExtensionsStream(forWeb, disableMangle);
+          }
+
           export function getExtensionStream(): Stream {
-              return packageLocalExtensionsStream(false, false);
+              return createPackageLocalExtensionsStream(false, false);
           }
 
           export function getExtensionDownloadStream(): Stream {
@@ -281,10 +276,6 @@ jobs:
               return getExtensionStream();
           }
 
-          export function packageLocalExtensionsStream(): Stream {
-              return getExtensionStream();
-          }
-
           export function packageExtensionsStream(): Stream {
               return getExtensionStream();
           }
@@ -299,6 +290,10 @@ jobs:
 
           export function packageCopilotAgentsExtensionStream(): Stream {
               return getExtensionStream();
+          }
+
+          export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              return createPackageLocalExtensionsStream(forWeb, disableMangle);
           }
 
           export function fromMarketplace(): any[] {
@@ -320,10 +315,6 @@ jobs:
 
           export function buildExtensionMediaTask(done: any): void {
               done();
-          }
-
-          export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              return packageLocalExtensionsStream(forWeb, disableMangle);
           }
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
@@ -385,7 +376,6 @@ jobs:
           echo "🔧 Fixing gulpfile to consume extension stream"
           echo "=========================================="
 
-          # 在 build/gulpfile.vscode.ts 末尾添加补丁
           cat >> build/gulpfile.vscode.ts << 'EOF'
 
           // ============================================
@@ -394,10 +384,8 @@ jobs:
           import * as path from 'path';
           import * as fs from 'fs';
 
-          // 在构建完成后，验证扩展是否被复制
           const originalVscodeLinuxX64 = (exports as any).vscodeLinuxX64;
 
-          // 创建一个包装任务，在原始任务后验证扩展
           exports.vscodeLinuxX64 = series(
               originalVscodeLinuxX64 || (() => {}),
               function verifyExtensions(done: any) {
@@ -496,7 +484,6 @@ jobs:
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
-          # 关键：告诉构建系统使用本地扩展
           echo "VSCODE_FORCE_LOCAL_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ========== 编译官方内置扩展 ==========
@@ -648,7 +635,6 @@ jobs:
                   BUILTIN_STATUS="builtin ✓"
                 else
                   BUILTIN_STATUS=""
-                  # 尝试修复
                   python3 << PY_END
           import json
           pkg_path = "$ext/package.json"
@@ -1190,7 +1176,6 @@ jobs:
           cd deb-verify
           ar x "../$DEB_FILE"
 
-          # 解压 data.tar.gz
           if [ -f "data.tar.gz" ]; then
             tar -xzf data.tar.gz
             echo "✅ DEB package extracted"
@@ -1211,28 +1196,20 @@ jobs:
 
             echo ""
             echo "📋 Extensions found in DEB package:"
-            for ext in ./opt/tscode/resources/app/extensions/*/; do
-              if [ -f "$ext/package.json" ]; then
-                EXT_NAME=$(basename "$ext")
-                # 检查是否标记为 builtin
-                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
-                  echo "  ✅ $EXT_NAME (builtin)"
-                else
-                  echo "  ⚠️ $EXT_NAME (NOT marked builtin)"
-                fi
-              fi
-            done
-
-            # 统计官方扩展数量（排除自定义扩展）
             OFFICIAL_COUNT=0
             for ext in ./opt/tscode/resources/app/extensions/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                # 排除自定义扩展
-                if [[ "$EXT_NAME" != "cweijan.vscode-office" ]] && \
-                   [[ "$EXT_NAME" != "test-tech."* ]] && \
-                   [[ "$EXT_NAME" != "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                  OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
+                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
+                  echo "  ✅ $EXT_NAME (builtin)"
+                  # 排除自定义扩展
+                  if [[ "$EXT_NAME" != "cweijan.vscode-office" ]] && \
+                     [[ "$EXT_NAME" != "test-tech."* ]] && \
+                     [[ "$EXT_NAME" != "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                    OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
+                  fi
+                else
+                  echo "  ⚠️ $EXT_NAME (NOT marked builtin)"
                 fi
               fi
             done
