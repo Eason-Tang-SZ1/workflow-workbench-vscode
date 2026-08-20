@@ -98,8 +98,8 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 实现所有需要的函数 ==========
-      - name: 🔧 Fix extensions.ts
+      # ========== 修复 extensions.ts - 添加完整日志 ==========
+      - name: 🔧 Fix extensions.ts (with complete logging)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -115,20 +115,34 @@ jobs:
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = path.dirname(__filename);
 
-          // ========== 扫描本地扩展 ==========
+          // ========== 日志辅助 ==========
+          let callCount = 0;
+          function log(msg: string, data?: any) {
+              callCount++;
+              const timestamp = new Date().toISOString();
+              const prefix = `[EXTENSIONS:${String(callCount).padStart(3, '0')}]`;
+              if (data !== undefined) {
+                  console.log(`${timestamp} ${prefix} ${msg}`, JSON.stringify(data, null, 2));
+              } else {
+                  console.log(`${timestamp} ${prefix} ${msg}`);
+              }
+          }
+
+          // ========== 获取扩展列表 ==========
           function getLocalExtensions(): any[] {
               const extensions: any[] = [];
               const extDir = path.join(__dirname, '../../extensions');
 
-              console.log(`📦 Scanning local extensions in: ${extDir}`);
+              log(`🔍 SCAN START: ${extDir}`);
 
               if (!fs.existsSync(extDir)) {
-                  console.log('⚠️ Extensions directory not found');
+                  log(`⚠️ Extensions directory NOT FOUND: ${extDir}`);
                   return extensions;
               }
 
               try {
                   const items = fs.readdirSync(extDir);
+                  log(`📁 Found ${items.length} items in extensions directory`);
 
                   for (const item of items) {
                       const extPath = path.join(extDir, item);
@@ -138,7 +152,6 @@ jobs:
                               const pkgPath = path.join(extPath, 'package.json');
                               if (fs.existsSync(pkgPath)) {
                                   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                                  // 确保标记为 builtin
                                   if (pkg.builtin !== true) {
                                       pkg.builtin = true;
                                   }
@@ -151,18 +164,18 @@ jobs:
                                       packageJSON: pkg,
                                       isBuiltin: true
                                   });
-                                  console.log(`  ✅ Found: ${pkg.name || item}`);
+                                  log(`  ✅ Found: ${pkg.name || item}`);
                               }
                           }
                       } catch (e) {
-                          console.log(`  ⚠️ Error reading ${item}: ${e.message}`);
+                          log(`  ⚠️ Error reading ${item}: ${e.message}`);
                       }
                   }
               } catch (e) {
-                  console.log(`❌ Error scanning extensions: ${e.message}`);
+                  log(`❌ Error scanning extensions: ${e.message}`);
               }
 
-              console.log(`📦 Total extensions found: ${extensions.length}`);
+              log(`📊 SCAN COMPLETE: ${extensions.length} extensions found`);
               return extensions;
           }
 
@@ -175,7 +188,7 @@ jobs:
               return false;
           }
 
-          // ========== 递归获取目录下所有文件 ==========
+          // ========== 获取文件列表 ==========
           function getAllFiles(dir: string, maxDepth: number = 5): string[] {
               let results: string[] = [];
               try {
@@ -200,14 +213,16 @@ jobs:
               return results;
           }
 
-          // ========== 创建扩展流 - 核心函数 ==========
+          // ========== 创建扩展流 ==========
           function createExtensionStream(forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 createExtensionStream: START (forWeb=' + forWeb + ', disableMangle=' + disableMangle + ')');
+              const caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown';
+              log(`🔧 createExtensionStream CALLED`);
+              log(`   Caller: ${caller}`);
+              log(`   forWeb=${forWeb}, disableMangle=${disableMangle}`);
 
               const extensions = getLocalExtensions();
-              console.log(`📦 Processing ${extensions.length} extensions`);
+              log(`📦 Processing ${extensions.length} extensions`);
 
-              // 使用 require 同步导入
               // @ts-ignore
               const File = require('vinyl');
 
@@ -220,7 +235,7 @@ jobs:
                   try {
                       const files = getAllFiles(ext.path);
                       totalFiles += files.length;
-                      console.log(`  📤 ${ext.name}: ${files.length} files`);
+                      log(`  📤 ${ext.name}: ${files.length} files`);
 
                       for (const filePath of files) {
                           const content = fs.readFileSync(filePath);
@@ -236,7 +251,6 @@ jobs:
                               relative: relativePath
                           });
 
-                          // 存储扩展元数据
                           (file as any).extension = {
                               name: ext.name,
                               path: ext.path,
@@ -247,165 +261,183 @@ jobs:
                           allFiles.push(file);
                       }
                   } catch (e) {
-                      console.log(`  ⚠️ Error processing ${ext.name}: ${e.message}`);
+                      log(`  ⚠️ Error processing ${ext.name}: ${e.message}`);
                   }
               }
 
-              console.log(`📦 Total files: ${totalFiles}`);
+              log(`📊 TOTAL FILES IN STREAM: ${totalFiles}`);
+              log(`📊 TOTAL VINYL OBJECTS: ${allFiles.length}`);
+
+              // 记录前10个文件路径
+              const sampleFiles = allFiles.slice(0, 10).map((f: any) => f.path);
+              log(`📋 Sample files (first 10):`, sampleFiles);
 
               stream._read = function() {
                   if (!filesPushed) {
+                      log(`🔄 Stream _read: pushing ${allFiles.length} files`);
                       for (const file of allFiles) {
                           this.push(file);
                       }
                       filesPushed = true;
+                      log(`🔄 Stream _read: all files pushed`);
                   }
                   this.push(null);
+                  log(`🔄 Stream _read: completed (null pushed)`);
               };
 
-              console.log('📦 createExtensionStream: END');
+              log(`✅ createExtensionStream: returning stream`);
               return stream;
           }
 
-          // ========== 导出所有需要的函数（VSCode 构建系统会调用这些） ==========
+          // ========== 导出函数 - 每个都带日志 ==========
 
-          // 主要的打包函数 - vscode-linux-x64 会调用这个
+          // 这是 VSCode 构建系统可能调用的主要函数
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 packageAllLocalExtensionsStream: called');
+              log(`🎯🎯🎯 packageAllLocalExtensionsStream CALLED`);
+              log(`   This is the main function VSCode uses for packaging extensions`);
               return createExtensionStream(forWeb, disableMangle);
           }
 
-          // 其他可能被调用的函数
           export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 packageLocalExtensionsStream: called');
+              log(`🎯 packageLocalExtensionsStream CALLED`);
               return createExtensionStream(forWeb, disableMangle);
           }
 
           export function getExtensionStream(): Stream {
-              console.log('📦 getExtensionStream: called');
+              log(`🎯 getExtensionStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function getExtensionDownloadStream(): Stream {
-              console.log('📦 getExtensionDownloadStream: called');
+              log(`🎯 getExtensionDownloadStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageMarketplaceExtensionsStream(): Stream {
-              console.log('📦 packageMarketplaceExtensionsStream: called');
+              log(`🎯 packageMarketplaceExtensionsStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageNativeLocalExtensionsStream(): Stream {
-              console.log('📦 packageNativeLocalExtensionsStream: called');
+              log(`🎯 packageNativeLocalExtensionsStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageNonNativeLocalExtensionsStream(): Stream {
-              console.log('📦 packageNonNativeLocalExtensionsStream: called');
+              log(`🎯 packageNonNativeLocalExtensionsStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageExtensionsStream(): Stream {
-              console.log('📦 packageExtensionsStream: called');
+              log(`🎯 packageExtensionsStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageCopilotExtensionStream(): Stream {
-              console.log('📦 packageCopilotExtensionStream: called');
+              log(`🎯 packageCopilotExtensionStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageCopilotChatExtensionStream(): Stream {
-              console.log('📦 packageCopilotChatExtensionStream: called');
+              log(`🎯 packageCopilotChatExtensionStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function packageCopilotAgentsExtensionStream(): Stream {
-              console.log('📦 packageCopilotAgentsExtensionStream: called');
+              log(`🎯 packageCopilotAgentsExtensionStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function fromMarketplace(): any[] {
+              log(`🎯 fromMarketplace CALLED`);
               return builtInExtensions;
           }
 
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-              console.log('📦 fetchUrls: using local extensions');
+              log(`🎯 fetchUrls CALLED with ${urls.length} urls`);
               return Promise.resolve();
           }
 
           export function buildExtensionMedia(): void {
-              console.log('📦 buildExtensionMedia: skipped');
+              log(`🎯 buildExtensionMedia CALLED (skipped)`);
           }
 
           export function compileExtensionMedia(): void {
-              console.log('📦 compileExtensionMedia: skipped');
+              log(`🎯 compileExtensionMedia CALLED (skipped)`);
           }
 
           export function buildExtensionMediaTask(done: any): void {
+              log(`🎯 buildExtensionMediaTask CALLED`);
               done();
           }
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
-              console.log('📦 scanBuiltinExtensions: called');
+              log(`🎯 scanBuiltinExtensions CALLED: ${extensionsRoot}`);
+              log(`   exclude:`, exclude);
               return builtInExtensions;
           }
 
           export function translatePackageJSON(packageJSON: string, packageNLSPath: string): any {
+              log(`🎯 translatePackageJSON CALLED`);
               return {};
           }
 
           export async function esbuildExtensions(taskName: string, isWatch: boolean, scripts: any[]): Promise<void> {
-              console.log('📦 esbuildExtensions: using built-in extensions');
+              log(`🎯 esbuildExtensions CALLED: ${taskName}`);
               return Promise.resolve();
           }
 
           export function getBuildRootsForExtension(extensionPath: string): string[] {
+              log(`🎯 getBuildRootsForExtension CALLED: ${extensionPath}`);
               return [];
           }
 
           export async function typeCheckExtension(extensionPath: string, forWeb: boolean): Promise<void> {
+              log(`🎯 typeCheckExtension CALLED: ${extensionPath}`);
               return Promise.resolve();
           }
 
           export function typeCheckExtensionStream(extensionPath: string, forWeb: boolean): Stream {
-              console.log('📦 typeCheckExtensionStream: called');
+              log(`🎯 typeCheckExtensionStream CALLED: ${extensionPath}`);
               return createExtensionStream(forWeb, false);
           }
 
           export function fromLocal(extensionPath: string, forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 fromLocal: called for ' + extensionPath);
+              log(`🎯 fromLocal CALLED: ${extensionPath}`);
               return createExtensionStream(forWeb, disableMangle);
           }
 
           export function fromMarketplaceStream(serviceUrl: string, extension: any): Stream {
-              console.log('📦 fromMarketplaceStream: called');
+              log(`🎯 fromMarketplaceStream CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function fromGithub(extension: any): Stream {
-              console.log('📦 fromGithub: called');
+              log(`🎯 fromGithub CALLED`);
               return createExtensionStream(false, false);
           }
 
           export function fromVsix(vsixPath: string, extension: any): Stream {
-              console.log('📦 fromVsix: called');
+              log(`🎯 fromVsix CALLED: ${vsixPath}`);
               return createExtensionStream(false, false);
           }
 
           export function minifyExtensionResources(input: Stream): Stream {
-              console.log('📦 minifyExtensionResources: called');
+              log(`🎯 minifyExtensionResources CALLED`);
               return input;
           }
 
           export function updateExtensionPackageJSON(input: Stream, update: (data: any) => any): Stream {
-              console.log('📦 updateExtensionPackageJSON: called');
+              log(`🎯 updateExtensionPackageJSON CALLED`);
               return input;
           }
+
+          // ========== 在模块加载时输出日志 ==========
+          log(`🚀 MODULE LOADED: build/lib/extensions.ts`);
+          log(`   Exported functions:`, Object.keys(module.exports || {}));
           EOF
 
-          echo "✅ extensions.ts fixed"
+          echo "✅ extensions.ts fixed with complete logging"
 
       # ========== 修复 copilot.ts ==========
       - name: 🔧 Replace copilot.ts
@@ -520,6 +552,25 @@ jobs:
 
           echo "✅ Official extensions build completed"
 
+      # ========== 构建前记录源扩展 ==========
+      - name: 📊 Record source extensions
+        run: |
+          echo "=========================================="
+          echo "📊 Recording source extensions"
+          echo "=========================================="
+
+          echo "📁 Source extensions directory: ./extensions"
+          SOURCE_COUNT=$(find ./extensions -maxdepth 1 -type d 2>/dev/null | wc -l)
+          SOURCE_COUNT=$((SOURCE_COUNT - 1))
+          echo "📁 Total extensions in source: $SOURCE_COUNT"
+          echo ""
+          echo "📋 Source extensions list:"
+          for ext in ./extensions/*/; do
+            if [ -f "$ext/package.json" ]; then
+              echo "  ✅ $(basename "$ext")"
+            fi
+          done
+
       # ========== 构建 VSCode ==========
       - name: 🔨 Build VSCode from source
         run: |
@@ -541,23 +592,21 @@ jobs:
             mkdir -p extensions
           fi
 
-          # 使用 gulp 构建
+          echo "📦 Running vscode-linux-x64 task..."
+          echo "🔍 Look for '[EXTENSIONS]' logs below to see which functions are called:"
+          echo ""
+
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
           echo "Done: $(date)"
 
-      # ========== 复制自定义扩展 ==========
-      - name: 📦 Copy custom extensions
+      # ========== 构建后验证 ==========
+      - name: 📊 Verify build extensions
         run: |
           echo "=========================================="
-          echo "📦 Copying custom extensions"
+          echo "📊 Verifying build extensions"
           echo "=========================================="
-
-          if [ ! -d "custom-extensions" ] || [ -z "$(ls -A custom-extensions 2>/dev/null)" ]; then
-            echo "ℹ️ No custom extensions to copy"
-            exit 0
-          fi
 
           BUILD_DIR=""
           for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
@@ -573,6 +622,63 @@ jobs:
             exit 1
           fi
 
+          echo ""
+          echo "📌 Checking source extensions count:"
+          SOURCE_COUNT=$(find ./extensions -maxdepth 1 -type d 2>/dev/null | wc -l)
+          SOURCE_COUNT=$((SOURCE_COUNT - 1))
+          echo "  Source extensions: $SOURCE_COUNT"
+
+          echo ""
+          echo "📌 Checking build extensions count:"
+          if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
+            BUILD_EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
+            BUILD_EXT_COUNT=$((BUILD_EXT_COUNT - 1))
+            echo "  Build extensions: $BUILD_EXT_COUNT"
+
+            echo ""
+            echo "📋 Build extensions list:"
+            for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
+              if [ -f "$ext/package.json" ]; then
+                echo "  ✅ $(basename "$ext")"
+              fi
+            done
+
+            echo ""
+            if [ $BUILD_EXT_COUNT -ne $SOURCE_COUNT ]; then
+              echo "⚠️ WARNING: Build has different number of extensions than source!"
+              echo "   Source: $SOURCE_COUNT, Build: $BUILD_EXT_COUNT"
+              echo ""
+              echo "🔍 This indicates the extension stream was NOT properly consumed."
+              echo "   Check the build logs for '[EXTENSIONS]' entries above."
+            else
+              echo "✅ Build has same number of extensions as source ($SOURCE_COUNT)"
+            fi
+          else
+            echo "  ❌ Build extensions directory not found!"
+          fi
+
+          TARGET_DIR="./tscode"
+          if [ "$BUILD_DIR" != "$TARGET_DIR" ]; then
+            echo "Renaming $BUILD_DIR to $TARGET_DIR"
+            rm -rf "$TARGET_DIR"
+            mv "$BUILD_DIR" "$TARGET_DIR"
+          fi
+          BUILD_DIR="$TARGET_DIR"
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+
+      # ========== 复制自定义扩展 ==========
+      - name: 📦 Copy custom extensions
+        run: |
+          echo "=========================================="
+          echo "📦 Copying custom extensions"
+          echo "=========================================="
+
+          if [ ! -d "custom-extensions" ] || [ -z "$(ls -A custom-extensions 2>/dev/null)" ]; then
+            echo "ℹ️ No custom extensions to copy"
+            exit 0
+          fi
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
           EXT_DIR="$BUILD_DIR/resources/app/extensions"
           mkdir -p "$EXT_DIR"
 
@@ -598,26 +704,14 @@ jobs:
 
           echo "✅ Custom extensions copied and dependencies installed"
 
-      # ========== 验证构建内容 ==========
-      - name: 🔍 Verify build contents
+      # ========== 最终验证 ==========
+      - name: 🔍 Final verification
         run: |
           echo "=========================================="
-          echo "🔍 Verify build contents"
+          echo "🔍 Final verification"
           echo "=========================================="
 
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -z "$BUILD_DIR" ]; then
-            echo "Build directory not found!"
-            exit 1
-          fi
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           echo ""
           echo "📌 Checking critical files..."
@@ -630,37 +724,63 @@ jobs:
           done
 
           echo ""
-          echo "📌 Checking extensions..."
+          echo "📌 Final extensions check:"
           if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
             EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
             EXT_COUNT=$((EXT_COUNT - 1))
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
 
             echo ""
-            echo "📋 Extensions list:"
+            echo "📋 Final extensions list:"
+            OFFICIAL_COUNT=0
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
-                  echo "  ✅ $EXT_NAME (compiled)"
+                IS_CUSTOM=false
+                if [[ "$EXT_NAME" == "cweijan.vscode-office" ]] || \
+                   [[ "$EXT_NAME" == "test-tech."* ]] || \
+                   [[ "$EXT_NAME" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
+                  IS_CUSTOM=true
                 else
-                  echo "  ✅ $EXT_NAME (source)"
+                  OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
+                fi
+                if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
+                  echo "  ✅ $EXT_NAME (compiled, custom=$IS_CUSTOM)"
+                else
+                  echo "  ✅ $EXT_NAME (source, custom=$IS_CUSTOM)"
                 fi
               fi
             done
+
+            echo ""
+            echo "📊 Summary:"
+            echo "  Total extensions: $EXT_COUNT"
+            echo "  Official extensions: $OFFICIAL_COUNT"
+            echo "  Custom extensions: $((EXT_COUNT - OFFICIAL_COUNT))"
+
+            if [ $OFFICIAL_COUNT -eq 0 ]; then
+              echo ""
+              echo "❌ ERROR: No official extensions found!"
+              echo ""
+              echo "🔍 DIAGNOSIS:"
+              echo "   The extension stream was either:"
+              echo "   1. Not called at all"
+              echo "   2. Called but returned empty stream"
+              echo "   3. Called but the stream was not consumed"
+              echo ""
+              echo "📋 Please check build logs for:"
+              echo "   - '[EXTENSIONS] packageAllLocalExtensionsStream CALLED'"
+              echo "   - '[EXTENSIONS] createExtensionStream CALLED'"
+              echo "   - '[EXTENSIONS] TOTAL FILES IN STREAM'"
+              echo ""
+              echo "   If you don't see these logs, the function was never called."
+              echo "   If you see them but files are missing, the stream wasn't consumed."
+              exit 1
+            fi
           else
             echo "  ❌ Extensions directory not found!"
             exit 1
           fi
-
-          TARGET_DIR="./tscode"
-          if [ "$BUILD_DIR" != "$TARGET_DIR" ]; then
-            echo "Renaming $BUILD_DIR to $TARGET_DIR"
-            rm -rf "$TARGET_DIR"
-            mv "$BUILD_DIR" "$TARGET_DIR"
-          fi
-          BUILD_DIR="$TARGET_DIR"
-          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
           echo ""
           echo "Build size:"
@@ -1198,7 +1318,6 @@ jobs:
             for ext in ./opt/tscode/resources/app/extensions/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                # 检查是否为自定义扩展
                 IS_CUSTOM=false
                 if [[ "$EXT_NAME" == "cweijan.vscode-office" ]] || \
                    [[ "$EXT_NAME" == "test-tech."* ]] || \
@@ -1225,22 +1344,26 @@ jobs:
 
             if [ $OFFICIAL_COUNT -eq 0 ]; then
               echo ""
-              echo "❌ ERROR: No official built-in extensions found in DEB package!"
+              echo "❌ ERROR: No official built-in extensions found!"
               echo ""
-              echo "🔍 Checking build log for extension stream calls..."
-              echo "   Look for:"
-              echo "   - 'packageAllLocalExtensionsStream: called'"
-              echo "   - 'createExtensionStream: START'"
-              echo "   - 'Total files:' in the build log"
+              echo "🔍 This confirms the extension stream was NOT consumed."
+              echo "   The build process did NOT copy extensions to the final package."
+              echo ""
+              echo "📋 CHECK THE BUILD LOG ABOVE for:"
+              echo "   1. '[EXTENSIONS] 🚀 MODULE LOADED' - confirms module was loaded"
+              echo "   2. '[EXTENSIONS] 🎯🎯🎯 packageAllLocalExtensionsStream CALLED' - confirms function was called"
+              echo "   3. '[EXTENSIONS] 📊 TOTAL FILES IN STREAM' - shows if files were in the stream"
+              echo ""
+              echo "   If #1 is missing → extensions.ts was not loaded"
+              echo "   If #2 is missing → wrong function name or not called"
+              echo "   If #3 shows files but DEB has none → stream was not consumed"
               exit 1
             else
               echo ""
               echo "✅ Found $OFFICIAL_COUNT official built-in extensions"
             fi
           else
-            echo "❌ ERROR: /opt/tscode/resources/app/extensions directory not found in DEB package!"
-            echo "   The build did NOT include any extensions."
-            echo "   Please check the build process."
+            echo "❌ ERROR: /opt/tscode/resources/app/extensions directory not found!"
             exit 1
           fi
 
