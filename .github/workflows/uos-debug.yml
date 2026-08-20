@@ -98,8 +98,8 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 使用 ES module 兼容方式 ==========
-      - name: 🔧 Fix extensions.ts (ES module 兼容)
+      # ========== 修复 extensions.ts ==========
+      - name: 🔧 Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -111,19 +111,17 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
           import { fileURLToPath } from 'url';
-          import * as vinyl from 'vinyl';
-          import * as es from 'event-stream';
 
-          // ========== 获取 __dirname 的 ES module 替代 ==========
+          // ES module 兼容的 __dirname
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = path.dirname(__filename);
 
-          // ========== 扫描所有扩展 ==========
-          function getAllExtensions(): any[] {
+          // ========== 从本地文件系统读取扩展 ==========
+          function getLocalExtensions(): any[] {
               const extensions: any[] = [];
               const extDir = path.join(__dirname, '../../extensions');
 
-              console.log(`📦 Scanning extensions in: ${extDir}`);
+              console.log(`📦 Scanning local extensions in: ${extDir}`);
 
               if (!fs.existsSync(extDir)) {
                   console.log('⚠️ Extensions directory not found');
@@ -141,6 +139,7 @@ jobs:
                               const pkgPath = path.join(extPath, 'package.json');
                               if (fs.existsSync(pkgPath)) {
                                   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                                  // 确保标记为 builtin
                                   if (pkg.builtin !== true) {
                                       pkg.builtin = true;
                                   }
@@ -153,7 +152,7 @@ jobs:
                                       packageJSON: pkg,
                                       isBuiltin: true
                                   });
-                                  console.log(`  ✅ Found extension: ${pkg.name || item}`);
+                                  console.log(`  ✅ Found local extension: ${pkg.name || item}`);
                               }
                           }
                       } catch (e) {
@@ -164,12 +163,11 @@ jobs:
                   console.log(`❌ Error scanning extensions: ${e.message}`);
               }
 
-              console.log(`📦 Total extensions found: ${extensions.length}`);
+              console.log(`📦 Total local extensions found: ${extensions.length}`);
               return extensions;
           }
 
-          // ========== 导出内置扩展列表 ==========
-          export const builtInExtensions = getAllExtensions();
+          export const builtInExtensions = getLocalExtensions();
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
@@ -178,20 +176,23 @@ jobs:
               return false;
           }
 
-          // ========== 递归获取目录下所有文件 ==========
-          function getAllFiles(dir: string): string[] {
+          // ========== 递归获取目录下所有文件（限制深度避免性能问题） ==========
+          function getAllFiles(dir: string, maxDepth: number = 5): string[] {
               let results: string[] = [];
               const list = fs.readdirSync(dir);
 
               for (const item of list) {
-                  if (item === 'node_modules' || item === '.git' || item === 'out' || item === 'dist') {
+                  // 跳过不需要的目录
+                  if (item === 'node_modules' || item === '.git' || item === '.vscode-test' || item === 'test') {
                       continue;
                   }
                   const itemPath = path.join(dir, item);
                   try {
                       const stat = fs.statSync(itemPath);
                       if (stat.isDirectory()) {
-                          results = results.concat(getAllFiles(itemPath));
+                          if (maxDepth > 0) {
+                              results = results.concat(getAllFiles(itemPath, maxDepth - 1));
+                          }
                       } else {
                           results.push(itemPath);
                       }
@@ -203,11 +204,23 @@ jobs:
               return results;
           }
 
-          // ========== 核心：创建正确可消费的 Vinyl 流 ==========
-          function createPackageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+          // ========== 创建扩展流 ==========
+          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
               console.log('📦 packageLocalExtensionsStream: packaging local extensions');
 
-              const extensions = getAllExtensions();
+              const extensions = getLocalExtensions();
+
+              if (extensions.length === 0) {
+                  console.log('⚠️ No extensions found, returning empty stream');
+                  const { Readable } = require('stream');
+                  const emptyStream = new Readable({ objectMode: true });
+                  emptyStream._read = function() { this.push(null); };
+                  return emptyStream;
+              }
+
+              // 使用 event-stream 创建流
+              const es = require('event-stream');
+              const vinyl = require('vinyl');
 
               const stream = es.through(function write(data: any) {
                   this.emit('data', data);
@@ -215,12 +228,13 @@ jobs:
                   this.emit('end');
               });
 
+              let totalFiles = 0;
+
               for (const ext of extensions) {
                   try {
                       const files = getAllFiles(ext.path);
 
                       for (const filePath of files) {
-                          const relativePath = path.relative(ext.path, filePath);
                           const content = fs.readFileSync(filePath);
                           const stat = fs.statSync(filePath);
 
@@ -230,9 +244,10 @@ jobs:
                               path: filePath,
                               contents: content,
                               stat: stat,
-                              relative: relativePath
+                              relative: path.relative(ext.path, filePath)
                           });
 
+                          // 存储扩展元数据
                           (file as any).extension = {
                               name: ext.name,
                               path: ext.path,
@@ -241,6 +256,7 @@ jobs:
                           };
 
                           stream.emit('data', file);
+                          totalFiles++;
                       }
 
                       console.log(`  📤 Streamed extension: ${ext.name} (${files.length} files)`);
@@ -249,6 +265,8 @@ jobs:
                   }
               }
 
+              console.log(`📦 Total files streamed: ${totalFiles}`);
+
               setTimeout(() => {
                   stream.emit('end');
               }, 100);
@@ -256,13 +274,9 @@ jobs:
               return stream;
           }
 
-          // ========== 导出扩展流函数 ==========
-          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              return createPackageLocalExtensionsStream(forWeb, disableMangle);
-          }
-
+          // ========== 导出所有需要的函数 ==========
           export function getExtensionStream(): Stream {
-              return createPackageLocalExtensionsStream(false, false);
+              return packageLocalExtensionsStream(false, false);
           }
 
           export function getExtensionDownloadStream(): Stream {
@@ -298,7 +312,7 @@ jobs:
           }
 
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              return createPackageLocalExtensionsStream(forWeb, disableMangle);
+              return packageLocalExtensionsStream(forWeb, disableMangle);
           }
 
           export function fromMarketplace(): any[] {
@@ -372,80 +386,9 @@ jobs:
           }
           EOF
 
-          echo "✅ extensions.ts fixed with ES module compatibility"
+          echo "✅ extensions.ts fixed"
 
-      # ========== 修复 gulpfile - 使用 gulp.series ==========
-      - name: 🔧 Fix gulpfile to consume extension stream
-        run: |
-          echo "=========================================="
-          echo "🔧 Fixing gulpfile to consume extension stream"
-          echo "=========================================="
-
-          # 在文件末尾添加补丁，使用 gulp.series
-          cat >> build/gulpfile.vscode.ts << 'EOF'
-
-          // ============================================
-          // PATCH: 确保扩展流被正确消费
-          // ============================================
-          import * as path from 'path';
-          import * as fs from 'fs';
-          import * as gulp from 'gulp';
-
-          // 保存原始任务
-          const originalVscodeLinuxX64 = (exports as any).vscodeLinuxX64;
-
-          // 如果原始任务不存在，创建一个空任务
-          const originalTask = originalVscodeLinuxX64 || function(done: any) {
-              console.log('⚠️ Original vscode-linux-x64 task not found, using empty task');
-              done();
-          };
-
-          // 使用 gulp.series 包装原始任务
-          (exports as any).vscodeLinuxX64 = gulp.series(
-              originalTask,
-              function verifyExtensions(done: any) {
-                  const extDir = path.join(__dirname, '../VSCode-linux-x64/resources/app/extensions');
-                  console.log('📦 Verifying extensions in:', extDir);
-
-                  if (fs.existsSync(extDir)) {
-                      const items = fs.readdirSync(extDir);
-                      console.log(`📦 Found ${items.length} extensions in build`);
-                      for (const item of items) {
-                          const pkgPath = path.join(extDir, item, 'package.json');
-                          if (fs.existsSync(pkgPath)) {
-                              console.log(`  ✅ ${item}`);
-                          }
-                      }
-                  } else {
-                      console.log('⚠️ Extensions directory not found in build!');
-                  }
-
-                  done();
-              }
-          );
-
-          console.log('🔧 vscode-linux-x64 task patched with verification (using gulp.series)');
-          EOF
-
-          echo "✅ gulpfile patched"
-
-      - name: 🔧 Fix gulpfile spawn calls
-        run: |
-          python3 << 'PY_END'
-          import re
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
-
-          # 修复 spawn 调用
-          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
-          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
-          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(content)
-          print("spawn calls fixed")
-          PY_END
-
+      # ========== 修复 copilot.ts ==========
       - name: 🔧 Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
@@ -461,6 +404,7 @@ jobs:
           }
           EOF
 
+      # ========== 禁用 Crashpad ==========
       - name: 🔧 Disable Crashpad
         run: |
           echo "Disabling Crashpad"
@@ -495,6 +439,28 @@ jobs:
           CRASH_EOF
           echo "crashService.ts created"
 
+      # ========== 修复 gulpfile ==========
+      - name: 🔧 Fix gulpfile
+        run: |
+          echo "=========================================="
+          echo "🔧 Fixing gulpfile"
+          echo "=========================================="
+
+          # 修复 spawn 调用
+          python3 << 'PY_END'
+          import re
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
+          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
+          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
+          print("spawn calls fixed")
+          PY_END
+
+          echo "✅ gulpfile fixed"
+
       - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
@@ -502,7 +468,6 @@ jobs:
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
-          echo "VSCODE_FORCE_LOCAL_EXTENSIONS=1" >> $GITHUB_ENV
 
       # ========== 编译官方内置扩展 ==========
       - name: 🔨 Build official built-in extensions
@@ -514,7 +479,10 @@ jobs:
           export NODE_OPTIONS="--max-old-space-size=8192"
 
           echo "📦 Compiling official extensions using gulp..."
-          npx tsx node_modules/gulp/bin/gulp.js compile-extensions --no-color || true
+          # 使用 || true 让编译错误不中断构建，但记录错误
+          npx tsx node_modules/gulp/bin/gulp.js compile-extensions --no-color || {
+            echo "⚠️ compile-extensions had errors, but continuing..."
+          }
 
           echo ""
           echo "📋 Checking built extensions:"
@@ -529,8 +497,9 @@ jobs:
             fi
           done
 
-          echo "✅ Official extensions built"
+          echo "✅ Official extensions build completed"
 
+      # ========== 构建 VSCode ==========
       - name: 🔨 Build VSCode from source
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
@@ -539,7 +508,6 @@ jobs:
           export VSCODE_SKIP_PRELAUNCH=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export VSCODE_FORCE_LOCAL_EXTENSIONS=1
 
           echo "=========================================="
           echo "🔨 Building VSCode from source"
@@ -551,12 +519,12 @@ jobs:
             mkdir -p extensions
           fi
 
-          echo "📦 Starting build with local extensions..."
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
           echo "Done: $(date)"
 
+      # ========== 复制自定义扩展 ==========
       - name: 📦 Copy custom extensions
         run: |
           echo "=========================================="
@@ -607,6 +575,7 @@ jobs:
 
           echo "✅ Custom extensions copied and dependencies installed"
 
+      # ========== 验证构建内容 ==========
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -645,30 +614,14 @@ jobs:
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
 
             echo ""
-            echo "📋 Extensions list (official + custom):"
+            echo "📋 Extensions list:"
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
-                  BUILTIN_STATUS="builtin ✓"
+                if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
+                  echo "  ✅ $EXT_NAME (compiled)"
                 else
-                  BUILTIN_STATUS=""
-                  python3 << PY_END
-          import json
-          pkg_path = "$ext/package.json"
-          with open(pkg_path, 'r') as f:
-              data = json.load(f)
-          data['builtin'] = True
-          data['extensionKind'] = ['workspace', 'ui']
-          with open(pkg_path, 'w') as f:
-              json.dump(data, f, indent=2)
-          PY_END
-                  BUILTIN_STATUS="builtin (fixed)"
-                fi
-                if [ -d "$ext/out" ]; then
-                  echo "  ✅ $EXT_NAME (compiled, $BUILTIN_STATUS)"
-                else
-                  echo "  ✅ $EXT_NAME ($BUILTIN_STATUS)"
+                  echo "  ✅ $EXT_NAME (source)"
                 fi
               fi
             done
@@ -690,6 +643,7 @@ jobs:
           echo "Build size:"
           du -sh "$BUILD_DIR"
 
+      # ========== 编译原生模块 ==========
       - name: 📦 Compile native modules for offline use
         run: |
           echo "=========================================="
@@ -785,6 +739,7 @@ jobs:
 
           echo "✅ Native modules compiled for offline use"
 
+      # ========== 创建启动器 ==========
       - name: 📄 Create launcher
         run: |
           echo "=========================================="
@@ -932,6 +887,7 @@ jobs:
 
           echo "✅ Launcher created"
 
+      # ========== 创建桌面入口 ==========
       - name: 📄 Create desktop entry
         run: |
           echo "=========================================="
@@ -967,6 +923,7 @@ jobs:
 
           echo "✅ Desktop entry created"
 
+      # ========== 构建 DEB 包 ==========
       - name: 📦 Build DEB package
         run: |
           echo "=========================================="
