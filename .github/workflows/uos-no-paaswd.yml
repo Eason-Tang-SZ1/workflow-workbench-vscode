@@ -366,7 +366,7 @@ jobs:
           echo "   📂 Target directory: $BUILD_DIR/resources/app/extensions"
           echo ""
 
-          # 使用 find 获取所有扩展，并正确引用文件名
+          # 使用 find 获取所有扩展
           echo "   📊 Scanning official extensions..."
 
           # 创建临时文件存储扩展列表
@@ -384,6 +384,13 @@ jobs:
 
             ext_path="$OFFICIAL_EXT_DIR/$ext_name"
 
+            # 检查源目录是否存在
+            if [ ! -d "$ext_path" ]; then
+              echo "      ⚠️ Source directory not found: $ext_name"
+              ((EXT_FAILED++))
+              continue
+            fi
+
             # 检查是否已经存在
             if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
               echo "      ⏭️ Skipping (already exists): $ext_name"
@@ -393,21 +400,30 @@ jobs:
 
             echo "      ✅ Copying: $ext_name"
 
-            # 使用引号包裹路径，避免特殊字符问题
-            if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null; then
-              ((EXT_COPIED++))
-              echo "         ✅ Success"
-            else
-              echo "         ❌ Failed to copy: $ext_name"
-              ((EXT_FAILED++))
-              # 尝试使用 rsync 作为备选
-              if command -v rsync &> /dev/null; then
-                echo "         🔄 Retrying with rsync..."
-                if rsync -a "$ext_path/" "$BUILD_DIR/resources/app/extensions/$ext_name/" 2>/dev/null; then
-                  echo "         ✅ Success with rsync"
+            # 使用 rsync 或 cp 复制
+            if command -v rsync &> /dev/null; then
+              if rsync -a --no-owner --no-group "$ext_path/" "$BUILD_DIR/resources/app/extensions/$ext_name/" 2>/dev/null; then
+                echo "         ✅ Success (rsync)"
+                ((EXT_COPIED++))
+              else
+                echo "         ❌ Failed to copy with rsync: $ext_name"
+                # 尝试使用 cp
+                if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null; then
+                  echo "         ✅ Success (cp fallback)"
                   ((EXT_COPIED++))
-                  ((EXT_FAILED--))
+                else
+                  echo "         ❌ Failed to copy with cp: $ext_name"
+                  ((EXT_FAILED++))
                 fi
+              fi
+            else
+              # 直接使用 cp
+              if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null; then
+                echo "         ✅ Success"
+                ((EXT_COPIED++))
+              else
+                echo "         ❌ Failed to copy: $ext_name"
+                ((EXT_FAILED++))
               fi
             fi
           done < "$EXT_LIST_FILE"
@@ -426,9 +442,21 @@ jobs:
           ACTUAL_TOTAL=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l)
           echo "      📂 Total in system: $ACTUAL_TOTAL extensions"
 
-          # 如果复制失败，但仍然继续
-          if [ $EXT_FAILED -gt 0 ]; then
-            echo "   ⚠️ Some extensions failed to copy, but continuing..."
+          # 如果所有扩展都失败了，报错
+          if [ $EXT_TOTAL -gt 0 ] && [ $EXT_COPIED -eq 0 ] && [ $EXT_SKIPPED -eq 0 ]; then
+            echo ""
+            echo "❌ No extensions were copied! This is a critical error."
+            exit 1
+          fi
+
+          # 如果复制失败率过高，警告
+          FAILURE_RATE=0
+          if [ $EXT_TOTAL -gt 0 ]; then
+            FAILURE_RATE=$((EXT_FAILED * 100 / EXT_TOTAL))
+            if [ $FAILURE_RATE -gt 50 ]; then
+              echo ""
+              echo "⚠️ High failure rate: $FAILURE_RATE% of extensions failed to copy"
+            fi
           fi
 
           # 验证关键扩展是否存在
@@ -450,7 +478,7 @@ jobs:
             echo ""
             echo "❌ Critical extensions are missing:$MISSING_EXTS"
             echo "   This may cause issues when running TSCode."
-            # 不退出，继续执行，但记录警告
+            exit 1
           fi
 
           # ============================================================

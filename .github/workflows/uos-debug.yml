@@ -376,6 +376,42 @@ jobs:
           echo "🔧 Fixing gulpfile to consume extension stream"
           echo "=========================================="
 
+          # 首先在文件顶部添加 series 导入
+          python3 << 'PY_END'
+          import re
+          import os
+
+          gulpfile_path = 'build/gulpfile.vscode.ts'
+
+          with open(gulpfile_path, 'r') as f:
+              content = f.read()
+
+          # 检查是否已经导入了 series
+          if 'series' not in content:
+              # 在 import 语句中添加 series
+              content = re.sub(
+                  r'import \{ ([^}]+) \} from \'gulp\';',
+                  lambda m: f'import {{ {m.group(1)}, series }} from \'gulp\';',
+                  content
+              )
+              # 如果上面的替换没生效，尝试另一种方式
+              if 'series' not in content:
+                  content = content.replace(
+                      "import * as gulp from 'gulp';",
+                      "import * as gulp from 'gulp';\nimport { series } from 'gulp';"
+                  )
+              # 如果还是没有，直接在最前面添加
+              if 'series' not in content:
+                  content = "import { series } from 'gulp';\n" + content
+
+              with open(gulpfile_path, 'w') as f:
+                  f.write(content)
+              print("✅ Added series import to gulpfile")
+          else:
+              print("ℹ️ series already imported")
+          PY_END
+
+          # 然后添加补丁
           cat >> build/gulpfile.vscode.ts << 'EOF'
 
           // ============================================
@@ -384,10 +420,18 @@ jobs:
           import * as path from 'path';
           import * as fs from 'fs';
 
+          // 保存原始任务
           const originalVscodeLinuxX64 = (exports as any).vscodeLinuxX64;
 
+          // 如果原始任务不存在，创建一个空任务
+          const originalTask = originalVscodeLinuxX64 || function(done: any) {
+              console.log('⚠️ Original vscode-linux-x64 task not found, using empty task');
+              done();
+          };
+
+          // 使用 series 包装原始任务
           exports.vscodeLinuxX64 = series(
-              originalVscodeLinuxX64 || (() => {}),
+              originalTask,
               function verifyExtensions(done: any) {
                   const extDir = path.join(__dirname, '../VSCode-linux-x64/resources/app/extensions');
                   console.log('📦 Verifying extensions in:', extDir);
@@ -420,12 +464,18 @@ jobs:
           import re
           with open('build/gulpfile.vscode.ts', 'r') as f:
               content = f.read()
+
+          # 修复 spawn 调用
           content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
           content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
           content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
+
+          # 确保 series 没有被注释掉
+          content = re.sub(r'//\s*series', 'series', content)
+
           with open('build/gulpfile.vscode.ts', 'w') as f:
               f.write(content)
-          print("spawn calls fixed")
+          print("spawn calls fixed and series uncommented")
           PY_END
 
       - name: 🔧 Replace copilot.ts
