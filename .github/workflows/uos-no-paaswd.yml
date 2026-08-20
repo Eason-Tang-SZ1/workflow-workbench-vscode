@@ -1326,7 +1326,7 @@ jobs:
           echo "   User (installed):  ~/.tscode/extensions/"
           echo ""
           echo "💡 Extensions persist across reinstallation"
-          echo "=========================================="
+          echo "==========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
