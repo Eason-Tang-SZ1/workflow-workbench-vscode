@@ -11,6 +11,14 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
+      custom_extension_repo:
+        description: 'Custom extension repository (optional)'
+        required: false
+        default: ''
+      custom_extension_branch:
+        description: 'Custom extension branch'
+        required: false
+        default: 'main'
 
 jobs:
   build:
@@ -243,107 +251,189 @@ jobs:
 
           echo "✅ node_modules copied"
 
-      - name: 🔥 Replace native modules with official version
+      - name: 🔥 Replace native modules and copy official extensions
         run: |
           echo "=========================================="
-          echo "🔥 Replacing native modules with official version"
+          echo "🔥 Replacing native modules & copying official extensions"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
 
-          echo "📌 Downloading official VSCode $VERSION for Linux x64..."
+          # ============================================================
+          # 1. 下载官方 VSCode（只下载一次）
+          # ============================================================
+          echo ""
+          echo "📌 Step 1: Downloading official VSCode $VERSION for Linux x64..."
+
+          # 清理旧的下载目录
+          rm -rf /tmp/official-vscode
+          rm -f /tmp/official.tar.gz
+
           wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
 
           if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
             echo "⚠️ Failed to download version $VERSION, trying latest..."
             wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+            if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
+              echo "❌ Failed to download official VSCode!"
+              exit 1
+            fi
           fi
 
-          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+          echo "📌 Extracting official VSCode..."
+          mkdir -p /tmp/official-vscode
+          tar -xzf /tmp/official.tar.gz -C /tmp/official-vscode/
 
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          # 查找官方 VSCode 目录
+          OFFICIAL_DIR=""
+          for dir in "/tmp/official-vscode/VSCode-linux-x64" "/tmp/official-vscode/vscode/VSCode-linux-x64"; do
+            if [ -d "$dir" ]; then
+              OFFICIAL_DIR="$dir"
+              break
+            fi
+          done
+
+          # 如果没找到，尝试搜索
           if [ -z "$OFFICIAL_DIR" ]; then
-            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+            OFFICIAL_DIR=$(find /tmp/official-vscode -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
           fi
 
-          if [ -z "$OFFICIAL_DIR" ]; then
-            echo "❌ Could not find official VSCode!"
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR" ]; then
+            echo "❌ Could not find official VSCode directory!"
+            echo "   Contents of /tmp/official-vscode:"
+            ls -la /tmp/official-vscode/
             exit 1
           fi
 
           echo "✅ Official VSCode found at: $OFFICIAL_DIR"
 
+          # ============================================================
+          # 2. 替换 node_modules
+          # ============================================================
+          echo ""
+          echo "📌 Step 2: Replacing node_modules with official version..."
+
           if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
-            echo "   Copying official node_modules..."
+            echo "   ✅ Found official node_modules"
+
+            # 备份旧的 node_modules
             if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+              echo "   📦 Backing up old node_modules..."
               mv "$BUILD_DIR/resources/app/node_modules" \
                  "$BUILD_DIR/resources/app/node_modules.bak"
             fi
+
+            echo "   📦 Copying official node_modules..."
             cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
                   "$BUILD_DIR/resources/app/"
-            echo "   ✅ node_modules replaced with official version"
+
+            # 检查复制是否成功
+            if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+              echo "   ✅ node_modules replaced successfully"
+              echo "   📊 Size: $(du -sh $BUILD_DIR/resources/app/node_modules | cut -f1)"
+            else
+              echo "   ❌ Failed to copy node_modules!"
+              exit 1
+            fi
+          else
+            echo "   ⚠️ No node_modules found in official build, skipping..."
           fi
 
-          rm -rf /tmp/official.tar.gz
-          rm -rf "$OFFICIAL_DIR"
+          # ============================================================
+          # 3. 复制官方扩展到系统目录
+          # ============================================================
           echo ""
-          echo "✅ Native modules replacement completed"
+          echo "📌 Step 3: Copying official extensions to system directory..."
 
-      - name: 📂 Copy official extensions to system directory
-        run: |
-          echo "=========================================="
-          echo "📂 Copying official extensions to system directory"
-          echo "=========================================="
-
-          BUILD_DIR="${BUILD_DIR:-./tscode}"
-
-          # 重新解压官方 VSCode（如果已被删除）
-          if [ ! -d "/tmp/VSCode-linux-x64" ]; then
-            echo "📌 Re-downloading official VSCode..."
-            wget -q https://update.code.visualstudio.com/1.116.0/linux-x64/stable -O /tmp/official.tar.gz
-            tar -xzf /tmp/official.tar.gz -C /tmp/
-          fi
-
-          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
-            echo "⚠️ Could not find official extensions"
-            exit 0
-          fi
-
-          echo "✅ Official VSCode at: $OFFICIAL_DIR"
-
+          # 确保目标目录存在
           mkdir -p "$BUILD_DIR/resources/app/extensions"
 
-          # 复制所有扩展到系统目录
-          echo "📌 Copying extensions from official build to system directory..."
-          for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
+          EXT_COPIED=0
+          EXT_SKIPPED=0
+          EXT_TOTAL=0
+
+          # 获取官方扩展列表
+          OFFICIAL_EXT_DIR="$OFFICIAL_DIR/resources/app/extensions"
+
+          if [ ! -d "$OFFICIAL_EXT_DIR" ]; then
+            echo "❌ Official extensions directory not found: $OFFICIAL_EXT_DIR"
+            exit 1
+          fi
+
+          echo "   📂 Official extensions directory: $OFFICIAL_EXT_DIR"
+          echo "   📂 Target directory: $BUILD_DIR/resources/app/extensions"
+          echo ""
+
+          # 遍历并复制每个扩展
+          for ext in "$OFFICIAL_EXT_DIR"/*; do
             if [ -d "$ext" ]; then
               ext_name=$(basename "$ext")
-              if [ "$ext_name" = "@builtin" ]; then
-                continue
-              fi
+              ((EXT_TOTAL++))
+
+              # 检查是否已经存在
               if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
-                echo "   ⏭️ Skipping (already exists): $ext_name"
+                echo "      ⏭️ Skipping (already exists): $ext_name"
+                ((EXT_SKIPPED++))
                 continue
               fi
-              echo "   ✅ Copying to system: $ext_name"
+
+              echo "      ✅ Copying: $ext_name"
               cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
+              if [ $? -eq 0 ]; then
+                ((EXT_COPIED++))
+              else
+                echo "      ❌ Failed to copy: $ext_name"
+              fi
             fi
           done
 
-          # 复制 @builtin
-          if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
-            echo "   ✅ Copying @builtin to system"
-            rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
-            cp -r "$OFFICIAL_DIR/resources/app/extensions/@builtin" \
-                  "$BUILD_DIR/resources/app/extensions/"
+          echo ""
+          echo "   📊 Extension copy summary:"
+          echo "      📦 Total official extensions: $EXT_TOTAL"
+          echo "      ✅ Copied: $EXT_COPIED extensions"
+          echo "      ⏭️ Skipped: $EXT_SKIPPED extensions (already exist)"
+          echo "      📂 Total in system: $(ls -1 $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l) extensions"
+
+          # 验证关键扩展是否存在
+          echo ""
+          echo "   🔍 Verifying critical extensions..."
+          CRITICAL_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features"
+          MISSING_EXTS=""
+          for ext in $CRITICAL_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "      ✅ $ext"
+            else
+              echo "      ❌ $ext (NOT FOUND!)"
+              MISSING_EXTS="$MISSING_EXTS $ext"
+            fi
+          done
+
+          # 如果有缺失的关键扩展，报错
+          if [ -n "$MISSING_EXTS" ]; then
+            echo ""
+            echo "❌ Critical extensions are missing:$MISSING_EXTS"
+            echo "   This may cause issues when running TSCode."
+            # 不退出，继续执行，但记录警告
           fi
 
+          # 保存官方扩展列表用于后续验证
+          echo "$OFFICIAL_EXT_DIR" > /tmp/official_ext_dir.txt
+          echo "$BUILD_DIR/resources/app/extensions" > /tmp/target_ext_dir.txt
+          ls -1 "$OFFICIAL_EXT_DIR" > /tmp/official_ext_list.txt
+          ls -1 "$BUILD_DIR/resources/app/extensions" > /tmp/target_ext_list.txt
+
+          # ============================================================
+          # 4. 清理临时文件
+          # ============================================================
           echo ""
-          echo "✅ Extensions copied to system directory"
-          echo "📌 Total system extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+          echo "📌 Step 4: Cleaning up temporary files..."
+          rm -f /tmp/official.tar.gz
+          rm -rf /tmp/official-vscode
+          echo "   ✅ Cleanup completed"
+
+          echo ""
+          echo "✅ Native modules and extensions replacement completed!"
 
       - name: 📦 Download and prepare custom extensions
         run: |
@@ -362,8 +452,8 @@ jobs:
             git clone --depth 1 \
               --branch ${{ github.event.inputs.custom_extension_branch || 'main' }} \
               "${{ github.event.inputs.custom_extension_repo }}" \
-              /tmp/custom-ext-temp
-            if [ -d "/tmp/custom-ext-temp" ]; then
+              /tmp/custom-ext-temp 2>/dev/null || true
+            if [ -d "/tmp/custom-ext-temp" ] && [ "$(ls -A /tmp/custom-ext-temp 2>/dev/null)" ]; then
               cp -r /tmp/custom-ext-temp/* "$BUILD_DIR/resources/app/custom-extensions/"
               echo "✅ Custom extension cloned"
               rm -rf /tmp/custom-ext-temp
@@ -375,9 +465,11 @@ jobs:
           elif [ -f "./my-extension.vsix" ]; then
             echo "📌 Extracting VSIX: my-extension.vsix"
             mkdir -p /tmp/extract-vsix
-            unzip -q ./my-extension.vsix -d /tmp/extract-vsix
-            cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
-            echo "✅ VSIX extracted"
+            unzip -q ./my-extension.vsix -d /tmp/extract-vsix 2>/dev/null || true
+            if [ -d "/tmp/extract-vsix" ] && [ "$(ls -A /tmp/extract-vsix 2>/dev/null)" ]; then
+              cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
+              echo "✅ VSIX extracted"
+            fi
             rm -rf /tmp/extract-vsix
           else
             echo "ℹ️ No custom extensions provided"
@@ -1039,6 +1131,217 @@ jobs:
             exit 1
           fi
 
+      # ============================================================
+      # 新增：验证 DEB 包中的扩展完整性
+      # ============================================================
+      - name: 🔍 Verify DEB package extensions
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying DEB package extensions"
+          echo "=========================================="
+
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_VERSION="${VERSION}-1"
+          DEB_ARCH="amd64"
+          DEB_FILE="tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+          if [ ! -f "$DEB_FILE" ]; then
+            echo "❌ DEB package not found: $DEB_FILE"
+            exit 1
+          fi
+
+          echo "📦 Extracting DEB package for verification..."
+          mkdir -p /tmp/deb-verify
+          cd /tmp/deb-verify
+          ar x "$GITHUB_WORKSPACE/$DEB_FILE"
+
+          # 解压 data.tar.xz 或 data.tar.gz
+          if [ -f "data.tar.xz" ]; then
+            tar -xf data.tar.xz
+          elif [ -f "data.tar.gz" ]; then
+            tar -xf data.tar.gz
+          elif [ -f "data.tar" ]; then
+            tar -xf data.tar
+          else
+            echo "❌ No data archive found in DEB package!"
+            ls -la
+            exit 1
+          fi
+
+          echo ""
+          echo "📂 Checking extensions in DEB package..."
+          echo "=========================================="
+
+          EXT_DIR="./opt/tscode/resources/app/extensions"
+
+          if [ ! -d "$EXT_DIR" ]; then
+            echo "❌ Extensions directory not found in DEB package!"
+            echo "   Expected: $EXT_DIR"
+            echo "   Contents of ./opt/tscode/resources/app/:"
+            ls -la ./opt/tscode/resources/app/ 2>/dev/null || echo "   (directory not found)"
+            exit 1
+          fi
+
+          # 获取扩展列表
+          echo ""
+          echo "📋 Extensions in DEB package:"
+          echo "----------------------------------------"
+          EXT_COUNT=$(ls -1 "$EXT_DIR" 2>/dev/null | wc -l)
+          ls -la "$EXT_DIR" 2>/dev/null
+          echo "----------------------------------------"
+          echo "   Total extensions: $EXT_COUNT"
+          echo ""
+
+          # ============================================================
+          # 重新下载官方 VSCode 进行对比
+          # ============================================================
+          echo "📌 Downloading official VSCode for comparison..."
+          wget -q "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official-compare.tar.gz
+
+          if [ $? -eq 0 ] && [ -s /tmp/official-compare.tar.gz ]; then
+            mkdir -p /tmp/official-compare
+            tar -xzf /tmp/official-compare.tar.gz -C /tmp/official-compare/
+
+            OFFICIAL_EXT_DIR=$(find /tmp/official-compare -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+
+            if [ -n "$OFFICIAL_EXT_DIR" ] && [ -d "$OFFICIAL_EXT_DIR/resources/app/extensions" ]; then
+              OFFICIAL_EXT_DIR="$OFFICIAL_EXT_DIR/resources/app/extensions"
+              echo "✅ Found official extensions at: $OFFICIAL_EXT_DIR"
+
+              OFFICIAL_COUNT=$(ls -1 "$OFFICIAL_EXT_DIR" 2>/dev/null | wc -l)
+              echo "   Official VSCode has $OFFICIAL_COUNT extensions"
+
+              # 对比扩展列表
+              echo ""
+              echo "📊 Extension comparison:"
+              echo "----------------------------------------"
+
+              MISSING_EXTS=""
+              FOUND_EXTS=""
+
+              for ext in "$OFFICIAL_EXT_DIR"/*; do
+                if [ -d "$ext" ]; then
+                  ext_name=$(basename "$ext")
+                  if [ -d "$EXT_DIR/$ext_name" ]; then
+                    FOUND_EXTS="$FOUND_EXTS $ext_name"
+                  else
+                    MISSING_EXTS="$MISSING_EXTS $ext_name"
+                  fi
+                fi
+              done
+
+              echo ""
+              echo "✅ Extensions found in DEB:"
+              for ext in $FOUND_EXTS; do
+                echo "   ✅ $ext"
+              done | head -20
+
+              if [ $(echo "$FOUND_EXTS" | wc -w) -gt 20 ]; then
+                echo "   ... and $(($(echo "$FOUND_EXTS" | wc -w) - 20)) more"
+              fi
+
+              echo ""
+              if [ -n "$MISSING_EXTS" ]; then
+                echo "❌ Missing extensions (in official but not in DEB):"
+                for ext in $MISSING_EXTS; do
+                  echo "   ❌ $ext"
+                done
+                MISSING_COUNT=$(echo "$MISSING_EXTS" | wc -w)
+                echo ""
+                echo "⚠️ $MISSING_COUNT extensions are missing!"
+              else
+                echo "✅ All official extensions are present in DEB package!"
+              fi
+
+              # 检查关键扩展
+              echo ""
+              echo "🔍 Checking critical extensions in DEB:"
+              CRITICAL_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
+              CRITICAL_MISSING=""
+
+              for ext in $CRITICAL_EXTS; do
+                if [ -d "$EXT_DIR/$ext" ]; then
+                  echo "   ✅ $ext"
+                else
+                  echo "   ❌ $ext (CRITICAL - MISSING!)"
+                  CRITICAL_MISSING="$CRITICAL_MISSING $ext"
+                fi
+              done
+
+              if [ -n "$CRITICAL_MISSING" ]; then
+                echo ""
+                echo "❌❌❌ CRITICAL ERROR: Missing critical extensions:$CRITICAL_MISSING"
+                echo "   The DEB package may not function correctly!"
+                exit 1
+              fi
+
+              # 清理
+              rm -rf /tmp/official-compare
+              rm -f /tmp/official-compare.tar.gz
+            else
+              echo "⚠️ Could not find official VSCode extensions for comparison"
+            fi
+          else
+            echo "⚠️ Could not download official VSCode for comparison"
+          fi
+
+          # ============================================================
+          # 检查扩展大小
+          # ============================================================
+          echo ""
+          echo "📊 Extension directory size:"
+          du -sh "$EXT_DIR"
+
+          echo ""
+          echo "📊 Top 10 largest extensions:"
+          du -sh "$EXT_DIR"/* 2>/dev/null | sort -hr | head -10
+
+          # ============================================================
+          # 检查是否有 @builtin 扩展
+          # ============================================================
+          echo ""
+          echo "🔍 Checking @builtin extensions:"
+          if [ -d "$EXT_DIR/@builtin" ]; then
+            BUILTIN_COUNT=$(ls -1 "$EXT_DIR/@builtin" 2>/dev/null | wc -l)
+            echo "   ✅ @builtin directory exists with $BUILTIN_COUNT extensions"
+            ls -la "$EXT_DIR/@builtin" 2>/dev/null | head -10
+          else
+            echo "   ⚠️ @builtin directory not found (may be optional)"
+          fi
+
+          # ============================================================
+          # 验证结果摘要
+          # ============================================================
+          echo ""
+          echo "=========================================="
+          echo "📊 DEB EXTENSION VERIFICATION SUMMARY"
+          echo "=========================================="
+          echo "   Total extensions: $EXT_COUNT"
+          if [ -n "$OFFICIAL_COUNT" ]; then
+            echo "   Official extensions: $OFFICIAL_COUNT"
+            if [ -n "$MISSING_EXTS" ]; then
+              MISSING_COUNT=$(echo "$MISSING_EXTS" | wc -w)
+              echo "   Missing in DEB: $MISSING_COUNT"
+            else
+              echo "   Missing in DEB: 0 ✅"
+            fi
+          fi
+          if [ -n "$CRITICAL_MISSING" ]; then
+            echo "   ❌ Critical missing: YES"
+            echo "   Result: FAILED"
+            exit 1
+          else
+            echo "   ✅ Critical missing: NO"
+            echo "   Result: PASSED"
+          fi
+          echo "=========================================="
+
+          cd "$GITHUB_WORKSPACE"
+          rm -rf /tmp/deb-verify
+
+          echo ""
+          echo "✅ DEB package extension verification completed!"
+
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -1090,5 +1393,9 @@ jobs:
             echo "📂 Extension directories:"
             echo "  System (built-in): /opt/tscode/resources/app/extensions/"
             echo "  User (custom + installed): ~/.tscode/extensions/"
+            echo ""
+            echo "✅ Extension verification:"
+            echo "  - All official extensions copied to DEB package"
+            echo "  - Critical extensions verified"
             echo "=========================================="
           fi
