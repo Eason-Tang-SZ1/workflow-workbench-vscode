@@ -98,7 +98,7 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 使用同步方式 ==========
+      # ========== 修复 extensions.ts - 实现所有需要的函数 ==========
       - name: 🔧 Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
@@ -112,7 +112,6 @@ jobs:
           import * as path from 'path';
           import { fileURLToPath } from 'url';
 
-          // ES module 兼容的 __dirname
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = path.dirname(__filename);
 
@@ -139,6 +138,13 @@ jobs:
                               const pkgPath = path.join(extPath, 'package.json');
                               if (fs.existsSync(pkgPath)) {
                                   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                                  // 确保标记为 builtin
+                                  if (pkg.builtin !== true) {
+                                      pkg.builtin = true;
+                                  }
+                                  if (!pkg.extensionKind) {
+                                      pkg.extensionKind = ['workspace', 'ui'];
+                                  }
                                   extensions.push({
                                       name: pkg.name || item,
                                       path: extPath,
@@ -194,24 +200,26 @@ jobs:
               return results;
           }
 
-          // ========== 创建扩展流 - 同步方式（不使用 await） ==========
-          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              console.log('📦 packageLocalExtensionsStream: START');
+          // ========== 创建扩展流 - 核心函数 ==========
+          function createExtensionStream(forWeb: boolean, disableMangle: boolean): Stream {
+              console.log('📦 createExtensionStream: START (forWeb=' + forWeb + ', disableMangle=' + disableMangle + ')');
 
               const extensions = getLocalExtensions();
               console.log(`📦 Processing ${extensions.length} extensions`);
 
-              // 使用 require 同步导入（ES module 中也可以使用）
+              // 使用 require 同步导入
               // @ts-ignore
               const File = require('vinyl');
 
               const stream = new Readable({ objectMode: true });
               let filesPushed = false;
               let allFiles: any[] = [];
+              let totalFiles = 0;
 
               for (const ext of extensions) {
                   try {
                       const files = getAllFiles(ext.path);
+                      totalFiles += files.length;
                       console.log(`  📤 ${ext.name}: ${files.length} files`);
 
                       for (const filePath of files) {
@@ -243,7 +251,7 @@ jobs:
                   }
               }
 
-              console.log(`📦 Total files: ${allFiles.length}`);
+              console.log(`📦 Total files: ${totalFiles}`);
 
               stream._read = function() {
                   if (!filesPushed) {
@@ -255,49 +263,67 @@ jobs:
                   this.push(null);
               };
 
-              console.log('📦 packageLocalExtensionsStream: END');
+              console.log('📦 createExtensionStream: END');
               return stream;
           }
 
-          // ========== 导出其他需要的函数 ==========
+          // ========== 导出所有需要的函数（VSCode 构建系统会调用这些） ==========
+
+          // 主要的打包函数 - vscode-linux-x64 会调用这个
+          export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              console.log('📦 packageAllLocalExtensionsStream: called');
+              return createExtensionStream(forWeb, disableMangle);
+          }
+
+          // 其他可能被调用的函数
+          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
+              console.log('📦 packageLocalExtensionsStream: called');
+              return createExtensionStream(forWeb, disableMangle);
+          }
+
           export function getExtensionStream(): Stream {
-              return packageLocalExtensionsStream(false, false);
+              console.log('📦 getExtensionStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function getExtensionDownloadStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 getExtensionDownloadStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageMarketplaceExtensionsStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageMarketplaceExtensionsStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageNativeLocalExtensionsStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageNativeLocalExtensionsStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageNonNativeLocalExtensionsStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageNonNativeLocalExtensionsStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageExtensionsStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageExtensionsStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageCopilotExtensionStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageCopilotExtensionStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageCopilotChatExtensionStream(): Stream {
-              return getExtensionStream();
+              console.log('📦 packageCopilotChatExtensionStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function packageCopilotAgentsExtensionStream(): Stream {
-              return getExtensionStream();
-          }
-
-          export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              return packageLocalExtensionsStream(forWeb, disableMangle);
+              console.log('📦 packageCopilotAgentsExtensionStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function fromMarketplace(): any[] {
@@ -322,6 +348,7 @@ jobs:
           }
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
+              console.log('📦 scanBuiltinExtensions: called');
               return builtInExtensions;
           }
 
@@ -343,30 +370,37 @@ jobs:
           }
 
           export function typeCheckExtensionStream(extensionPath: string, forWeb: boolean): Stream {
-              return getExtensionStream();
+              console.log('📦 typeCheckExtensionStream: called');
+              return createExtensionStream(forWeb, false);
           }
 
           export function fromLocal(extensionPath: string, forWeb: boolean, disableMangle: boolean): Stream {
-              return getExtensionStream();
+              console.log('📦 fromLocal: called for ' + extensionPath);
+              return createExtensionStream(forWeb, disableMangle);
           }
 
           export function fromMarketplaceStream(serviceUrl: string, extension: any): Stream {
-              return getExtensionStream();
+              console.log('📦 fromMarketplaceStream: called');
+              return createExtensionStream(false, false);
           }
 
           export function fromGithub(extension: any): Stream {
-              return getExtensionStream();
+              console.log('📦 fromGithub: called');
+              return createExtensionStream(false, false);
           }
 
           export function fromVsix(vsixPath: string, extension: any): Stream {
-              return getExtensionStream();
+              console.log('📦 fromVsix: called');
+              return createExtensionStream(false, false);
           }
 
           export function minifyExtensionResources(input: Stream): Stream {
+              console.log('📦 minifyExtensionResources: called');
               return input;
           }
 
           export function updateExtensionPackageJSON(input: Stream, update: (data: any) => any): Stream {
+              console.log('📦 updateExtensionPackageJSON: called');
               return input;
           }
           EOF
@@ -507,6 +541,7 @@ jobs:
             mkdir -p extensions
           fi
 
+          # 使用 gulp 构建
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -1191,12 +1226,12 @@ jobs:
             if [ $OFFICIAL_COUNT -eq 0 ]; then
               echo ""
               echo "❌ ERROR: No official built-in extensions found in DEB package!"
-              echo "   This means packageLocalExtensionsStream is not being consumed."
               echo ""
-              echo "📋 Please check the build log for:"
-              echo "   - 'packageLocalExtensionsStream' logs"
-              echo "   - '📦 Scanning local extensions in:' logs"
-              echo "   - Any errors in the gulp task"
+              echo "🔍 Checking build log for extension stream calls..."
+              echo "   Look for:"
+              echo "   - 'packageAllLocalExtensionsStream: called'"
+              echo "   - 'createExtensionStream: START'"
+              echo "   - 'Total files:' in the build log"
               exit 1
             else
               echo ""
