@@ -98,8 +98,8 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 正确的流处理 ==========
-      - name: 🔧 Fix extensions.ts (正确的流处理)
+      # ========== 修复 extensions.ts - 使用 ES module 兼容方式 ==========
+      - name: 🔧 Fix extensions.ts (ES module 兼容)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -110,8 +110,13 @@ jobs:
           import { Stream } from 'stream';
           import * as fs from 'fs';
           import * as path from 'path';
+          import { fileURLToPath } from 'url';
           import * as vinyl from 'vinyl';
           import * as es from 'event-stream';
+
+          // ========== 获取 __dirname 的 ES module 替代 ==========
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = path.dirname(__filename);
 
           // ========== 扫描所有扩展 ==========
           function getAllExtensions(): any[] {
@@ -367,16 +372,16 @@ jobs:
           }
           EOF
 
-          echo "✅ extensions.ts fixed with proper stream handling"
+          echo "✅ extensions.ts fixed with ES module compatibility"
 
-      # ========== 修复 gulpfile - 使用最简单可靠的方法 ==========
+      # ========== 修复 gulpfile - 使用 gulp.series ==========
       - name: 🔧 Fix gulpfile to consume extension stream
         run: |
           echo "=========================================="
           echo "🔧 Fixing gulpfile to consume extension stream"
           echo "=========================================="
 
-          # 方法：在文件末尾添加补丁，使用 gulp.series 而不是 series
+          # 在文件末尾添加补丁，使用 gulp.series
           cat >> build/gulpfile.vscode.ts << 'EOF'
 
           // ============================================
