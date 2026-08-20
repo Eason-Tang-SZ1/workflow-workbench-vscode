@@ -351,6 +351,7 @@ jobs:
 
           EXT_COPIED=0
           EXT_SKIPPED=0
+          EXT_FAILED=0
           EXT_TOTAL=0
 
           # 获取官方扩展列表
@@ -365,26 +366,35 @@ jobs:
           echo "   📂 Target directory: $BUILD_DIR/resources/app/extensions"
           echo ""
 
-          # 遍历并复制每个扩展
-          for ext in "$OFFICIAL_EXT_DIR"/*; do
+          # 先获取所有扩展列表（使用 find 避免通配符问题）
+          EXT_LIST=()
+          while IFS= read -r ext; do
             if [ -d "$ext" ]; then
-              ext_name=$(basename "$ext")
-              ((EXT_TOTAL++))
+              EXT_LIST+=("$(basename "$ext")")
+            fi
+          done < <(find "$OFFICIAL_EXT_DIR" -maxdepth 1 -type d ! -path "$OFFICIAL_EXT_DIR" | sort)
 
-              # 检查是否已经存在
-              if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
-                echo "      ⏭️ Skipping (already exists): $ext_name"
-                ((EXT_SKIPPED++))
-                continue
-              fi
+          EXT_TOTAL=${#EXT_LIST[@]}
+          echo "   📊 Found $EXT_TOTAL extensions in official build"
+          echo ""
 
-              echo "      ✅ Copying: $ext_name"
-              cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
-              if [ $? -eq 0 ]; then
-                ((EXT_COPIED++))
-              else
-                echo "      ❌ Failed to copy: $ext_name"
-              fi
+          # 遍历并复制每个扩展
+          for ext_name in "${EXT_LIST[@]}"; do
+            ext_path="$OFFICIAL_EXT_DIR/$ext_name"
+
+            # 检查是否已经存在
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
+              echo "      ⏭️ Skipping (already exists): $ext_name"
+              ((EXT_SKIPPED++))
+              continue
+            fi
+
+            echo "      ✅ Copying: $ext_name"
+            if cp -r "$ext_path" "$BUILD_DIR/resources/app/extensions/"; then
+              ((EXT_COPIED++))
+            else
+              echo "      ❌ Failed to copy: $ext_name"
+              ((EXT_FAILED++))
             fi
           done
 
@@ -393,7 +403,13 @@ jobs:
           echo "      📦 Total official extensions: $EXT_TOTAL"
           echo "      ✅ Copied: $EXT_COPIED extensions"
           echo "      ⏭️ Skipped: $EXT_SKIPPED extensions (already exist)"
-          echo "      📂 Total in system: $(ls -1 $BUILD_DIR/resources/app/extensions 2>/dev/null | wc -l) extensions"
+          echo "      ❌ Failed: $EXT_FAILED extensions"
+          echo "      📂 Total in system: $(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" 2>/dev/null | wc -l) extensions"
+
+          # 如果复制失败，但仍然继续
+          if [ $EXT_FAILED -gt 0 ]; then
+            echo "   ⚠️ Some extensions failed to copy, but continuing..."
+          fi
 
           # 验证关键扩展是否存在
           echo ""
@@ -421,7 +437,7 @@ jobs:
           echo "$OFFICIAL_EXT_DIR" > /tmp/official_ext_dir.txt
           echo "$BUILD_DIR/resources/app/extensions" > /tmp/target_ext_dir.txt
           ls -1 "$OFFICIAL_EXT_DIR" > /tmp/official_ext_list.txt
-          ls -1 "$BUILD_DIR/resources/app/extensions" > /tmp/target_ext_list.txt
+          find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/extensions" -exec basename {} \; > /tmp/target_ext_list.txt
 
           # ============================================================
           # 4. 清理临时文件
@@ -1132,7 +1148,7 @@ jobs:
           fi
 
       # ============================================================
-      # 新增：验证 DEB 包中的扩展完整性
+      # 验证 DEB 包中的扩展完整性
       # ============================================================
       - name: 🔍 Verify DEB package extensions
         run: |
@@ -1186,108 +1202,45 @@ jobs:
           echo ""
           echo "📋 Extensions in DEB package:"
           echo "----------------------------------------"
-          EXT_COUNT=$(ls -1 "$EXT_DIR" 2>/dev/null | wc -l)
-          ls -la "$EXT_DIR" 2>/dev/null
+          EXT_COUNT=$(find "$EXT_DIR" -maxdepth 1 -type d ! -path "$EXT_DIR" 2>/dev/null | wc -l)
+          find "$EXT_DIR" -maxdepth 1 -type d ! -path "$EXT_DIR" -exec basename {} \; 2>/dev/null | sort
           echo "----------------------------------------"
           echo "   Total extensions: $EXT_COUNT"
           echo ""
 
-          # ============================================================
-          # 重新下载官方 VSCode 进行对比
-          # ============================================================
-          echo "📌 Downloading official VSCode for comparison..."
-          wget -q "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official-compare.tar.gz
+          # 检查关键扩展
+          echo ""
+          echo "🔍 Checking critical extensions in DEB:"
+          CRITICAL_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
+          CRITICAL_MISSING=""
 
-          if [ $? -eq 0 ] && [ -s /tmp/official-compare.tar.gz ]; then
-            mkdir -p /tmp/official-compare
-            tar -xzf /tmp/official-compare.tar.gz -C /tmp/official-compare/
-
-            OFFICIAL_EXT_DIR=$(find /tmp/official-compare -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
-
-            if [ -n "$OFFICIAL_EXT_DIR" ] && [ -d "$OFFICIAL_EXT_DIR/resources/app/extensions" ]; then
-              OFFICIAL_EXT_DIR="$OFFICIAL_EXT_DIR/resources/app/extensions"
-              echo "✅ Found official extensions at: $OFFICIAL_EXT_DIR"
-
-              OFFICIAL_COUNT=$(ls -1 "$OFFICIAL_EXT_DIR" 2>/dev/null | wc -l)
-              echo "   Official VSCode has $OFFICIAL_COUNT extensions"
-
-              # 对比扩展列表
-              echo ""
-              echo "📊 Extension comparison:"
-              echo "----------------------------------------"
-
-              MISSING_EXTS=""
-              FOUND_EXTS=""
-
-              for ext in "$OFFICIAL_EXT_DIR"/*; do
-                if [ -d "$ext" ]; then
-                  ext_name=$(basename "$ext")
-                  if [ -d "$EXT_DIR/$ext_name" ]; then
-                    FOUND_EXTS="$FOUND_EXTS $ext_name"
-                  else
-                    MISSING_EXTS="$MISSING_EXTS $ext_name"
-                  fi
-                fi
-              done
-
-              echo ""
-              echo "✅ Extensions found in DEB:"
-              for ext in $FOUND_EXTS; do
-                echo "   ✅ $ext"
-              done | head -20
-
-              if [ $(echo "$FOUND_EXTS" | wc -w) -gt 20 ]; then
-                echo "   ... and $(($(echo "$FOUND_EXTS" | wc -w) - 20)) more"
-              fi
-
-              echo ""
-              if [ -n "$MISSING_EXTS" ]; then
-                echo "❌ Missing extensions (in official but not in DEB):"
-                for ext in $MISSING_EXTS; do
-                  echo "   ❌ $ext"
-                done
-                MISSING_COUNT=$(echo "$MISSING_EXTS" | wc -w)
-                echo ""
-                echo "⚠️ $MISSING_COUNT extensions are missing!"
-              else
-                echo "✅ All official extensions are present in DEB package!"
-              fi
-
-              # 检查关键扩展
-              echo ""
-              echo "🔍 Checking critical extensions in DEB:"
-              CRITICAL_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
-              CRITICAL_MISSING=""
-
-              for ext in $CRITICAL_EXTS; do
-                if [ -d "$EXT_DIR/$ext" ]; then
-                  echo "   ✅ $ext"
-                else
-                  echo "   ❌ $ext (CRITICAL - MISSING!)"
-                  CRITICAL_MISSING="$CRITICAL_MISSING $ext"
-                fi
-              done
-
-              if [ -n "$CRITICAL_MISSING" ]; then
-                echo ""
-                echo "❌❌❌ CRITICAL ERROR: Missing critical extensions:$CRITICAL_MISSING"
-                echo "   The DEB package may not function correctly!"
-                exit 1
-              fi
-
-              # 清理
-              rm -rf /tmp/official-compare
-              rm -f /tmp/official-compare.tar.gz
+          for ext in $CRITICAL_EXTS; do
+            if [ -d "$EXT_DIR/$ext" ]; then
+              echo "   ✅ $ext"
             else
-              echo "⚠️ Could not find official VSCode extensions for comparison"
+              echo "   ❌ $ext (CRITICAL - MISSING!)"
+              CRITICAL_MISSING="$CRITICAL_MISSING $ext"
             fi
-          else
-            echo "⚠️ Could not download official VSCode for comparison"
+          done
+
+          if [ -n "$CRITICAL_MISSING" ]; then
+            echo ""
+            echo "❌❌❌ CRITICAL ERROR: Missing critical extensions:$CRITICAL_MISSING"
+            echo "   The DEB package may not function correctly!"
+            exit 1
           fi
 
-          # ============================================================
+          # 检查 @builtin 扩展
+          echo ""
+          echo "🔍 Checking @builtin extensions:"
+          if [ -d "$EXT_DIR/@builtin" ]; then
+            BUILTIN_COUNT=$(find "$EXT_DIR/@builtin" -maxdepth 1 -type d ! -path "$EXT_DIR/@builtin" 2>/dev/null | wc -l)
+            echo "   ✅ @builtin directory exists with $BUILTIN_COUNT extensions"
+          else
+            echo "   ⚠️ @builtin directory not found (may be optional)"
+          fi
+
           # 检查扩展大小
-          # ============================================================
           echo ""
           echo "📊 Extension directory size:"
           du -sh "$EXT_DIR"
@@ -1296,44 +1249,14 @@ jobs:
           echo "📊 Top 10 largest extensions:"
           du -sh "$EXT_DIR"/* 2>/dev/null | sort -hr | head -10
 
-          # ============================================================
-          # 检查是否有 @builtin 扩展
-          # ============================================================
-          echo ""
-          echo "🔍 Checking @builtin extensions:"
-          if [ -d "$EXT_DIR/@builtin" ]; then
-            BUILTIN_COUNT=$(ls -1 "$EXT_DIR/@builtin" 2>/dev/null | wc -l)
-            echo "   ✅ @builtin directory exists with $BUILTIN_COUNT extensions"
-            ls -la "$EXT_DIR/@builtin" 2>/dev/null | head -10
-          else
-            echo "   ⚠️ @builtin directory not found (may be optional)"
-          fi
-
-          # ============================================================
           # 验证结果摘要
-          # ============================================================
           echo ""
           echo "=========================================="
           echo "📊 DEB EXTENSION VERIFICATION SUMMARY"
           echo "=========================================="
           echo "   Total extensions: $EXT_COUNT"
-          if [ -n "$OFFICIAL_COUNT" ]; then
-            echo "   Official extensions: $OFFICIAL_COUNT"
-            if [ -n "$MISSING_EXTS" ]; then
-              MISSING_COUNT=$(echo "$MISSING_EXTS" | wc -w)
-              echo "   Missing in DEB: $MISSING_COUNT"
-            else
-              echo "   Missing in DEB: 0 ✅"
-            fi
-          fi
-          if [ -n "$CRITICAL_MISSING" ]; then
-            echo "   ❌ Critical missing: YES"
-            echo "   Result: FAILED"
-            exit 1
-          else
-            echo "   ✅ Critical missing: NO"
-            echo "   Result: PASSED"
-          fi
+          echo "   ✅ Critical extensions: All present"
+          echo "   Result: PASSED"
           echo "=========================================="
 
           cd "$GITHUB_WORKSPACE"
@@ -1395,7 +1318,6 @@ jobs:
             echo "  User (custom + installed): ~/.tscode/extensions/"
             echo ""
             echo "✅ Extension verification:"
-            echo "  - All official extensions copied to DEB package"
-            echo "  - Critical extensions verified"
+            echo "  - All critical extensions present in DEB package"
             echo "=========================================="
           fi
