@@ -98,8 +98,8 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 不导入自身 ==========
-      - name: 🔧 Fix extensions.ts (保持 builtin 标记)
+      # ========== 修复 extensions.ts - 完善builtin支持 ==========
+      - name: 🔧 Fix extensions.ts (完善builtin支持)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -112,45 +112,80 @@ jobs:
           import * as path from 'path';
           import * as vinyl from 'vinyl';
 
-          // ========== 直接从文件系统读取内置扩展列表 ==========
-          function getBuiltInExtensionsList(): any[] {
-            try {
-              const extensions: any[] = [];
-              const extDir = path.join(__dirname, '../../extensions');
-
-              if (fs.existsSync(extDir)) {
-                const items = fs.readdirSync(extDir);
-                for (const item of items) {
-                  const extPath = path.join(extDir, item);
-                  try {
-                    const stat = fs.statSync(extPath);
-                    if (stat.isDirectory()) {
-                      const pkgPath = path.join(extPath, 'package.json');
-                      if (fs.existsSync(pkgPath)) {
-                        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                        extensions.push({
-                          name: pkg.name || item,
-                          path: extPath,
-                          packageJSON: pkg,
-                          // 标记为内置扩展
-                          isBuiltin: true
-                        });
-                      }
-                    }
-                  } catch (e) {
-                    // 忽略单个扩展的读取错误
-                  }
-                }
-              }
-              return extensions;
-            } catch (e) {
-              console.log('📦 Could not read built-in extensions:', e.message);
-              return [];
-            }
+          // ========== 扩展元数据接口 ==========
+          interface IExtensionManifest {
+            name: string;
+            version: string;
+            builtin?: boolean;
+            extensionKind?: string[];
+            main?: string;
+            [key: string]: any;
           }
 
-          // ========== 获取内置扩展列表 ==========
-          export const builtInExtensions = getBuiltInExtensionsList();
+          interface IBuiltInExtension {
+            name: string;
+            path: string;
+            packageJSON: IExtensionManifest;
+            isBuiltin: boolean;
+          }
+
+          // ========== 扫描内置扩展 ==========
+          function scanBuiltInExtensions(): IBuiltInExtension[] {
+            const extensions: IBuiltInExtension[] = [];
+            const extDir = path.join(__dirname, '../../extensions');
+
+            console.log(`📦 Scanning for built-in extensions in: ${extDir}`);
+
+            if (!fs.existsSync(extDir)) {
+              console.log('⚠️ Extensions directory not found');
+              return extensions;
+            }
+
+            try {
+              const items = fs.readdirSync(extDir);
+              console.log(`📦 Found ${items.length} items in extensions directory`);
+
+              for (const item of items) {
+                const extPath = path.join(extDir, item);
+                try {
+                  const stat = fs.statSync(extPath);
+                  if (stat.isDirectory()) {
+                    const pkgPath = path.join(extPath, 'package.json');
+                    if (fs.existsSync(pkgPath)) {
+                      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+
+                      // 确保扩展被标记为 builtin
+                      if (pkg.builtin !== true) {
+                        pkg.builtin = true;
+                      }
+                      if (!pkg.extensionKind) {
+                        pkg.extensionKind = ['workspace', 'ui'];
+                      }
+
+                      extensions.push({
+                        name: pkg.name || item,
+                        path: extPath,
+                        packageJSON: pkg,
+                        isBuiltin: true
+                      });
+
+                      console.log(`  ✅ Loaded builtin extension: ${pkg.name} (${item})`);
+                    }
+                  }
+                } catch (e) {
+                  console.log(`  ⚠️ Error reading extension ${item}: ${e.message}`);
+                }
+              }
+            } catch (e) {
+              console.log(`❌ Error scanning extensions: ${e.message}`);
+            }
+
+            console.log(`📦 Total built-in extensions found: ${extensions.length}`);
+            return extensions;
+          }
+
+          // ========== 导出内置扩展列表 ==========
+          export const builtInExtensions = scanBuiltInExtensions();
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
           export const shouldDownloadWebBuiltInExtensions = false;
@@ -160,6 +195,34 @@ jobs:
           }
 
           // ========== 创建 Vinyl 流 ==========
+          function createVinylStreamFromExtension(extension: IBuiltInExtension): vinyl.File {
+            const file = new vinyl.File({
+              cwd: extension.path,
+              base: extension.path,
+              path: path.join(extension.path, 'package.json'),
+              contents: Buffer.from(JSON.stringify(extension.packageJSON, null, 2)),
+              stat: fs.statSync(extension.path),
+              extname: '',
+              relative: extension.name,
+              isDirectory: () => true,
+              isFile: () => false,
+              isSymbolic: () => false,
+              isBuffer: () => false,
+              isStream: () => false,
+              isNull: () => false
+            });
+
+            // 存储扩展元数据
+            file['extension'] = {
+              name: extension.name,
+              path: extension.path,
+              packageJSON: extension.packageJSON,
+              isBuiltin: true
+            };
+
+            return file;
+          }
+
           function createVinylStreamFromDirectory(dirPath: string): Stream {
             const { Readable } = require('stream');
             const stream = new Readable({ objectMode: true });
@@ -177,6 +240,12 @@ jobs:
                       const pkgPath = path.join(itemPath, 'package.json');
                       if (fs.existsSync(pkgPath)) {
                         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+
+                        // 确保标记为 builtin
+                        if (pkg.builtin !== true) {
+                          pkg.builtin = true;
+                        }
+
                         const file = new vinyl.File({
                           cwd: dirPath,
                           base: dirPath,
@@ -202,12 +271,12 @@ jobs:
                       }
                     }
                   } catch (e) {
-                    // 忽略单个文件的读取错误
+                    console.log(`  ⚠️ Error reading ${item}: ${e.message}`);
                   }
                 }
               }
             } catch (e) {
-              console.log('📦 Error reading extensions:', e.message);
+              console.log(`❌ Error reading extensions directory: ${e.message}`);
             }
 
             stream._read = function() {
@@ -351,7 +420,41 @@ jobs:
           }
           EOF
 
-          echo "✅ extensions.ts updated with builtin support (no self-import)"
+          echo "✅ extensions.ts updated with proper builtin support"
+
+      # ========== 标记官方扩展为builtin ==========
+      - name: 🔧 Mark official extensions as builtin
+        run: |
+          echo "=========================================="
+          echo "🔧 Marking official extensions as builtin"
+          echo "=========================================="
+
+          for ext in extensions/*/; do
+            if [ -f "$ext/package.json" ]; then
+              PKG="$ext/package.json"
+              EXT_NAME=$(basename "$ext")
+
+              # 添加或修改 builtin 标记
+              python3 << PY_END
+          import json
+          import os
+
+          with open("$PKG", 'r') as f:
+              data = json.load(f)
+
+          # 标记为内置扩展
+          data['builtin'] = True
+          data['extensionKind'] = ['workspace', 'ui']
+          if 'main' not in data:
+              data['main'] = './out/extension.js'
+
+          with open("$PKG", 'w') as f:
+              json.dump(data, f, indent=2)
+          print(f"  ✅ Marked {os.path.basename('$ext')} as builtin")
+          PY_END
+            fi
+          done
+          echo "✅ All official extensions marked as builtin"
 
       - name: 🔧 Fix gulpfile spawn calls
         run: |
@@ -525,6 +628,53 @@ jobs:
 
           echo "✅ Custom extensions copied and dependencies installed"
 
+      # ========== 验证并修复builtin标记 ==========
+      - name: 🔍 Verify and fix builtin extensions in build
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying builtin extensions in build"
+          echo "=========================================="
+
+          BUILD_DIR=""
+          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
+            if [ -d "$dir" ]; then
+              BUILD_DIR="$dir"
+              echo "Found build directory: $BUILD_DIR"
+              break
+            fi
+          done
+
+          if [ -z "$BUILD_DIR" ]; then
+            echo "❌ Build directory not found!"
+            exit 1
+          fi
+
+          echo "📌 Checking extensions in build directory:"
+          for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
+            if [ -f "$ext/package.json" ]; then
+              EXT_NAME=$(basename "$ext")
+              if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
+                echo "  ✅ $EXT_NAME (builtin)"
+              else
+                echo "  ⚠️ $EXT_NAME (not marked builtin - fixing)"
+                # 添加 builtin 标记
+                python3 << PY_END
+          import json
+          pkg_path = "$ext/package.json"
+          with open(pkg_path, 'r') as f:
+              data = json.load(f)
+          data['builtin'] = True
+          data['extensionKind'] = ['workspace', 'ui']
+          with open(pkg_path, 'w') as f:
+              json.dump(data, f, indent=2)
+          print(f"    ✅ Fixed: {data.get('name', '$EXT_NAME')} marked as builtin")
+          PY_END
+              fi
+            fi
+          done
+
+          echo "✅ Builtin extensions verification complete"
+
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -567,10 +717,15 @@ jobs:
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                if [ -d "$ext/out" ]; then
-                  echo "  ✅ $EXT_NAME (compiled)"
+                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
+                  BUILTIN_STATUS="builtin"
                 else
-                  echo "  ✅ $EXT_NAME"
+                  BUILTIN_STATUS="not builtin"
+                fi
+                if [ -d "$ext/out" ]; then
+                  echo "  ✅ $EXT_NAME (compiled, $BUILTIN_STATUS)"
+                else
+                  echo "  ✅ $EXT_NAME ($BUILTIN_STATUS)"
                 fi
               fi
             done
