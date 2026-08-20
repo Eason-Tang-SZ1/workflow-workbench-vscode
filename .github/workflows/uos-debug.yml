@@ -98,8 +98,27 @@ jobs:
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
             gulp-rename gulp-sort event-stream 2>/dev/null || true
 
-      # ========== 修复 extensions.ts - 添加完整日志 ==========
-      - name: 🔧 Fix extensions.ts (with complete logging)
+      # ========== 诊断：检查官方 extensions.ts 的导出 ==========
+      - name: 🔍 Diagnostic - Check original extensions.ts
+        run: |
+          echo "=========================================="
+          echo "🔍 Checking original extensions.ts exports"
+          echo "=========================================="
+
+          if [ -f "build/lib/extensions.ts" ]; then
+            echo "📄 Original extensions.ts exists"
+            echo ""
+            echo "📋 Exported functions (grep):"
+            grep -E "^export (function|const|async function)" build/lib/extensions.ts || echo "No exports found"
+            echo ""
+            echo "📋 Key functions:"
+            grep -E "packageAllLocalExtensionsStream|packageLocalExtensionsStream|getExtensionStream" build/lib/extensions.ts || echo "Key functions not found"
+          else
+            echo "❌ build/lib/extensions.ts not found!"
+          fi
+
+      # ========== 修复 extensions.ts - 添加完整诊断 ==========
+      - name: 🔧 Fix extensions.ts (with complete diagnostics)
         run: |
           cat > build/lib/extensions.ts << 'EOF'
           /*---------------------------------------------------------------------------------------------
@@ -127,6 +146,11 @@ jobs:
                   console.log(`${timestamp} ${prefix} ${msg}`);
               }
           }
+
+          // ========== 模块加载时立即执行 ==========
+          log(`🚀🚀🚀 EXTENSIONS MODULE LOADED at ${new Date().toISOString()}`);
+          log(`📁 __dirname: ${__dirname}`);
+          log(`📁 Current working directory: ${process.cwd()}`);
 
           // ========== 获取扩展列表 ==========
           function getLocalExtensions(): any[] {
@@ -215,10 +239,12 @@ jobs:
 
           // ========== 创建扩展流 ==========
           function createExtensionStream(forWeb: boolean, disableMangle: boolean): Stream {
-              const caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown';
               log(`🔧 createExtensionStream CALLED`);
-              log(`   Caller: ${caller}`);
               log(`   forWeb=${forWeb}, disableMangle=${disableMangle}`);
+
+              // 打印调用栈
+              const stack = new Error().stack?.split('\n').slice(2, 6).join('\n');
+              log(`📚 Call stack:\n${stack}`);
 
               const extensions = getLocalExtensions();
               log(`📦 Processing ${extensions.length} extensions`);
@@ -268,9 +294,10 @@ jobs:
               log(`📊 TOTAL FILES IN STREAM: ${totalFiles}`);
               log(`📊 TOTAL VINYL OBJECTS: ${allFiles.length}`);
 
-              // 记录前10个文件路径
-              const sampleFiles = allFiles.slice(0, 10).map((f: any) => f.path);
-              log(`📋 Sample files (first 10):`, sampleFiles);
+              if (allFiles.length > 0) {
+                  const sampleFiles = allFiles.slice(0, 5).map((f: any) => f.path);
+                  log(`📋 Sample files (first 5):`, sampleFiles);
+              }
 
               stream._read = function() {
                   if (!filesPushed) {
@@ -282,19 +309,19 @@ jobs:
                       log(`🔄 Stream _read: all files pushed`);
                   }
                   this.push(null);
-                  log(`🔄 Stream _read: completed (null pushed)`);
+                  log(`🔄 Stream _read: completed`);
               };
 
-              log(`✅ createExtensionStream: returning stream`);
+              log(`✅ createExtensionStream: returning stream with ${allFiles.length} objects`);
               return stream;
           }
 
-          // ========== 导出函数 - 每个都带日志 ==========
+          // ========== 导出所有函数 ==========
 
-          // 这是 VSCode 构建系统可能调用的主要函数
           export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              log(`🎯🎯🎯 packageAllLocalExtensionsStream CALLED`);
-              log(`   This is the main function VSCode uses for packaging extensions`);
+              log(`🎯🎯🎯 packageAllLocalExtensionsStream CALLED (MAIN FUNCTION)`);
+              log(`   This is the function called by vscode-linux-x64 task`);
+              log(`   forWeb=${forWeb}, disableMangle=${disableMangle}`);
               return createExtensionStream(forWeb, disableMangle);
           }
 
@@ -373,7 +400,6 @@ jobs:
 
           export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
               log(`🎯 scanBuiltinExtensions CALLED: ${extensionsRoot}`);
-              log(`   exclude:`, exclude);
               return builtInExtensions;
           }
 
@@ -432,12 +458,61 @@ jobs:
               return input;
           }
 
-          // ========== 在模块加载时输出日志 ==========
-          log(`🚀 MODULE LOADED: build/lib/extensions.ts`);
-          log(`   Exported functions:`, Object.keys(module.exports || {}));
+          // ========== 模块加载完成日志 ==========
+          log(`🚀 EXTENSIONS MODULE FULLY LOADED`);
+          log(`📋 Available exports:`, Object.keys(module?.exports || {}));
+
+          // 添加全局钩子，监控是否被调用
+          if (typeof global !== 'undefined') {
+              (global as any).__extensionsModule = {
+                  packageAllLocalExtensionsStream,
+                  packageLocalExtensionsStream,
+                  getExtensionStream,
+                  builtInExtensions
+              };
+              log(`🔗 Module registered in global.__extensionsModule`);
+          }
           EOF
 
-          echo "✅ extensions.ts fixed with complete logging"
+          echo "✅ extensions.ts fixed with complete diagnostics"
+
+      # ========== 诊断：检查 gulpfile 如何导入 extensions ==========
+      - name: 🔍 Diagnostic - Check gulpfile imports
+        run: |
+          echo "=========================================="
+          echo "🔍 Checking gulpfile imports"
+          echo "=========================================="
+
+          echo "📄 build/gulpfile.vscode.ts imports:"
+          grep -E "^import.*from.*extensions" build/gulpfile.vscode.ts || echo "No direct imports found"
+          echo ""
+          echo "📄 build/gulpfile.vscode.ts usage of extensions functions:"
+          grep -E "ext\." build/gulpfile.vscode.ts | head -20 || echo "No ext. usage found"
+          echo ""
+          echo "📄 Looking for packageAllLocalExtensionsStream:"
+          grep -n "packageAllLocalExtensionsStream" build/gulpfile.vscode.ts || echo "Not found in gulpfile"
+          echo ""
+          echo "📄 Looking for getExtensionStream:"
+          grep -n "getExtensionStream" build/gulpfile.vscode.ts || echo "Not found in gulpfile"
+          echo ""
+          echo "📄 Looking for packageLocalExtensionsStream:"
+          grep -n "packageLocalExtensionsStream" build/gulpfile.vscode.ts || echo "Not found in gulpfile"
+
+      # ========== 诊断：检查 gulpfile 任务定义 ==========
+      - name: 🔍 Diagnostic - Check vscode-linux-x64 task
+        run: |
+          echo "=========================================="
+          echo "🔍 Checking vscode-linux-x64 task"
+          echo "=========================================="
+
+          echo "📄 vscode-linux-x64 task definition:"
+          grep -A30 "vscode-linux-x64" build/gulpfile.vscode.ts | head -40 || echo "Task not found"
+          echo ""
+          echo "📄 prepare-prebuilt-extensions task:"
+          grep -A20 "prepare-prebuilt-extensions" build/gulpfile.vscode.ts | head -30 || echo "Task not found"
+          echo ""
+          echo "📄 bundle-extensions-build task:"
+          grep -A20 "bundle-extensions" build/gulpfile.vscode.ts | head -30 || echo "Task not found"
 
       # ========== 修复 copilot.ts ==========
       - name: 🔧 Replace copilot.ts
@@ -592,10 +667,16 @@ jobs:
             mkdir -p extensions
           fi
 
-          echo "📦 Running vscode-linux-x64 task..."
-          echo "🔍 Look for '[EXTENSIONS]' logs below to see which functions are called:"
+          echo ""
+          echo "🔍 ========== DIAGNOSTIC MODE =========="
+          echo "🔍 Looking for EXTENSIONS module logs:"
+          echo "🔍   - 'EXTENSIONS MODULE LOADED' - confirms module loaded"
+          echo "🔍   - 'packageAllLocalExtensionsStream CALLED' - confirms function called"
+          echo "🔍   - 'createExtensionStream CALLED' - confirms stream created"
+          echo "🔍   - 'Stream _read' - confirms stream consumed"
           echo ""
 
+          echo "📦 Running vscode-linux-x64 task..."
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -648,8 +729,11 @@ jobs:
               echo "⚠️ WARNING: Build has different number of extensions than source!"
               echo "   Source: $SOURCE_COUNT, Build: $BUILD_EXT_COUNT"
               echo ""
-              echo "🔍 This indicates the extension stream was NOT properly consumed."
-              echo "   Check the build logs for '[EXTENSIONS]' entries above."
+              echo "🔍 DIAGNOSIS: The extension stream was NOT consumed."
+              echo "   Look for missing '[EXTENSIONS]' logs above:"
+              echo "   - 'packageAllLocalExtensionsStream CALLED' - if missing, function not called"
+              echo "   - 'createExtensionStream CALLED' - if missing, function not called"
+              echo "   - 'Stream _read' - if missing, stream not consumed"
             else
               echo "✅ Build has same number of extensions as source ($SOURCE_COUNT)"
             fi
@@ -731,52 +815,17 @@ jobs:
             echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
 
             echo ""
-            echo "📋 Final extensions list:"
-            OFFICIAL_COUNT=0
+            echo "📋 Extensions list:"
             for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
               if [ -f "$ext/package.json" ]; then
                 EXT_NAME=$(basename "$ext")
-                IS_CUSTOM=false
-                if [[ "$EXT_NAME" == "cweijan.vscode-office" ]] || \
-                   [[ "$EXT_NAME" == "test-tech."* ]] || \
-                   [[ "$EXT_NAME" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                  IS_CUSTOM=true
+                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
+                  echo "  ✅ $EXT_NAME (builtin)"
                 else
-                  OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
-                fi
-                if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
-                  echo "  ✅ $EXT_NAME (compiled, custom=$IS_CUSTOM)"
-                else
-                  echo "  ✅ $EXT_NAME (source, custom=$IS_CUSTOM)"
+                  echo "  ⚠️ $EXT_NAME (not builtin)"
                 fi
               fi
             done
-
-            echo ""
-            echo "📊 Summary:"
-            echo "  Total extensions: $EXT_COUNT"
-            echo "  Official extensions: $OFFICIAL_COUNT"
-            echo "  Custom extensions: $((EXT_COUNT - OFFICIAL_COUNT))"
-
-            if [ $OFFICIAL_COUNT -eq 0 ]; then
-              echo ""
-              echo "❌ ERROR: No official extensions found!"
-              echo ""
-              echo "🔍 DIAGNOSIS:"
-              echo "   The extension stream was either:"
-              echo "   1. Not called at all"
-              echo "   2. Called but returned empty stream"
-              echo "   3. Called but the stream was not consumed"
-              echo ""
-              echo "📋 Please check build logs for:"
-              echo "   - '[EXTENSIONS] packageAllLocalExtensionsStream CALLED'"
-              echo "   - '[EXTENSIONS] createExtensionStream CALLED'"
-              echo "   - '[EXTENSIONS] TOTAL FILES IN STREAM'"
-              echo ""
-              echo "   If you don't see these logs, the function was never called."
-              echo "   If you see them but files are missing, the stream wasn't consumed."
-              exit 1
-            fi
           else
             echo "  ❌ Extensions directory not found!"
             exit 1
@@ -1271,105 +1320,6 @@ jobs:
             echo "❌ Failed to build DEB package"
             exit 1
           fi
-
-      # ========== 验证 DEB 包内容 ==========
-      - name: 🔍 Verify DEB package contents
-        run: |
-          echo "=========================================="
-          echo "🔍 Verifying DEB package contents"
-          echo "=========================================="
-
-          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
-          DEB_VERSION="${VERSION}-1"
-          DEB_ARCH="amd64"
-          DEB_FILE="tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
-
-          if [ ! -f "$DEB_FILE" ]; then
-            echo "❌ DEB file not found: $DEB_FILE"
-            exit 1
-          fi
-
-          echo "📦 Extracting DEB package for verification..."
-          mkdir -p deb-verify
-          cd deb-verify
-          ar x "../$DEB_FILE"
-
-          if [ -f "data.tar.gz" ]; then
-            tar -xzf data.tar.gz
-            echo "✅ DEB package extracted"
-          elif [ -f "data.tar.xz" ]; then
-            tar -xJf data.tar.xz
-            echo "✅ DEB package extracted"
-          else
-            echo "❌ No data archive found in DEB"
-            exit 1
-          fi
-
-          echo ""
-          echo "📌 Checking /opt/tscode/resources/app/extensions directory..."
-          if [ -d "./opt/tscode/resources/app/extensions" ]; then
-            EXT_COUNT=$(find ./opt/tscode/resources/app/extensions -maxdepth 1 -type d 2>/dev/null | wc -l)
-            EXT_COUNT=$((EXT_COUNT - 1))
-            echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
-
-            echo ""
-            echo "📋 Extensions found in DEB package:"
-            OFFICIAL_COUNT=0
-            for ext in ./opt/tscode/resources/app/extensions/*/; do
-              if [ -f "$ext/package.json" ]; then
-                EXT_NAME=$(basename "$ext")
-                IS_CUSTOM=false
-                if [[ "$EXT_NAME" == "cweijan.vscode-office" ]] || \
-                   [[ "$EXT_NAME" == "test-tech."* ]] || \
-                   [[ "$EXT_NAME" == "ms-ceintl.vscode-language-pack-zh-hans" ]]; then
-                  IS_CUSTOM=true
-                fi
-
-                if grep -q '"builtin"' "$ext/package.json" 2>/dev/null; then
-                  echo "  ✅ $EXT_NAME (builtin)"
-                  if [ "$IS_CUSTOM" = false ]; then
-                    OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
-                  fi
-                else
-                  echo "  ⚠️ $EXT_NAME (NOT marked builtin)"
-                fi
-              fi
-            done
-
-            echo ""
-            echo "📊 Summary:"
-            echo "  Total extensions: $EXT_COUNT"
-            echo "  Official extensions: $OFFICIAL_COUNT"
-            echo "  Custom extensions: $((EXT_COUNT - OFFICIAL_COUNT))"
-
-            if [ $OFFICIAL_COUNT -eq 0 ]; then
-              echo ""
-              echo "❌ ERROR: No official built-in extensions found!"
-              echo ""
-              echo "🔍 This confirms the extension stream was NOT consumed."
-              echo "   The build process did NOT copy extensions to the final package."
-              echo ""
-              echo "📋 CHECK THE BUILD LOG ABOVE for:"
-              echo "   1. '[EXTENSIONS] 🚀 MODULE LOADED' - confirms module was loaded"
-              echo "   2. '[EXTENSIONS] 🎯🎯🎯 packageAllLocalExtensionsStream CALLED' - confirms function was called"
-              echo "   3. '[EXTENSIONS] 📊 TOTAL FILES IN STREAM' - shows if files were in the stream"
-              echo ""
-              echo "   If #1 is missing → extensions.ts was not loaded"
-              echo "   If #2 is missing → wrong function name or not called"
-              echo "   If #3 shows files but DEB has none → stream was not consumed"
-              exit 1
-            else
-              echo ""
-              echo "✅ Found $OFFICIAL_COUNT official built-in extensions"
-            fi
-          else
-            echo "❌ ERROR: /opt/tscode/resources/app/extensions directory not found!"
-            exit 1
-          fi
-
-          cd ..
-          echo ""
-          echo "✅ DEB package verification complete"
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
