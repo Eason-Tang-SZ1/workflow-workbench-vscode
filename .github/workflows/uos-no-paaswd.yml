@@ -676,10 +676,13 @@ jobs:
           export VSCODE_PASSWORD_STORE=basic
           export ELECTRON_PASSWORD_STORE=basic
 
-          # 用户目录
-          export VSCODE_APPDATA="$HOME/.tscode"
-          export VSCODE_EXTENSIONS="$HOME/.tscode/extensions"
-          mkdir -p "$VSCODE_EXTENSIONS" 2>/dev/null || true
+          # 用户数据目录 - 使用 XDG 标准位置
+          export VSCODE_APPDATA="$HOME/.local/share/tscode"
+          export VSCODE_EXTENSIONS_DIR="$HOME/.tscode/extensions"
+
+          # 创建目录
+          mkdir -p "$VSCODE_APPDATA" 2>/dev/null || true
+          mkdir -p "$VSCODE_EXTENSIONS_DIR" 2>/dev/null || true
 
           # 系统扩展目录（内置扩展）
           export VSCODE_SYSTEM_EXTENSIONS="$SCRIPT_DIR/resources/app/extensions"
@@ -691,7 +694,7 @@ jobs:
               --disable-gpu \
               --disable-crash-reporter \
               --password-store="basic" \
-              --extensions-dir="$VSCODE_EXTENSIONS" \
+              --extensions-dir="$VSCODE_EXTENSIONS_DIR" \
               --user-data-dir="$VSCODE_APPDATA" \
               --builtin-extensions-dir="$VSCODE_SYSTEM_EXTENSIONS" \
               "$@"
@@ -1064,6 +1067,7 @@ jobs:
                           USER_NAME=$(basename "$USER_HOME")
                           echo "  📌 Processing user: $USER_NAME"
 
+                          # 只创建 extensions 目录，不创建其他目录
                           TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
                           mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
 
@@ -1083,7 +1087,6 @@ jobs:
                               USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
                               if [ -n "$USER_OWNER" ]; then
                                   chown -R "$USER_OWNER" "$TSC_EXT_DIR" 2>/dev/null || true
-                                  chown -R "$USER_OWNER" "$USER_HOME/.tscode" 2>/dev/null || true
                               fi
                           fi
                           echo "    ✅ Custom extensions installed for $USER_NAME"
@@ -1127,6 +1130,7 @@ jobs:
           echo ""
           echo "📁 System extensions (built-in): /opt/tscode/resources/app/extensions/"
           echo "📂 User extensions directory: ~/.tscode/extensions/"
+          echo "📂 User data directory: ~/.local/share/tscode/"
           echo ""
           echo "📦 Extension types:"
           echo "   System (built-in):  /opt/tscode/resources/app/extensions/"
@@ -1152,11 +1156,12 @@ jobs:
           echo "TSCode is being removed..."
           echo "=========================================="
           echo ""
-          echo "📁 User data preserved at: ~/.tscode/"
+          echo "📁 User data preserved at: ~/.local/share/tscode/"
           echo "📦 Extensions preserved at: ~/.tscode/extensions/"
           echo ""
           echo "To completely remove user data:"
           echo "  rm -rf ~/.tscode"
+          echo "  rm -rf ~/.local/share/tscode"
           echo "=========================================="
           exit 0
           PRERMEOF
@@ -1320,10 +1325,10 @@ jobs:
           echo "   - Desktop entry in application menu"
           echo "   - /usr/bin/tscode is a wrapper script (not a symlink)"
           echo ""
-          echo "📂 Extension directories:"
+          echo "📂 Directory structure:"
           echo "   System (built-in): /opt/tscode/resources/app/extensions/"
-          echo "   User (custom):     ~/.tscode/extensions/"
-          echo "   User (installed):  ~/.tscode/extensions/"
+          echo "   User extensions:   ~/.tscode/extensions/ (only this directory)"
+          echo "   User data:         ~/.local/share/tscode/"
           echo ""
           echo "💡 Extensions persist across reinstallation"
           echo "==========================================="
@@ -1343,9 +1348,10 @@ jobs:
             echo "  - Run: tscode (no password)"
             echo "  - Find in application menu: TSCode"
             echo ""
-            echo "📂 Extension directories:"
-            echo "  System (built-in): /opt/tscode/resources/app/extensions/"
-            echo "  User (custom + installed): ~/.tscode/extensions/"
+            echo "📂 Directory structure:"
+            echo "  System extensions: /opt/tscode/resources/app/extensions/"
+            echo "  User extensions:   ~/.tscode/extensions/ (only this)"
+            echo "  User data:         ~/.local/share/tscode/"
             echo ""
             echo "✅ Extension verification:"
             echo "  - All critical extensions present in DEB package"
