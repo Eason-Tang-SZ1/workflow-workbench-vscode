@@ -111,9 +111,11 @@ jobs:
           import * as fs from 'fs';
           import * as path from 'path';
           import { fileURLToPath } from 'url';
+          import { createRequire } from 'module';
 
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = path.dirname(__filename);
+          const require = createRequire(import.meta.url);
 
           function log(msg: string, data?: any) {
               const timestamp = new Date().toISOString();
@@ -216,20 +218,20 @@ jobs:
               const extensions = getLocalExtensions();
               log(`📦 Processing ${extensions.length} extensions`);
 
-              // 正确导入 vinyl - 使用 import 动态导入
-              // 在 ES module 中使用 createRequire 或者直接 import
+              // 使用 createRequire 加载 vinyl
               let Vinyl: any;
               try {
-                  // 尝试使用 require (在 ES module 中可用)
-                  Vinyl = require('vinyl');
-                  // 检查是否需要访问 .File 属性
+                  const vinylModule = require('vinyl');
+                  // vinyl 可能导出为 { default: ... } 或直接是构造函数
+                  Vinyl = vinylModule.default || vinylModule;
+                  // 检查是否需要 .File
                   if (Vinyl.File) {
                       Vinyl = Vinyl.File;
                   }
-                  log(`📦 Vinyl loaded: ${typeof Vinyl}`);
+                  log(`📦 Vinyl loaded successfully, type: ${typeof Vinyl}`);
+                  log(`📦 Vinyl constructor: ${Vinyl.toString().substring(0, 50)}...`);
               } catch (e) {
                   log(`❌ Failed to load vinyl: ${e.message}`);
-                  // 返回空流
                   const emptyStream = new Readable({ objectMode: true });
                   emptyStream._read = function() { this.push(null); };
                   return emptyStream;
@@ -251,7 +253,7 @@ jobs:
                               const content = fs.readFileSync(filePath);
                               const stat = fs.statSync(filePath);
 
-                              // 使用 Vinyl 构造函数
+                              // 创建 Vinyl 文件
                               const file = new Vinyl({
                                   cwd: ext.path,
                                   base: ext.path,
@@ -446,7 +448,7 @@ jobs:
           log(`✅ EXTENSIONS MODULE FULLY LOADED (Official Source Build Mode)`);
           EOF
 
-          echo "✅ extensions.ts fixed (vinyl import fix)"
+          echo "✅ extensions.ts fixed (with createRequire)"
 
       # ========== 修复 copilot.ts ==========
       - name: 🔧 Replace copilot.ts
@@ -524,7 +526,6 @@ jobs:
 
       - name: ⚙️ Set env
         run: |
-          # 禁用官方预构建扩展下载，使用源码构建
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
@@ -584,7 +585,7 @@ jobs:
 
           echo "📦 Running vscode-linux-x64 task..."
           echo "🔍 Official extensions built from source"
-          echo "🔍 Custom extensions will be copied after build"
+          echo "🔍 Custom extensions from repo will be copied after build"
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
 
           echo ""
@@ -710,8 +711,13 @@ jobs:
 
             if [ $OFFICIAL_COUNT -eq 0 ]; then
               echo ""
-              echo "⚠️ WARNING: No official extensions found!"
+              echo "⚠️ WARNING: No official extensions found in build!"
               echo "   Check the build logs for vinyl errors."
+              echo ""
+              echo "🔍 Look for these logs:"
+              echo "   - '[EXT] 📦 Vinyl loaded successfully'"
+              echo "   - '[EXT] 📊 TOTAL FILES'"
+              echo "   - '[EXT] VINYL OBJECTS'"
             fi
           else
             echo "  ❌ Extensions directory not found!"
