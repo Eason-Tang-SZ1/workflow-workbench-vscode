@@ -525,6 +525,10 @@ jobs:
                   # 解压 VSIX
                   unzip -q "$vsix_file" -d /tmp/extract-vsix-$vsix_name 2>/dev/null
 
+                  # 调试：显示解压后的内容
+                  echo "    📋 Extracted contents:"
+                  ls -la /tmp/extract-vsix-$vsix_name/ | head -20
+
                   # 检查解压后的结构
                   if [ -d "/tmp/extract-vsix-$vsix_name/extension" ]; then
                     # VSIX 解压后通常在 extension 目录中
@@ -536,13 +540,34 @@ jobs:
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (from root)"
-                  elif [ "$(ls -A /tmp/extract-vsix-$vsix_name 2>/dev/null)" ]; then
-                    # 其他情况，复制所有内容
+                  elif [ -d "/tmp/extract-vsix-$vsix_name/contents" ]; then
+                    # 有些 VSIX 使用 contents 目录
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
-                    cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
+                    cp -r /tmp/extract-vsix-$vsix_name/contents/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
+                    echo "    ✅ Extracted to: $vsix_name (from contents/ directory)"
+                  elif [ "$(ls -A /tmp/extract-vsix-$vsix_name 2>/dev/null)" ]; then
+                    # 其他情况，复制所有内容，但排除常见元数据文件
+                    mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
+                    # 复制所有内容，但排除 .vsixmanifest 等元数据文件
+                    find /tmp/extract-vsix-$vsix_name -maxdepth 1 -type f ! -name "*.vsixmanifest" ! -name "*.xml" ! -name "[Content_Types].xml" -exec cp {} "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/" \;
+                    # 复制子目录（排除 extension 和 contents，如果已处理）
+                    for subdir in /tmp/extract-vsix-$vsix_name/*/; do
+                      if [ -d "$subdir" ] && [ "$(basename "$subdir")" != "extension" ] && [ "$(basename "$subdir")" != "contents" ]; then
+                        cp -r "$subdir" "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
+                      fi
+                    done
                     echo "    ✅ Extracted to: $vsix_name (all contents)"
                   else
-                    echo "    ❌ Failed to extract: $vsix_name"
+                    echo "    ❌ Failed to extract: $vsix_name (empty directory)"
+                  fi
+
+                  # 验证提取结果
+                  if [ -d "$BUILD_DIR/resources/app/custom-extensions/$vsix_name" ] && [ -f "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/package.json" ]; then
+                    echo "    ✅ Verification: package.json found"
+                  else
+                    echo "    ⚠️ Verification: package.json NOT found, extension may not be valid"
+                    echo "    📋 Contents of extracted directory:"
+                    ls -la "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/" 2>/dev/null || echo "    (empty)"
                   fi
 
                   # 清理临时解压目录
@@ -630,25 +655,35 @@ jobs:
           echo "📋 Custom extensions prepared in build:"
           if [ -d "$BUILD_DIR/resources/app/custom-extensions" ]; then
             echo "📂 Directory: $BUILD_DIR/resources/app/custom-extensions"
+
+            # 移除 .empty 文件（如果有实际扩展）
+            if [ "$(find "$BUILD_DIR/resources/app/custom-extensions" -mindepth 1 2>/dev/null | wc -l)" -gt 1 ]; then
+              rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
+            fi
+
             ls -la "$BUILD_DIR/resources/app/custom-extensions/" 2>/dev/null || echo "  (empty)"
 
             # 递归列出所有扩展
             echo ""
             echo "📦 Extensions found:"
+            EXT_COUNT=0
             for ext_dir in "$BUILD_DIR/resources/app/custom-extensions"/*/; do
-              if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
+              if [ -d "$ext_dir" ]; then
                 ext_name=$(basename "$ext_dir")
-                ext_version=$(grep -o '"version": *"[^"]*"' "$ext_dir/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
-                echo "  ✅ $ext_name (v$ext_version)"
+                if [ -f "$ext_dir/package.json" ]; then
+                  ext_version=$(grep -o '"version": *"[^"]*"' "$ext_dir/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
+                  ext_publisher=$(grep -o '"publisher": *"[^"]*"' "$ext_dir/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
+                  echo "  ✅ $ext_name (v$ext_version, $ext_publisher)"
+                  EXT_COUNT=$((EXT_COUNT + 1))
+                else
+                  echo "  ⚠️ $ext_name (no package.json)"
+                fi
               fi
             done
 
-            EXT_COUNT=$(find "$BUILD_DIR/resources/app/custom-extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/custom-extensions" 2>/dev/null | wc -l | tr -d ' ')
-            FILE_COUNT=$(find "$BUILD_DIR/resources/app/custom-extensions" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
             echo ""
             echo "📊 Summary:"
-            echo "   Subdirectories (extensions): $EXT_COUNT"
-            echo "   Files: $FILE_COUNT"
+            echo "   Valid extensions: $EXT_COUNT"
           else
             echo "  ❌ custom-extensions directory not found!"
           fi
