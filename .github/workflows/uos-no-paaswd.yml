@@ -14,7 +14,7 @@ on:
       custom_extension_repo:
         description: 'Custom extension repository (optional)'
         required: false
-        default: ''
+        default: 'https://github.com/AI-Testing-Workbench/test-workbench-vsix.git'
       custom_extension_branch:
         description: 'Custom extension branch'
         required: false
@@ -46,7 +46,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian rsync
+            dpkg-dev fakeroot lintian rsync jq
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -633,9 +633,6 @@ jobs:
             echo "  ❌ custom-extensions directory not found!"
           fi
 
-      # =============================================================
-      # 校验自定义扩展是否被正确复制
-      # =============================================================
       - name: 🔍 Verify custom extensions in build
         run: |
           echo "=========================================="
@@ -709,7 +706,6 @@ jobs:
           echo "   ms-ceintl*: $MS_CEINTL_COUNT"
           echo "   cweijan*: $CWEIJAN_COUNT"
 
-          # 如果有自定义扩展但目录为空，报错
           if [ "$EXT_COUNT" -eq 0 ] && [ "$FILE_COUNT" -eq 0 ]; then
             echo ""
             echo "⚠️ WARNING: custom-extensions directory is completely empty!"
@@ -1228,7 +1224,7 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本 - 复制预构建自定义扩展到用户目录并清理多余目录
+          # 创建 postinst 脚本
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
@@ -1265,17 +1261,14 @@ jobs:
 
           CUSTOM_EXT_DIR="/opt/tscode/resources/app/custom-extensions"
 
-          # 先检查目录是否存在以及内容
           echo "  📌 Checking custom extensions directory..."
           if [ -d "$CUSTOM_EXT_DIR" ]; then
               echo "  ✅ Custom extensions directory exists: $CUSTOM_EXT_DIR"
               echo "  📋 Contents:"
               ls -la "$CUSTOM_EXT_DIR" 2>/dev/null || echo "    (empty or inaccessible)"
 
-              # 移除 .empty 标记文件（如果有）
               rm -f "$CUSTOM_EXT_DIR/.empty" 2>/dev/null || true
 
-              # 获取所有子目录（扩展）
               EXT_DIRS=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" 2>/dev/null)
               EXT_COUNT=$(echo "$EXT_DIRS" | grep -v "^$" | wc -l | tr -d ' ')
 
@@ -1295,18 +1288,15 @@ jobs:
                           USER_NAME=$(basename "$USER_HOME")
                           echo "  📌 Processing user: $USER_NAME"
 
-                          # 创建 extensions 目录
                           TSC_EXT_DIR="$USER_HOME/.tscode/extensions"
                           mkdir -p "$TSC_EXT_DIR" 2>/dev/null || true
                           echo "    📂 Target directory: $TSC_EXT_DIR"
 
-                          # 复制每个自定义扩展（只复制子目录）
                           EXT_COPIED=0
                           for ext in "$CUSTOM_EXT_DIR"/*/; do
                               if [ -d "$ext" ]; then
                                   ext_name=$(basename "$ext")
                                   echo "      ✅ Copying: $ext_name"
-                                  # 如果目标已存在，先删除
                                   rm -rf "$TSC_EXT_DIR/$ext_name" 2>/dev/null || true
                                   cp -r "$ext" "$TSC_EXT_DIR/" 2>/dev/null || true
                                   if [ -d "$TSC_EXT_DIR/$ext_name" ]; then
@@ -1318,7 +1308,6 @@ jobs:
                               fi
                           done
 
-                          # 设置正确的所有权
                           if [ "$USER_HOME" != "/root" ]; then
                               USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
                               if [ -n "$USER_OWNER" ]; then
@@ -1331,8 +1320,6 @@ jobs:
                   done
               else
                   echo "  ℹ️ No custom extensions found in $CUSTOM_EXT_DIR"
-                  echo "  📋 Directory contents:"
-                  ls -la "$CUSTOM_EXT_DIR" 2>/dev/null || echo "    (empty)"
               fi
           else
               echo "  ❌ Custom extensions directory not found: $CUSTOM_EXT_DIR"
@@ -1351,11 +1338,9 @@ jobs:
                   if [ -d "$TSC_DIR" ]; then
                       echo "  📌 Cleaning: $TSC_DIR"
 
-                      # 遍历所有项目
                       for item in "$TSC_DIR"/*; do
                           if [ -d "$item" ]; then
                               item_name=$(basename "$item")
-                              # 只保留 extensions 目录，删除其他目录
                               if [ "$item_name" != "extensions" ]; then
                                   echo "    🗑️ Removing directory: $item_name"
                                   rm -rf "$item" 2>/dev/null || true
@@ -1363,10 +1348,8 @@ jobs:
                           fi
                       done
 
-                      # 确保 extensions 目录存在
                       mkdir -p "$TSC_DIR/extensions" 2>/dev/null || true
 
-                      # 设置正确的所有权
                       if [ "$USER_HOME" != "/root" ]; then
                           USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
                           if [ -n "$USER_OWNER" ]; then
@@ -1412,14 +1395,6 @@ jobs:
           echo "📂 User extensions directory: ~/.tscode/extensions/"
           echo "📂 User data directory: ~/.local/share/tscode/"
           echo ""
-          echo "📦 Extension types:"
-          echo "   System (built-in):  /opt/tscode/resources/app/extensions/"
-          echo "   User (custom):      ~/.tscode/extensions/ (prebuilt custom)"
-          echo "   User (installed):   ~/.tscode/extensions/ (from VS Code market)"
-          echo ""
-          echo "💡 Only 'extensions' directory is kept in ~/.tscode/"
-          echo "💡 Other directories (user-data, etc.) are automatically cleaned"
-          echo ""
           echo "🚀 Run 'tscode' to start (no password required)"
           echo "📂 Desktop entry available in application menu"
           echo "=========================================="
@@ -1430,7 +1405,7 @@ jobs:
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
           # ============================================================
-          # 创建 prerm 脚本 - 不删除用户数据
+          # 创建 prerm 脚本
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
@@ -1465,9 +1440,6 @@ jobs:
             exit 1
           fi
 
-      # ============================================================
-      # 验证 DEB 包中的扩展完整性
-      # ============================================================
       - name: 🔍 Verify DEB package extensions
         run: |
           echo "=========================================="
@@ -1489,7 +1461,6 @@ jobs:
           cd /tmp/deb-verify
           ar x "$GITHUB_WORKSPACE/$DEB_FILE"
 
-          # 解压 data.tar.xz 或 data.tar.gz
           if [ -f "data.tar.xz" ]; then
             tar -xf data.tar.xz
           elif [ -f "data.tar.gz" ]; then
@@ -1516,7 +1487,6 @@ jobs:
             exit 1
           fi
 
-          # 获取扩展列表
           echo ""
           echo "📋 Extensions in DEB package:"
           echo "----------------------------------------"
@@ -1526,7 +1496,6 @@ jobs:
           echo "   Total extensions: $EXT_COUNT"
           echo ""
 
-          # 检查关键扩展
           echo ""
           echo "🔍 Checking critical extensions in DEB:"
           CRITICAL_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict"
@@ -1548,7 +1517,6 @@ jobs:
             exit 1
           fi
 
-          # 检查 @builtin 扩展
           echo ""
           echo "🔍 Checking @builtin extensions:"
           if [ -d "$EXT_DIR/@builtin" ]; then
@@ -1558,7 +1526,6 @@ jobs:
             echo "   ⚠️ @builtin directory not found (may be optional)"
           fi
 
-          # 检查扩展大小
           echo ""
           echo "📊 Extension directory size:"
           du -sh "$EXT_DIR"
@@ -1567,7 +1534,6 @@ jobs:
           echo "📊 Top 10 largest extensions:"
           du -sh "$EXT_DIR"/* 2>/dev/null | sort -hr | head -10
 
-          # 验证结果摘要
           echo ""
           echo "=========================================="
           echo "📊 DEB EXTENSION VERIFICATION SUMMARY"
@@ -1583,9 +1549,6 @@ jobs:
           echo ""
           echo "✅ DEB package extension verification completed!"
 
-      # ============================================================
-      # 最终验证 - 检查 DEB 包中是否包含自定义扩展并打印列表
-      # ============================================================
       - name: 🔍 Verify custom extensions in DEB package
         run: |
           echo "=========================================="
@@ -1607,7 +1570,6 @@ jobs:
           cd /tmp/deb-verify-custom
           ar x "$GITHUB_WORKSPACE/$DEB_FILE"
 
-          # 解压 data.tar.xz 或 data.tar.gz
           if [ -f "data.tar.xz" ]; then
             tar -xf data.tar.xz
           elif [ -f "data.tar.gz" ]; then
