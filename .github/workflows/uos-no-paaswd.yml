@@ -704,16 +704,17 @@ jobs:
             echo "✅ Found $EXT_COUNT prebuilt extension(s) in build"
           fi
 
-      - name: 🧹 Safe cleanup (preserve core extensions)
+      - name: 🧹 Deep cleanup (preserve runtime files)
         run: |
           echo "=========================================="
-          echo "🧹 Safe cleanup - Step by Step"
+          echo "🧹 Deep cleanup - preserving runtime files"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
           echo "📊 Before cleanup:"
           du -sh "$BUILD_DIR"
+          du -sh "$BUILD_DIR/resources/app" 2>/dev/null || true
 
           # 保护核心扩展不被删除
           echo ""
@@ -730,36 +731,100 @@ jobs:
 
           cd "$BUILD_DIR/resources/app"
 
+          # ============================================================
+          # 1. 删除非 Linux TestAgent 扩展
+          # ============================================================
           echo ""
-          echo "📌 Removing devDependencies..."
+          echo "📌 Removing non-Linux TestAgent extensions..."
+          rm -rf extensions/testagent-nodejs-tscode-darwin-arm64 2>/dev/null || true
+          rm -rf extensions/testagent-nodejs-tscode-win32-x64 2>/dev/null || true
+          rm -rf ../custom-extensions/testagent-nodejs-tscode-darwin-arm64 2>/dev/null || true
+          rm -rf ../custom-extensions/testagent-nodejs-tscode-win32-x64 2>/dev/null || true
+
+          # ============================================================
+          # 2. 删除不需要的扩展（copilot）
+          # ============================================================
+          echo ""
+          echo "📌 Removing unwanted extensions (copilot)..."
+          rm -rf extensions/copilot 2>/dev/null || true
+
+          # ============================================================
+          # 3. 删除扩展中的源代码（保留编译输出）
+          # ============================================================
+          echo ""
+          echo "📌 Removing source code from extensions..."
+          for ext in extensions/*/; do
+            if [ -d "$ext" ]; then
+              # 删除 src 目录
+              rm -rf "$ext/src" 2>/dev/null || true
+              # 删除 .ts 文件（保留 .d.ts）
+              find "$ext" -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+              # 删除 .map 文件
+              find "$ext" -name "*.map" -type f -delete 2>/dev/null || true
+              # 删除 test 目录
+              rm -rf "$ext/test" 2>/dev/null || true
+              rm -rf "$ext/tests" 2>/dev/null || true
+              rm -rf "$ext/__tests__" 2>/dev/null || true
+              # 删除 example 目录
+              rm -rf "$ext/example" 2>/dev/null || true
+              rm -rf "$ext/examples" 2>/dev/null || true
+            fi
+          done
+
+          # ============================================================
+          # 4. 清理 node_modules
+          # ============================================================
+          echo ""
+          echo "📌 Cleaning node_modules..."
+
+          # 删除 devDependencies
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          echo ""
-          echo "📌 Cleaning node_modules (safe)..."
+          # 删除源代码
           find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          # 删除文档
           find node_modules -name "*.md" -type f -delete 2>/dev/null || true
           find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
           find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          # 删除测试目录
           find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          # 删除示例目录
           find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
           find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          # 删除源映射
           find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+          # 删除 .git
           find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
+          # ============================================================
+          # 5. 删除开发工具包
+          # ============================================================
           echo ""
-          echo "📌 Removing unnecessary packages..."
+          echo "📌 Removing dev tools..."
           rm -rf node_modules/@types 2>/dev/null || true
           rm -rf node_modules/webpack 2>/dev/null || true
           rm -rf node_modules/rollup 2>/dev/null || true
           rm -rf node_modules/vite 2>/dev/null || true
           rm -rf node_modules/terser 2>/dev/null || true
+          rm -rf node_modules/eslint 2>/dev/null || true
+          rm -rf node_modules/prettier 2>/dev/null || true
+          rm -rf node_modules/typescript 2>/dev/null || true
+          rm -rf node_modules/@typescript-eslint 2>/dev/null || true
+          rm -rf node_modules/jest 2>/dev/null || true
+          rm -rf node_modules/mocha 2>/dev/null || true
+          rm -rf node_modules/chai 2>/dev/null || true
+          rm -rf node_modules/sinon 2>/dev/null || true
 
+          # ============================================================
+          # 6. 删除构建临时文件
+          # ============================================================
           echo ""
           echo "📌 Removing build temp..."
           rm -rf .cache 2>/dev/null || true
           rm -rf build 2>/dev/null || true
+          rm -rf *.tsbuildinfo 2>/dev/null || true
 
           cd -
 
@@ -779,6 +844,9 @@ jobs:
           echo ""
           echo "📊 After cleanup:"
           du -sh "$BUILD_DIR"
+          du -sh "$BUILD_DIR/resources/app" 2>/dev/null || true
+
+          echo "✅ Deep cleanup completed"
 
       - name: 📄 Create launcher and fix all issues
         run: |
