@@ -482,15 +482,22 @@ jobs:
           set -e
 
       - name: 📦 Download and prepare custom extensions
-        env:
-          CUSTOM_REPO: ${{ github.event.inputs.custom_extension_repo }}
-          CUSTOM_BRANCH: ${{ github.event.inputs.custom_extension_branch || 'main' }}
         run: |
           echo "=========================================="
           echo "📦 Downloading and preparing custom extensions"
           echo "=========================================="
-          echo "CUSTOM_REPO: $CUSTOM_REPO"
-          echo "CUSTOM_BRANCH: $CUSTOM_BRANCH"
+
+          # 直接从 github.event.inputs 读取
+          CUSTOM_REPO="${{ github.event.inputs.custom_extension_repo }}"
+          CUSTOM_BRANCH="${{ github.event.inputs.custom_extension_branch || 'main' }}"
+
+          echo "CUSTOM_REPO: [$CUSTOM_REPO]"
+          echo "CUSTOM_BRANCH: [$CUSTOM_BRANCH]"
+          echo "GITHUB_EVENT_NAME: $GITHUB_EVENT_NAME"
+
+          # 调试：打印整个 event 文件
+          echo "📋 Event payload:"
+          cat $GITHUB_EVENT_PATH | jq '.inputs' 2>/dev/null || cat $GITHUB_EVENT_PATH
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
@@ -498,7 +505,7 @@ jobs:
           mkdir -p "$BUILD_DIR/resources/app/custom-extensions"
 
           # 从工作流输入下载自定义扩展
-          if [ -n "$CUSTOM_REPO" ]; then
+          if [ -n "$CUSTOM_REPO" ] && [ "$CUSTOM_REPO" != "null" ]; then
             echo "📌 Cloning custom extension from: $CUSTOM_REPO"
             # 克隆到临时目录
             rm -rf /tmp/custom-ext-temp
@@ -536,22 +543,18 @@ jobs:
 
                   # 检查解压后的结构
                   if [ -d "/tmp/extract-vsix-$vsix_name/extension" ]; then
-                    # VSIX 解压后通常在 extension 目录中
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/extension/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (from extension/ directory)"
                   elif [ -f "/tmp/extract-vsix-$vsix_name/package.json" ]; then
-                    # 直接在根目录
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (from root)"
                   elif [ -d "/tmp/extract-vsix-$vsix_name/contents" ]; then
-                    # 有些 VSIX 使用 contents 目录
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/contents/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (from contents/ directory)"
                   elif [ "$(ls -A /tmp/extract-vsix-$vsix_name 2>/dev/null)" ]; then
-                    # 其他情况，复制所有内容
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (all contents)"
@@ -562,6 +565,8 @@ jobs:
                   # 验证提取结果
                   if [ -d "$BUILD_DIR/resources/app/custom-extensions/$vsix_name" ] && [ -f "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/package.json" ]; then
                     echo "    ✅ Verification: package.json found"
+                    # 移除 .empty 文件
+                    rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
                   else
                     echo "    ⚠️ Verification: package.json NOT found"
                   fi
@@ -578,6 +583,7 @@ jobs:
                     ext_name=$(basename "$ext_dir")
                     cp -r "$ext_dir" "$BUILD_DIR/resources/app/custom-extensions/"
                     echo "✅ Copied extension from directory: $ext_name"
+                    rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
                   fi
                 done
               fi
@@ -586,63 +592,8 @@ jobs:
             else
               echo "⚠️ Clone failed or empty"
             fi
-          elif [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
-            echo "📌 Copying local custom extensions..."
-
-            # 处理 local custom-extensions 目录中的 VSIX 文件
-            VSIX_FILES=$(find ./custom-extensions -name "*.vsix" -type f 2>/dev/null)
-            VSIX_COUNT=$(echo "$VSIX_FILES" | grep -v "^$" | wc -l | tr -d ' ')
-
-            if [ "$VSIX_COUNT" -gt 0 ]; then
-              echo "📦 Found $VSIX_COUNT VSIX file(s) locally"
-              for vsix_file in $VSIX_FILES; do
-                vsix_name=$(basename "$vsix_file" .vsix)
-                echo "  📌 Extracting local: $vsix_name"
-
-                mkdir -p /tmp/extract-vsix-$vsix_name
-                unzip -q "$vsix_file" -d /tmp/extract-vsix-$vsix_name 2>/dev/null
-
-                if [ -d "/tmp/extract-vsix-$vsix_name/extension" ]; then
-                  mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
-                  cp -r /tmp/extract-vsix-$vsix_name/extension/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
-                  echo "    ✅ Extracted local: $vsix_name"
-                elif [ -f "/tmp/extract-vsix-$vsix_name/package.json" ]; then
-                  mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
-                  cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
-                  echo "    ✅ Extracted local: $vsix_name"
-                fi
-
-                rm -rf /tmp/extract-vsix-$vsix_name
-              done
-            fi
-
-            # 复制普通目录扩展
-            for ext_dir in ./custom-extensions/*/; do
-              if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
-                ext_name=$(basename "$ext_dir")
-                if [ ! -d "$BUILD_DIR/resources/app/custom-extensions/$ext_name" ]; then
-                  cp -r "$ext_dir" "$BUILD_DIR/resources/app/custom-extensions/"
-                  echo "✅ Copied local extension directory: $ext_name"
-                fi
-              fi
-            done
-          elif [ -f "./my-extension.vsix" ]; then
-            echo "📌 Extracting VSIX: my-extension.vsix"
-            mkdir -p /tmp/extract-vsix
-            unzip -q ./my-extension.vsix -d /tmp/extract-vsix 2>/dev/null || true
-            if [ -d "/tmp/extract-vsix/extension" ]; then
-              EXT_NAME="my-extension"
-              mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME"
-              cp -r /tmp/extract-vsix/extension/* "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME/"
-              echo "✅ VSIX extracted: $EXT_NAME"
-            elif [ "$(ls -A /tmp/extract-vsix 2>/dev/null)" ]; then
-              cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
-              echo "✅ VSIX extracted"
-            fi
-            rm -rf /tmp/extract-vsix
           else
-            echo "ℹ️ No custom extensions provided"
-            touch "$BUILD_DIR/resources/app/custom-extensions/.empty"
+            echo "ℹ️ No custom extensions provided (CUSTOM_REPO is empty or null)"
           fi
 
           # 显示复制的内容
@@ -652,7 +603,7 @@ jobs:
             echo "📂 Directory: $BUILD_DIR/resources/app/custom-extensions"
 
             # 移除 .empty 文件（如果有实际扩展）
-            if [ "$(find "$BUILD_DIR/resources/app/custom-extensions" -mindepth 1 2>/dev/null | wc -l)" -gt 1 ]; then
+            if [ "$(find "$BUILD_DIR/resources/app/custom-extensions" -mindepth 1 -type d 2>/dev/null | wc -l)" -gt 0 ]; then
               rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
             fi
 
