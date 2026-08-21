@@ -1593,7 +1593,9 @@ jobs:
           path: |
             *.deb
             *.deb.sha256
-          retention-days: 30      - name: 📊 Build summary
+          retention-days: 30
+
+      - name: 📊 Build summary
         if: always()
         run: |
           echo "=========================================="
