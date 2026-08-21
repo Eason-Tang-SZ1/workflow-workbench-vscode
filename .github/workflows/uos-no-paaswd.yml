@@ -482,10 +482,15 @@ jobs:
           set -e
 
       - name: 📦 Download and prepare custom extensions
+        env:
+          CUSTOM_REPO: ${{ github.event.inputs.custom_extension_repo }}
+          CUSTOM_BRANCH: ${{ github.event.inputs.custom_extension_branch || 'main' }}
         run: |
           echo "=========================================="
           echo "📦 Downloading and preparing custom extensions"
           echo "=========================================="
+          echo "CUSTOM_REPO: $CUSTOM_REPO"
+          echo "CUSTOM_BRANCH: $CUSTOM_BRANCH"
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
@@ -493,13 +498,13 @@ jobs:
           mkdir -p "$BUILD_DIR/resources/app/custom-extensions"
 
           # 从工作流输入下载自定义扩展
-          if [ -n "${{ github.event.inputs.custom_extension_repo }}" ]; then
-            echo "📌 Cloning custom extension from: ${{ github.event.inputs.custom_extension_repo }}"
+          if [ -n "$CUSTOM_REPO" ]; then
+            echo "📌 Cloning custom extension from: $CUSTOM_REPO"
             # 克隆到临时目录
             rm -rf /tmp/custom-ext-temp
             git clone --depth 1 \
-              --branch ${{ github.event.inputs.custom_extension_branch || 'main' }} \
-              "${{ github.event.inputs.custom_extension_repo }}" \
+              --branch "$CUSTOM_BRANCH" \
+              "$CUSTOM_REPO" \
               /tmp/custom-ext-temp 2>/dev/null || true
 
             if [ -d "/tmp/custom-ext-temp" ] && [ "$(ls -A /tmp/custom-ext-temp 2>/dev/null)" ]; then
@@ -546,16 +551,9 @@ jobs:
                     cp -r /tmp/extract-vsix-$vsix_name/contents/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (from contents/ directory)"
                   elif [ "$(ls -A /tmp/extract-vsix-$vsix_name 2>/dev/null)" ]; then
-                    # 其他情况，复制所有内容，但排除常见元数据文件
+                    # 其他情况，复制所有内容
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
-                    # 复制所有内容，但排除 .vsixmanifest 等元数据文件
-                    find /tmp/extract-vsix-$vsix_name -maxdepth 1 -type f ! -name "*.vsixmanifest" ! -name "*.xml" ! -name "[Content_Types].xml" -exec cp {} "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/" \;
-                    # 复制子目录（排除 extension 和 contents，如果已处理）
-                    for subdir in /tmp/extract-vsix-$vsix_name/*/; do
-                      if [ -d "$subdir" ] && [ "$(basename "$subdir")" != "extension" ] && [ "$(basename "$subdir")" != "contents" ]; then
-                        cp -r "$subdir" "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
-                      fi
-                    done
+                    cp -r /tmp/extract-vsix-$vsix_name/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
                     echo "    ✅ Extracted to: $vsix_name (all contents)"
                   else
                     echo "    ❌ Failed to extract: $vsix_name (empty directory)"
@@ -565,9 +563,7 @@ jobs:
                   if [ -d "$BUILD_DIR/resources/app/custom-extensions/$vsix_name" ] && [ -f "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/package.json" ]; then
                     echo "    ✅ Verification: package.json found"
                   else
-                    echo "    ⚠️ Verification: package.json NOT found, extension may not be valid"
-                    echo "    📋 Contents of extracted directory:"
-                    ls -la "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/" 2>/dev/null || echo "    (empty)"
+                    echo "    ⚠️ Verification: package.json NOT found"
                   fi
 
                   # 清理临时解压目录
@@ -624,7 +620,6 @@ jobs:
             for ext_dir in ./custom-extensions/*/; do
               if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
                 ext_name=$(basename "$ext_dir")
-                # 检查是否已经通过 VSIX 提取
                 if [ ! -d "$BUILD_DIR/resources/app/custom-extensions/$ext_name" ]; then
                   cp -r "$ext_dir" "$BUILD_DIR/resources/app/custom-extensions/"
                   echo "✅ Copied local extension directory: $ext_name"
@@ -672,8 +667,7 @@ jobs:
                 ext_name=$(basename "$ext_dir")
                 if [ -f "$ext_dir/package.json" ]; then
                   ext_version=$(grep -o '"version": *"[^"]*"' "$ext_dir/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
-                  ext_publisher=$(grep -o '"publisher": *"[^"]*"' "$ext_dir/package.json" 2>/dev/null | head -1 | cut -d'"' -f4 || echo "unknown")
-                  echo "  ✅ $ext_name (v$ext_version, $ext_publisher)"
+                  echo "  ✅ $ext_name (v$ext_version)"
                   EXT_COUNT=$((EXT_COUNT + 1))
                 else
                   echo "  ⚠️ $ext_name (no package.json)"
