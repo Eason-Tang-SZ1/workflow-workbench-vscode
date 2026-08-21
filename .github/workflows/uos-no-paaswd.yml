@@ -493,11 +493,6 @@ jobs:
 
           echo "CUSTOM_REPO: [$CUSTOM_REPO]"
           echo "CUSTOM_BRANCH: [$CUSTOM_BRANCH]"
-          echo "GITHUB_EVENT_NAME: $GITHUB_EVENT_NAME"
-
-          # 调试：打印整个 event 文件
-          echo "📋 Event payload:"
-          cat $GITHUB_EVENT_PATH | jq '.inputs' 2>/dev/null || cat $GITHUB_EVENT_PATH
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
@@ -507,7 +502,6 @@ jobs:
           # 从工作流输入下载自定义扩展
           if [ -n "$CUSTOM_REPO" ] && [ "$CUSTOM_REPO" != "null" ]; then
             echo "📌 Cloning custom extension from: $CUSTOM_REPO"
-            # 克隆到临时目录
             rm -rf /tmp/custom-ext-temp
             git clone --depth 1 \
               --branch "$CUSTOM_BRANCH" \
@@ -529,19 +523,19 @@ jobs:
                 # 提取每个 VSIX 文件
                 for vsix_file in $VSIX_FILES; do
                   vsix_name=$(basename "$vsix_file" .vsix)
+
+                  # 只处理 Linux 版本和特定扩展（非跨平台）
+                  # 跳过 darwin (macOS) 和 win32 (Windows) 版本
+                  if [[ "$vsix_name" == *"darwin"* ]] || [[ "$vsix_name" == *"win32"* ]]; then
+                    echo "  ⏭️ Skipping non-Linux: $vsix_name"
+                    continue
+                  fi
+
                   echo "  📌 Extracting: $vsix_name"
 
-                  # 创建临时解压目录
                   mkdir -p /tmp/extract-vsix-$vsix_name
-
-                  # 解压 VSIX
                   unzip -q "$vsix_file" -d /tmp/extract-vsix-$vsix_name 2>/dev/null
 
-                  # 调试：显示解压后的内容
-                  echo "    📋 Extracted contents:"
-                  ls -la /tmp/extract-vsix-$vsix_name/ | head -20
-
-                  # 检查解压后的结构
                   if [ -d "/tmp/extract-vsix-$vsix_name/extension" ]; then
                     mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$vsix_name"
                     cp -r /tmp/extract-vsix-$vsix_name/extension/* "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/"
@@ -562,22 +556,18 @@ jobs:
                     echo "    ❌ Failed to extract: $vsix_name (empty directory)"
                   fi
 
-                  # 验证提取结果
                   if [ -d "$BUILD_DIR/resources/app/custom-extensions/$vsix_name" ] && [ -f "$BUILD_DIR/resources/app/custom-extensions/$vsix_name/package.json" ]; then
                     echo "    ✅ Verification: package.json found"
-                    # 移除 .empty 文件
                     rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
                   else
                     echo "    ⚠️ Verification: package.json NOT found"
                   fi
 
-                  # 清理临时解压目录
                   rm -rf /tmp/extract-vsix-$vsix_name
                 done
               else
                 echo "ℹ️ No VSIX files found in repository"
 
-                # 检查是否有其他扩展目录（包含 package.json）
                 for ext_dir in /tmp/custom-ext-temp/*/; do
                   if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
                     ext_name=$(basename "$ext_dir")
@@ -602,16 +592,14 @@ jobs:
           if [ -d "$BUILD_DIR/resources/app/custom-extensions" ]; then
             echo "📂 Directory: $BUILD_DIR/resources/app/custom-extensions"
 
-            # 移除 .empty 文件（如果有实际扩展）
             if [ "$(find "$BUILD_DIR/resources/app/custom-extensions" -mindepth 1 -type d 2>/dev/null | wc -l)" -gt 0 ]; then
               rm -f "$BUILD_DIR/resources/app/custom-extensions/.empty" 2>/dev/null || true
             fi
 
             ls -la "$BUILD_DIR/resources/app/custom-extensions/" 2>/dev/null || echo "  (empty)"
 
-            # 递归列出所有扩展
             echo ""
-            echo "📦 Extensions found:"
+            echo "📦 Extensions found (Linux only):"
             EXT_COUNT=0
             for ext_dir in "$BUILD_DIR/resources/app/custom-extensions"/*/; do
               if [ -d "$ext_dir" ]; then
@@ -628,7 +616,7 @@ jobs:
 
             echo ""
             echo "📊 Summary:"
-            echo "   Valid extensions: $EXT_COUNT"
+            echo "   Valid extensions (Linux only): $EXT_COUNT"
           else
             echo "  ❌ custom-extensions directory not found!"
           fi
