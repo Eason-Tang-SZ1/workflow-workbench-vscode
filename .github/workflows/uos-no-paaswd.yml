@@ -495,24 +495,74 @@ jobs:
           # 从工作流输入下载自定义扩展
           if [ -n "${{ github.event.inputs.custom_extension_repo }}" ]; then
             echo "📌 Cloning custom extension from: ${{ github.event.inputs.custom_extension_repo }}"
+            # 克隆到临时目录
+            rm -rf /tmp/custom-ext-temp
             git clone --depth 1 \
               --branch ${{ github.event.inputs.custom_extension_branch || 'main' }} \
               "${{ github.event.inputs.custom_extension_repo }}" \
               /tmp/custom-ext-temp 2>/dev/null || true
+
             if [ -d "/tmp/custom-ext-temp" ] && [ "$(ls -A /tmp/custom-ext-temp 2>/dev/null)" ]; then
-              cp -r /tmp/custom-ext-temp/* "$BUILD_DIR/resources/app/custom-extensions/"
-              echo "✅ Custom extension cloned"
+              # 检查是否包含扩展子目录（如包含 package.json）
+              if [ -f "/tmp/custom-ext-temp/package.json" ]; then
+                # 如果是单个扩展，直接复制到 custom-extensions
+                EXT_NAME=$(basename "${{ github.event.inputs.custom_extension_repo }}" .git)
+                mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME"
+                cp -r /tmp/custom-ext-temp/* "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME/"
+                echo "✅ Custom extension copied to: $EXT_NAME"
+              else
+                # 如果包含多个扩展，复制所有子目录
+                for ext_dir in /tmp/custom-ext-temp/*/; do
+                  if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
+                    ext_name=$(basename "$ext_dir")
+                    cp -r "$ext_dir" "$BUILD_DIR/resources/app/custom-extensions/"
+                    echo "✅ Copied extension: $ext_name"
+                  fi
+                done
+              fi
               rm -rf /tmp/custom-ext-temp
+            else
+              echo "⚠️ Clone failed or empty"
             fi
           elif [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
             echo "📌 Copying local custom extensions..."
-            cp -r ./custom-extensions/* "$BUILD_DIR/resources/app/custom-extensions/"
-            echo "✅ Local custom extensions copied"
+            for ext_dir in ./custom-extensions/*/; do
+              if [ -d "$ext_dir" ] && [ -f "$ext_dir/package.json" ]; then
+                ext_name=$(basename "$ext_dir")
+                cp -r "$ext_dir" "$BUILD_DIR/resources/app/custom-extensions/"
+                echo "✅ Copied local extension: $ext_name"
+              fi
+            done
+            # 也复制可能存在的 .vsix 文件
+            for vsix_file in ./custom-extensions/*.vsix; do
+              if [ -f "$vsix_file" ]; then
+                echo "📌 Found VSIX: $(basename "$vsix_file")"
+                mkdir -p /tmp/extract-vsix
+                unzip -q "$vsix_file" -d /tmp/extract-vsix 2>/dev/null || true
+                if [ -d "/tmp/extract-vsix/extension" ]; then
+                  EXT_NAME=$(basename "$vsix_file" .vsix)
+                  mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME"
+                  cp -r /tmp/extract-vsix/extension/* "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME/"
+                  echo "✅ VSIX extracted: $EXT_NAME"
+                elif [ "$(ls -A /tmp/extract-vsix 2>/dev/null)" ]; then
+                  cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
+                  echo "✅ VSIX extracted"
+                fi
+                rm -rf /tmp/extract-vsix
+              fi
+            done
           elif [ -f "./my-extension.vsix" ]; then
             echo "📌 Extracting VSIX: my-extension.vsix"
             mkdir -p /tmp/extract-vsix
             unzip -q ./my-extension.vsix -d /tmp/extract-vsix 2>/dev/null || true
-            if [ -d "/tmp/extract-vsix" ] && [ "$(ls -A /tmp/extract-vsix 2>/dev/null)" ]; then
+            if [ -d "/tmp/extract-vsix/extension" ]; then
+              # VSIX 解压后通常在 extension 目录中
+              EXT_NAME="my-extension"
+              mkdir -p "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME"
+              cp -r /tmp/extract-vsix/extension/* "$BUILD_DIR/resources/app/custom-extensions/$EXT_NAME/"
+              echo "✅ VSIX extracted: $EXT_NAME"
+            elif [ "$(ls -A /tmp/extract-vsix 2>/dev/null)" ]; then
+              # 直接复制所有内容
               cp -r /tmp/extract-vsix/* "$BUILD_DIR/resources/app/custom-extensions/"
               echo "✅ VSIX extracted"
             fi
@@ -525,32 +575,77 @@ jobs:
 
           # 显示复制的内容
           echo ""
-          echo "📋 Custom extensions prepared:"
-          ls -la "$BUILD_DIR/resources/app/custom-extensions/" 2>/dev/null || echo "  (empty)"
+          echo "📋 Custom extensions prepared in build:"
+          if [ -d "$BUILD_DIR/resources/app/custom-extensions" ]; then
+            ls -la "$BUILD_DIR/resources/app/custom-extensions/" 2>/dev/null || echo "  (empty)"
+            EXT_COUNT=$(find "$BUILD_DIR/resources/app/custom-extensions" -maxdepth 1 -type d ! -path "$BUILD_DIR/resources/app/custom-extensions" 2>/dev/null | wc -l)
+            echo "  Total extensions in custom-extensions: $EXT_COUNT"
+          else
+            echo "  ❌ custom-extensions directory not found!"
+          fi
 
-      - name: 📦 Ensure custom extensions are copied to build
+      # ============================================================
+      # 校验自定义扩展是否被正确复制
+      # ============================================================
+      - name: 🔍 Verify custom extensions in build
         run: |
           echo "=========================================="
-          echo "📦 Ensuring custom extensions are in build"
+          echo "🔍 Verifying custom extensions in build"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
-          # 检查 custom-extensions 目录
-          if [ -d "./custom-extensions" ] && [ "$(ls -A ./custom-extensions 2>/dev/null)" ]; then
-              echo "📌 Found local custom-extensions directory"
-              echo "📋 Contents:"
-              ls -la ./custom-extensions/
+          CUSTOM_EXT_DIR="$BUILD_DIR/resources/app/custom-extensions"
 
-              mkdir -p "$BUILD_DIR/resources/app/custom-extensions"
-              cp -r ./custom-extensions/* "$BUILD_DIR/resources/app/custom-extensions/"
-              echo "✅ Custom extensions copied to build"
-          elif [ -d "$BUILD_DIR/resources/app/custom-extensions" ]; then
-              echo "📌 Custom extensions already in build"
-              echo "📋 Contents:"
-              ls -la "$BUILD_DIR/resources/app/custom-extensions/"
-          else
-              echo "ℹ️ No custom extensions found"
+          echo "📌 Checking: $CUSTOM_EXT_DIR"
+
+          if [ ! -d "$CUSTOM_EXT_DIR" ]; then
+            echo "❌ ERROR: custom-extensions directory not found!"
+            echo "   This means no custom extensions were copied to the build."
+            echo "   Please check the 'Download and prepare custom extensions' step."
+            exit 1
+          fi
+
+          echo "📋 Directory contents:"
+          ls -la "$CUSTOM_EXT_DIR"
+
+          # 统计扩展数量
+          EXT_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" 2>/dev/null | wc -l | tr -d ' ')
+          FILE_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+
+          echo ""
+          echo "📊 Custom extensions statistics:"
+          echo "   Subdirectories (extensions): $EXT_COUNT"
+          echo "   Files: $FILE_COUNT"
+
+          # 检查是否有 .empty 标记文件
+          if [ -f "$CUSTOM_EXT_DIR/.empty" ]; then
+            echo "   ⚠️ .empty marker file found - no custom extensions"
+            echo "   This is expected if no custom extensions were provided."
+          fi
+
+          # 检查是否包含 test-tech 扩展
+          TEST_TECH_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d -name "test-tech*" 2>/dev/null | wc -l | tr -d ' ')
+          MS_CEINTL_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d -name "ms-ceintl*" 2>/dev/null | wc -l | tr -d ' ')
+          CWEIJAN_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d -name "cweijan*" 2>/dev/null | wc -l | tr -d ' ')
+
+          echo ""
+          echo "🔍 Specific extensions found:"
+          echo "   test-tech*: $TEST_TECH_COUNT"
+          echo "   ms-ceintl*: $MS_CEINTL_COUNT"
+          echo "   cweijan*: $CWEIJAN_COUNT"
+
+          # 如果有自定义扩展但目录为空，报错
+          if [ "$EXT_COUNT" -eq 0 ] && [ "$FILE_COUNT" -eq 0 ]; then
+            echo ""
+            echo "⚠️ WARNING: custom-extensions directory is completely empty!"
+            echo "   This may be intentional if no custom extensions were provided."
+            echo "   If custom extensions were expected, check the build configuration."
+          elif [ "$EXT_COUNT" -gt 0 ]; then
+            echo ""
+            echo "✅ Found $EXT_COUNT custom extension(s) in build"
+            echo "📋 List of custom extensions:"
+            find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" -exec basename {} \; 2>/dev/null | sort
           fi
 
       - name: 🧹 Safe cleanup (preserve core extensions)
@@ -946,6 +1041,28 @@ jobs:
 
           echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
+
+          # ============================================================
+          # 验证 DEB 根目录中的 custom-extensions
+          # ============================================================
+          echo ""
+          echo "🔍 Verifying custom-extensions in DEB root..."
+          if [ -d "$DEB_ROOT/opt/tscode/resources/app/custom-extensions" ]; then
+              echo "  ✅ custom-extensions directory exists in DEB root"
+              echo "  📋 Contents:"
+              ls -la "$DEB_ROOT/opt/tscode/resources/app/custom-extensions/"
+              EXT_COUNT=$(find "$DEB_ROOT/opt/tscode/resources/app/custom-extensions" -maxdepth 1 -type d ! -path "$DEB_ROOT/opt/tscode/resources/app/custom-extensions" 2>/dev/null | wc -l | tr -d ' ')
+              echo "  📊 Total extensions in DEB root: $EXT_COUNT"
+              if [ "$EXT_COUNT" -eq 0 ]; then
+                  echo "  ⚠️ WARNING: No custom extensions found in DEB root!"
+                  echo "  This means custom extensions were not properly copied to the build."
+              fi
+          else
+              echo "  ❌ ERROR: custom-extensions directory NOT FOUND in DEB root!"
+              echo "  This means custom extensions were not included in the DEB package."
+              echo "  🔍 Searching for custom-extensions in DEB root..."
+              find "$DEB_ROOT" -name "custom-extensions" -type d 2>/dev/null || echo "  (not found)"
+          fi
 
           # ============================================================
           # 修复所有权限
@@ -1388,6 +1505,87 @@ jobs:
           echo ""
           echo "✅ DEB package extension verification completed!"
 
+      # ============================================================
+      # 最终验证 - 检查 DEB 包中是否包含自定义扩展
+      # ============================================================
+      - name: 🔍 Verify custom extensions in DEB package
+        run: |
+          echo "=========================================="
+          echo "🔍 Verifying custom extensions in DEB package"
+          echo "=========================================="
+
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_VERSION="${VERSION}-1"
+          DEB_ARCH="amd64"
+          DEB_FILE="tscode-${DEB_VERSION}_${DEB_ARCH}.deb"
+
+          if [ ! -f "$DEB_FILE" ]; then
+            echo "❌ DEB package not found: $DEB_FILE"
+            exit 1
+          fi
+
+          echo "📦 Extracting DEB package for custom extension verification..."
+          mkdir -p /tmp/deb-verify-custom
+          cd /tmp/deb-verify-custom
+          ar x "$GITHUB_WORKSPACE/$DEB_FILE"
+
+          # 解压 data.tar.xz 或 data.tar.gz
+          if [ -f "data.tar.xz" ]; then
+            tar -xf data.tar.xz
+          elif [ -f "data.tar.gz" ]; then
+            tar -xf data.tar.gz
+          elif [ -f "data.tar" ]; then
+            tar -xf data.tar
+          else
+            echo "❌ No data archive found in DEB package!"
+            ls -la
+            exit 1
+          fi
+
+          echo ""
+          echo "📂 Checking custom-extensions in DEB package..."
+          echo "=========================================="
+
+          CUSTOM_EXT_DIR="./opt/tscode/resources/app/custom-extensions"
+
+          if [ ! -d "$CUSTOM_EXT_DIR" ]; then
+            echo "❌❌❌ CRITICAL ERROR: custom-extensions directory not found in DEB package!"
+            echo "   Expected: $CUSTOM_EXT_DIR"
+            echo "   This means custom extensions were NOT included in the DEB package."
+            echo ""
+            echo "   Contents of ./opt/tscode/resources/app/:"
+            ls -la ./opt/tscode/resources/app/ 2>/dev/null || echo "   (directory not found)"
+            exit 1
+          fi
+
+          echo "✅ custom-extensions directory exists in DEB package"
+          echo ""
+          echo "📋 Contents of custom-extensions:"
+          ls -la "$CUSTOM_EXT_DIR"
+
+          EXT_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" 2>/dev/null | wc -l | tr -d ' ')
+          FILE_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+
+          echo ""
+          echo "📊 Custom extensions statistics:"
+          echo "   Subdirectories (extensions): $EXT_COUNT"
+          echo "   Files: $FILE_COUNT"
+
+          if [ "$EXT_COUNT" -eq 0 ] && [ "$FILE_COUNT" -eq 0 ]; then
+            echo ""
+            echo "⚠️ WARNING: custom-extensions directory is empty!"
+            echo "   This means no custom extensions were included in the DEB package."
+            echo "   If custom extensions were expected, check the build configuration."
+          elif [ "$EXT_COUNT" -gt 0 ]; then
+            echo ""
+            echo "✅ Found $EXT_COUNT custom extension(s) in DEB package"
+            echo "📋 List of custom extensions:"
+            find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" -exec basename {} \; 2>/dev/null | sort
+          fi
+
+          cd "$GITHUB_WORKSPACE"
+          rm -rf /tmp/deb-verify-custom
+
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -1395,9 +1593,7 @@ jobs:
           path: |
             *.deb
             *.deb.sha256
-          retention-days: 30
-
-      - name: 📊 Build summary
+          retention-days: 30      - name: 📊 Build summary
         if: always()
         run: |
           echo "=========================================="
