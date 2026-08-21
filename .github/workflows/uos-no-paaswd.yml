@@ -1056,8 +1056,8 @@ jobs:
               # 移除 .empty 标记文件（如果有）
               rm -f "$CUSTOM_EXT_DIR/.empty" 2>/dev/null || true
 
-              # 检查是否有实际内容
-              EXT_COUNT=$(ls -1 "$CUSTOM_EXT_DIR" 2>/dev/null | wc -l)
+              # 检查是否有实际内容（只统计子目录）
+              EXT_COUNT=$(find "$CUSTOM_EXT_DIR" -maxdepth 1 -type d ! -path "$CUSTOM_EXT_DIR" 2>/dev/null | wc -l | tr -d ' ')
 
               if [ "$EXT_COUNT" -gt 0 ]; then
                   echo "  📌 Found $EXT_COUNT custom extension(s)"
@@ -1073,8 +1073,8 @@ jobs:
 
                           echo "    📂 Copying custom extensions to $TSC_EXT_DIR..."
 
-                          # 复制每个自定义扩展
-                          for ext in "$CUSTOM_EXT_DIR"/*; do
+                          # 复制每个自定义扩展（只复制子目录）
+                          for ext in "$CUSTOM_EXT_DIR"/*/; do
                               if [ -d "$ext" ]; then
                                   ext_name=$(basename "$ext")
                                   echo "      ✅ Copying: $ext_name"
