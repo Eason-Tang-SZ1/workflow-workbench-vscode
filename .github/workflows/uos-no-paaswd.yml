@@ -1014,7 +1014,7 @@ jobs:
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
           # ============================================================
-          # 创建 postinst 脚本 - 复制预构建自定义扩展到用户目录
+          # 创建 postinst 脚本 - 复制预构建自定义扩展到用户目录并清理多余目录
           # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
@@ -1099,7 +1099,48 @@ jobs:
               echo "  ℹ️ No custom extensions directory"
           fi
 
-          # 5. 为安装用户禁用密钥环
+          # ============================================================
+          # 5. 清理 ~/.tscode 下多余的非 extensions 目录
+          # ============================================================
+          echo ""
+          echo "🧹 Cleaning up user directories..."
+
+          for USER_HOME in /home/* /root; do
+              if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
+                  TSC_DIR="$USER_HOME/.tscode"
+
+                  if [ -d "$TSC_DIR" ]; then
+                      echo "  📌 Cleaning: $TSC_DIR"
+
+                      # 遍历所有项目
+                      for item in "$TSC_DIR"/*; do
+                          if [ -d "$item" ]; then
+                              item_name=$(basename "$item")
+                              # 只保留 extensions 目录，删除其他目录
+                              if [ "$item_name" != "extensions" ]; then
+                                  echo "    🗑️ Removing directory: $item_name"
+                                  rm -rf "$item" 2>/dev/null || true
+                              fi
+                          fi
+                      done
+
+                      # 确保 extensions 目录存在
+                      mkdir -p "$TSC_DIR/extensions" 2>/dev/null || true
+
+                      # 设置正确的所有权
+                      if [ "$USER_HOME" != "/root" ]; then
+                          USER_OWNER=$(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "")
+                          if [ -n "$USER_OWNER" ]; then
+                              chown -R "$USER_OWNER" "$TSC_DIR" 2>/dev/null || true
+                          fi
+                      fi
+
+                      echo "    ✅ Cleaned: $TSC_DIR (only extensions directory kept)"
+                  fi
+              fi
+          done
+
+          # 6. 为安装用户禁用密钥环
           REAL_USER="${SUDO_USER:-$USER}"
           if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
               REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
@@ -1113,7 +1154,7 @@ jobs:
               fi
           fi
 
-          # 6. 更新桌面数据库
+          # 7. 更新桌面数据库
           if command -v update-desktop-database >/dev/null 2>&1; then
               update-desktop-database /usr/share/applications/
               echo "  ✅ Desktop database updated"
@@ -1136,6 +1177,9 @@ jobs:
           echo "   System (built-in):  /opt/tscode/resources/app/extensions/"
           echo "   User (custom):      ~/.tscode/extensions/ (prebuilt custom)"
           echo "   User (installed):   ~/.tscode/extensions/ (from VS Code market)"
+          echo ""
+          echo "💡 Only 'extensions' directory is kept in ~/.tscode/"
+          echo "💡 Other directories (user-data, etc.) are automatically cleaned"
           echo ""
           echo "🚀 Run 'tscode' to start (no password required)"
           echo "📂 Desktop entry available in application menu"
@@ -1331,6 +1375,7 @@ jobs:
           echo "   User data:         ~/.local/share/tscode/"
           echo ""
           echo "💡 Extensions persist across reinstallation"
+          echo "💡 ~/.tscode/ only contains extensions directory"
           echo "==========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
