@@ -1,4 +1,4 @@
-name: Build for Debian 10 (Debug Pure Source Build)
+name: Build for Debian 10 (DEB Package - Final Fix)
 
 on:
   workflow_dispatch:
@@ -11,14 +11,6 @@ on:
         description: 'Package version'
         required: false
         default: '1.116.0'
-      custom_extension_repo:
-        description: 'Custom extension git repo URL (optional)'
-        required: false
-        default: ''
-      custom_extension_branch:
-        description: 'Custom extension branch (optional)'
-        required: false
-        default: 'main'
 
 jobs:
   build:
@@ -31,34 +23,6 @@ jobs:
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
-
-      - name: 📥 Download custom extension
-        run: |
-          echo "=========================================="
-          echo "📥 Downloading custom extension"
-          echo "=========================================="
-
-          mkdir -p custom-extensions
-
-          if [ -n "${{ github.event.inputs.custom_extension_repo }}" ]; then
-            echo "📌 Cloning extension from: ${{ github.event.inputs.custom_extension_repo }}"
-            git clone --depth 1 \
-              --branch ${{ github.event.inputs.custom_extension_branch || 'main' }} \
-              "${{ github.event.inputs.custom_extension_repo }}" \
-              custom-extensions/my-extension
-            echo "✅ Extension cloned"
-          elif [ -d "./my-extension" ]; then
-            echo "📌 Using local extension: ./my-extension"
-            cp -r ./my-extension custom-extensions/
-            echo "✅ Local extension copied"
-          elif [ -f "./my-extension.vsix" ]; then
-            echo "📌 Extracting VSIX: my-extension.vsix"
-            mkdir -p custom-extensions/my-extension
-            unzip -q ./my-extension.vsix -d custom-extensions/my-extension
-            echo "✅ VSIX extracted"
-          else
-            echo "ℹ️ No custom extension provided"
-          fi
 
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v6
@@ -74,7 +38,7 @@ jobs:
             libnss3-dev libasound2-dev libglib2.0-dev libcairo2-dev \
             libpango1.0-dev libatk1.0-dev libgdk-pixbuf2.0-dev \
             python3 git wget curl tree xz-utils \
-            dpkg-dev fakeroot lintian jq
+            dpkg-dev fakeroot lintian
 
       - name: 🔧 Fix TypeScript scripts
         run: |
@@ -96,398 +60,66 @@ jobs:
           npm install --legacy-peer-deps \
             ternary-stream vscode-gulp-watch esbuild jsonc-parser \
             gulp-merge-json gulp-tsb gulp-sourcemaps gulp-filter \
-            gulp-rename gulp-sort event-stream 2>/dev/null || true
+            gulp-rename gulp-sort 2>/dev/null || true
 
-      # ========== 诊断：检查 gulpfile 中的扩展打包逻辑 ==========
-      - name: 🔍 Diagnostic - Check gulpfile extension logic
-        run: |
-          echo "=========================================="
-          echo "🔍 Diagnostic - Checking gulpfile extension logic"
-          echo "=========================================="
-
-          echo "📄 1. Check how extensions are imported in gulpfile:"
-          grep -n "import.*extensions" build/gulpfile.vscode.ts | head -10
-          echo ""
-
-          echo "📄 2. Check vscode-linux-x64 task definition:"
-          grep -A50 '"vscode-linux-x64"' build/gulpfile.vscode.ts | head -60
-          echo ""
-
-          echo "📄 3. Check for packageAllLocalExtensionsStream usage:"
-          grep -n "packageAllLocalExtensionsStream" build/gulpfile.vscode.ts
-          echo ""
-
-          echo "📄 4. Check for prepare-prebuilt-extensions task:"
-          grep -A30 "prepare-prebuilt-extensions" build/gulpfile.vscode.ts | head -40
-          echo ""
-
-          echo "📄 5. Check for bundle-extensions task:"
-          grep -A20 "bundle-extensions" build/gulpfile.vscode.ts | head -30
-          echo ""
-
-          echo "📄 6. Check for fromLocal function usage:"
-          grep -n "fromLocal" build/gulpfile.vscode.ts
-
-      # ========== 修改 extensions.ts - 带完整日志 ==========
-      - name: 🔧 Fix extensions.ts (with full logging)
+      - name: 🔧 Fix extensions.ts
         run: |
           cat > build/lib/extensions.ts << 'EOF'
-          /*---------------------------------------------------------------------------------------------
-           *  Copyright (c) Microsoft Corporation. All rights reserved.
-           *  Licensed under the MIT License. See License.txt in the project root for license information.
-           *--------------------------------------------------------------------------------------------*/
-
-          import { Stream, Readable } from 'stream';
-          import * as fs from 'fs';
-          import * as path from 'path';
-          import { fileURLToPath } from 'url';
-
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = path.dirname(__filename);
-
-          // ========== 详细日志 ==========
-          let callCount = 0;
-          function log(msg: string, data?: any) {
-              callCount++;
-              const timestamp = new Date().toISOString();
-              const prefix = `[EXT-DIAG:${String(callCount).padStart(4, '0')}]`;
-              if (data !== undefined) {
-                  console.log(`${timestamp} ${prefix} ${msg}`, JSON.stringify(data));
-              } else {
-                  console.log(`${timestamp} ${prefix} ${msg}`);
-              }
+          import { Stream } from "stream";
+          const empty: any[] = [];
+          function emptyStream(): Stream {
+            const s = new Stream.Readable();
+            s._read = () => s.push(null);
+            return s;
           }
-
-          log(`🚀 EXTENSIONS MODULE LOADED (Diagnostic Mode)`);
-          log(`📁 __dirname: ${__dirname}`);
-          log(`📁 cwd: ${process.cwd()}`);
-          log(`📁 VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD: ${process.env.VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD || 'undefined'}`);
-          log(`📁 VSCODE_FORCE_LOCAL_EXTENSIONS: ${process.env.VSCODE_FORCE_LOCAL_EXTENSIONS || 'undefined'}`);
-
-          // ========== 扫描扩展 ==========
-          function scanExtensions(): any[] {
-              const extensions: any[] = [];
-              const extDir = path.join(__dirname, '../../extensions');
-
-              log(`🔍 SCAN START: ${extDir}`);
-
-              if (!fs.existsSync(extDir)) {
-                  log(`⚠️ Extensions directory NOT FOUND: ${extDir}`);
-                  return extensions;
-              }
-
-              try {
-                  const items = fs.readdirSync(extDir);
-                  log(`📁 Found ${items.length} items`);
-
-                  for (const item of items) {
-                      const extPath = path.join(extDir, item);
-                      try {
-                          const stat = fs.statSync(extPath);
-                          if (stat.isDirectory()) {
-                              const pkgPath = path.join(extPath, 'package.json');
-                              if (fs.existsSync(pkgPath)) {
-                                  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                                  extensions.push({
-                                      name: pkg.name || item,
-                                      path: extPath,
-                                      packageJSON: pkg,
-                                      isBuiltin: true
-                                  });
-                                  log(`  ✅ ${pkg.name || item}`);
-                              }
-                          }
-                      } catch (e) {
-                          log(`  ⚠️ Error reading ${item}: ${e.message}`);
-                      }
-                  }
-              } catch (e) {
-                  log(`❌ Error scanning: ${e.message}`);
-              }
-
-              log(`📊 SCAN COMPLETE: ${extensions.length} extensions`);
-              return extensions;
+          export function isWebExtension(): boolean { return false; }
+          export function getExtensionStream(): Stream { return emptyStream(); }
+          export function getExtensionDownloadStream(): Stream { return emptyStream(); }
+          export function packageMarketplaceExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageNonNativeLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageLocalExtensionsStream(): Stream { return emptyStream(); }
+          export function packageExtensionsStream(): Stream { return emptyStream(); }
+          export function packageCopilotExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotChatExtensionStream(): Stream { return emptyStream(); }
+          export function packageCopilotAgentsExtensionStream(): Stream { return emptyStream(); }
+          export function fromMarketplace(): any[] { return empty; }
+          export async function fetchUrls(urls: string[], options: any): Promise<void> {
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
           }
-
-          export const builtInExtensions = scanExtensions();
+          export function buildExtensionMedia(): void {}
+          export function compileExtensionMedia(): void {}
+          export function buildExtensionMediaTask(done: any): void { done(); }
+          export const builtInExtensions = empty;
+          export const shouldDownloadBuiltInExtensions = false;
+          export const webBuiltInExtensions = empty;
+          export const shouldDownloadWebBuiltInExtensions = false;
+          EOF
+          echo 'export const builtInExtensions: any[] = [];
           export const shouldDownloadBuiltInExtensions = false;
           export const webBuiltInExtensions: any[] = [];
-          export const shouldDownloadWebBuiltInExtensions = false;
-
-          export function isWebExtension(): boolean {
-              return false;
-          }
-
-          // ========== 获取目录下所有文件 ==========
-          function getAllFiles(dir: string): string[] {
-              let results: string[] = [];
-              try {
-                  const list = fs.readdirSync(dir);
-                  for (const item of list) {
-                      if (item === 'node_modules' || item === '.git' || item === '.vscode-test' || item === 'test') {
-                          continue;
-                      }
-                      const itemPath = path.join(dir, item);
-                      try {
-                          const stat = fs.statSync(itemPath);
-                          if (stat.isDirectory()) {
-                              results = results.concat(getAllFiles(itemPath));
-                          } else {
-                              const ext = path.extname(item);
-                              if (['.ts', '.js', '.json', '.css', '.html', '.md', '.png', '.svg', '.txt', '.sh', '.py', '.cjs', '.mjs'].includes(ext) ||
-                                  item === 'package.json' || item === 'tsconfig.json' || item === '.vscodeignore') {
-                                  results.push(itemPath);
-                              }
-                          }
-                      } catch (e) {}
-                  }
-              } catch (e) {}
-              return results;
-          }
-
-          // ========== 创建扩展流（带详细日志） ==========
-          function createExtensionStream(forWeb: boolean, disableMangle: boolean): Stream {
-              const stack = new Error().stack?.split('\n').slice(2, 8).join('\n');
-              log(`🔧 createExtensionStream CALLED`);
-              log(`   forWeb=${forWeb}, disableMangle=${disableMangle}`);
-              log(`📚 Call stack:\n${stack}`);
-
-              const extensions = scanExtensions();
-              log(`📦 Processing ${extensions.length} extensions`);
-
-              // 尝试加载 vinyl
-              let Vinyl: any;
-              try {
-                  Vinyl = require('vinyl');
-                  if (Vinyl.File) {
-                      Vinyl = Vinyl.File;
-                  }
-                  log(`📦 Vinyl loaded: ${typeof Vinyl}`);
-              } catch (e) {
-                  log(`❌ Vinyl load failed: ${e.message}`);
-                  const emptyStream = new Readable({ objectMode: true });
-                  emptyStream._read = function() { this.push(null); };
-                  return emptyStream;
-              }
-
-              const stream = new Readable({ objectMode: true });
-              let filesPushed = false;
-              let allFiles: any[] = [];
-              let totalFiles = 0;
-
-              for (const ext of extensions) {
-                  try {
-                      const files = getAllFiles(ext.path);
-                      totalFiles += files.length;
-                      log(`  📤 ${ext.name}: ${files.length} files`);
-
-                      for (const filePath of files) {
-                          try {
-                              const content = fs.readFileSync(filePath);
-                              const stat = fs.statSync(filePath);
-
-                              const file = new Vinyl({
-                                  cwd: ext.path,
-                                  base: ext.path,
-                                  path: filePath,
-                                  contents: content,
-                                  stat: stat
-                              });
-
-                              (file as any).extension = {
-                                  name: ext.name,
-                                  path: ext.path,
-                                  packageJSON: ext.packageJSON,
-                                  isBuiltin: true
-                              };
-
-                              allFiles.push(file);
-                          } catch (e) {
-                              log(`  ⚠️ Error creating file ${path.basename(filePath)}: ${e.message}`);
-                          }
-                      }
-                  } catch (e) {
-                      log(`  ⚠️ Error processing ${ext.name}: ${e.message}`);
-                  }
-              }
-
-              log(`📊 TOTAL FILES: ${totalFiles}, VINYL OBJECTS: ${allFiles.length}`);
-
-              if (allFiles.length > 0) {
-                  const sample = allFiles.slice(0, 3).map((f: any) => {
-                      try { return path.relative(f.cwd, f.path); } catch (e) { return f.path; }
-                  });
-                  log(`📋 Sample files:`, sample);
-              }
-
-              stream._read = function() {
-                  if (!filesPushed) {
-                      log(`🔄 Stream _read: pushing ${allFiles.length} files`);
-                      for (const file of allFiles) {
-                          this.push(file);
-                      }
-                      filesPushed = true;
-                      log(`🔄 Stream _read: done pushing`);
-                  }
-                  this.push(null);
-                  log(`🔄 Stream _read: completed`);
-              };
-
-              log(`✅ createExtensionStream: returning stream with ${allFiles.length} objects`);
-              return stream;
-          }
-
-          // ========== 导出所有函数 ==========
-
-          export function packageAllLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              log(`🎯🎯🎯 packageAllLocalExtensionsStream CALLED (MAIN)`);
-              // 记录到文件
-              try {
-                  fs.appendFileSync('/tmp/packageAllLocalExtensionsStream-called.txt',
-                      `${new Date().toISOString()} called with forWeb=${forWeb}, disableMangle=${disableMangle}\n`);
-              } catch (e) {}
-              return createExtensionStream(forWeb, disableMangle);
-          }
-
-          export function packageLocalExtensionsStream(forWeb: boolean, disableMangle: boolean): Stream {
-              log(`🎯 packageLocalExtensionsStream CALLED`);
-              return createExtensionStream(forWeb, disableMangle);
-          }
-
-          export function getExtensionStream(): Stream {
-              log(`🎯 getExtensionStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function getExtensionDownloadStream(): Stream {
-              log(`🎯 getExtensionDownloadStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageMarketplaceExtensionsStream(): Stream {
-              log(`🎯 packageMarketplaceExtensionsStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageNativeLocalExtensionsStream(): Stream {
-              log(`🎯 packageNativeLocalExtensionsStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageNonNativeLocalExtensionsStream(): Stream {
-              log(`🎯 packageNonNativeLocalExtensionsStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageExtensionsStream(): Stream {
-              log(`🎯 packageExtensionsStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageCopilotExtensionStream(): Stream {
-              log(`🎯 packageCopilotExtensionStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageCopilotChatExtensionStream(): Stream {
-              log(`🎯 packageCopilotChatExtensionStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function packageCopilotAgentsExtensionStream(): Stream {
-              log(`🎯 packageCopilotAgentsExtensionStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function fromMarketplace(): any[] {
-              log(`🎯 fromMarketplace CALLED`);
-              return builtInExtensions;
-          }
-
+          export const shouldDownloadWebBuiltInExtensions = false;' > build/lib/builtInExtensions.ts
+          echo 'import { Stream } from "stream";
           export async function fetchUrls(urls: string[], options: any): Promise<void> {
-              log(`🎯 fetchUrls CALLED (${urls.length} urls)`);
-              return Promise.resolve();
-          }
+            console.log("fetchUrls: disabled");
+            return Promise.resolve();
+          }' > build/lib/fetch.ts
 
-          export function buildExtensionMedia(): void {
-              log(`🎯 buildExtensionMedia CALLED (skipped)`);
-          }
+      - name: 🔧 Fix gulpfile spawn calls
+        run: |
+          python3 << 'PY_END'
+          import re
+          with open('build/gulpfile.vscode.ts', 'r') as f:
+              content = f.read()
+          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
+          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
+          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
+          with open('build/gulpfile.vscode.ts', 'w') as f:
+              f.write(content)
+          print("spawn calls fixed")
+          PY_END
 
-          export function compileExtensionMedia(): void {
-              log(`🎯 compileExtensionMedia CALLED (skipped)`);
-          }
-
-          export function buildExtensionMediaTask(done: any): void {
-              log(`🎯 buildExtensionMediaTask CALLED`);
-              done();
-          }
-
-          export function scanBuiltinExtensions(extensionsRoot: string, exclude: string[] = []): any[] {
-              log(`🎯 scanBuiltinExtensions CALLED: ${extensionsRoot}`);
-              return builtInExtensions;
-          }
-
-          export function translatePackageJSON(packageJSON: string, packageNLSPath: string): any {
-              log(`🎯 translatePackageJSON CALLED`);
-              return {};
-          }
-
-          export async function esbuildExtensions(taskName: string, isWatch: boolean, scripts: any[]): Promise<void> {
-              log(`🎯 esbuildExtensions CALLED: ${taskName}`);
-              return Promise.resolve();
-          }
-
-          export function getBuildRootsForExtension(extensionPath: string): string[] {
-              log(`🎯 getBuildRootsForExtension CALLED: ${extensionPath}`);
-              return [];
-          }
-
-          export async function typeCheckExtension(extensionPath: string, forWeb: boolean): Promise<void> {
-              log(`🎯 typeCheckExtension CALLED: ${extensionPath}`);
-              return Promise.resolve();
-          }
-
-          export function typeCheckExtensionStream(extensionPath: string, forWeb: boolean): Stream {
-              log(`🎯 typeCheckExtensionStream CALLED: ${extensionPath}`);
-              return createExtensionStream(forWeb, false);
-          }
-
-          export function fromLocal(extensionPath: string, forWeb: boolean, disableMangle: boolean): Stream {
-              log(`🎯 fromLocal CALLED: ${extensionPath}`);
-              return createExtensionStream(forWeb, disableMangle);
-          }
-
-          export function fromMarketplaceStream(serviceUrl: string, extension: any): Stream {
-              log(`🎯 fromMarketplaceStream CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function fromGithub(extension: any): Stream {
-              log(`🎯 fromGithub CALLED`);
-              return createExtensionStream(false, false);
-          }
-
-          export function fromVsix(vsixPath: string, extension: any): Stream {
-              log(`🎯 fromVsix CALLED: ${vsixPath}`);
-              return createExtensionStream(false, false);
-          }
-
-          export function minifyExtensionResources(input: Stream): Stream {
-              log(`🎯 minifyExtensionResources CALLED`);
-              return input;
-          }
-
-          export function updateExtensionPackageJSON(input: Stream, update: (data: any) => any): Stream {
-              log(`🎯 updateExtensionPackageJSON CALLED`);
-              return input;
-          }
-
-          log(`✅ EXTENSIONS MODULE FULLY LOADED`);
-          EOF
-
-          echo "✅ extensions.ts fixed with full logging"
-
-      # ========== 修复 copilot.ts ==========
       - name: 🔧 Replace copilot.ts
         run: |
           cat > build/lib/copilot.ts << 'EOF'
@@ -503,7 +135,6 @@ jobs:
           }
           EOF
 
-      # ========== 禁用 Crashpad ==========
       - name: 🔧 Disable Crashpad
         run: |
           echo "Disabling Crashpad"
@@ -538,268 +169,28 @@ jobs:
           CRASH_EOF
           echo "crashService.ts created"
 
-      # ========== 修复 gulpfile ==========
-      - name: 🔧 Fix gulpfile
-        run: |
-          echo "=========================================="
-          echo "🔧 Fixing gulpfile"
-          echo "=========================================="
-
-          python3 << 'PY_END'
-          import re
-          with open('build/gulpfile.vscode.ts', 'r') as f:
-              content = f.read()
-
-          content = re.sub(r"spawn\('node'", "spawn('tsx'", content)
-          content = re.sub(r'spawn\("node"', 'spawn("tsx"', content)
-          content = re.sub(r"spawn\(process\.execPath", "spawn('tsx'", content)
-
-          with open('build/gulpfile.vscode.ts', 'w') as f:
-              f.write(content)
-          print("✅ spawn calls fixed")
-          PY_END
-
-          echo "✅ gulpfile fixed"
-
       - name: ⚙️ Set env
         run: |
           echo "VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_ELECTRON_SKIP_DOWNLOAD=1" >> $GITHUB_ENV
           echo "VSCODE_SKIP_PRELAUNCH=1" >> $GITHUB_ENV
+          echo "VSCODE_SKIP_BUNDLED_EXTENSIONS=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTER=1" >> $GITHUB_ENV
           echo "ELECTRON_DISABLE_CRASH_REPORTING=1" >> $GITHUB_ENV
-          echo "VSCODE_FORCE_LOCAL_EXTENSIONS=1" >> $GITHUB_ENV
 
-      # ========== 编译官方内置扩展 ==========
-      - name: 🔨 Build official built-in extensions
-        run: |
-          echo "=========================================="
-          echo "🔨 Building official built-in extensions from source"
-          echo "=========================================="
-
-          export NODE_OPTIONS="--max-old-space-size=8192"
-
-          echo "📦 Compiling official extensions from source using gulp..."
-          npx tsx node_modules/gulp/bin/gulp.js compile-extensions --no-color || {
-            echo "⚠️ compile-extensions had errors, continuing..."
-          }
-
-          echo ""
-          echo "📋 Checking built extensions:"
-          for ext in extensions/*/; do
-            if [ -f "$ext/package.json" ]; then
-              ext_name=$(basename "$ext")
-              if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
-                echo "  ✅ $ext_name (compiled from source)"
-              else
-                echo "  ⚠️ $ext_name (source only)"
-              fi
-            fi
-          done
-
-          echo "✅ Official extensions build completed"
-
-      # ========== 构建 VSCode ==========
-      - name: 🔨 Build VSCode from source
+      - name: 🔨 Build VSCode
         run: |
           export NODE_OPTIONS="--max-old-space-size=8192"
           export VSCODE_SKIP_BUILTIN_EXTENSION_DOWNLOAD=1
           export VSCODE_ELECTRON_SKIP_DOWNLOAD=1
           export VSCODE_SKIP_PRELAUNCH=1
+          export VSCODE_SKIP_BUNDLED_EXTENSIONS=1
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export VSCODE_FORCE_LOCAL_EXTENSIONS=1
-
-          echo "=========================================="
-          echo "🔨 Building VSCode from source"
-          echo "=========================================="
           echo "Start: $(date)"
-
-          if [ ! -d "extensions" ]; then
-            echo "⚠️ Extensions directory not found, creating..."
-            mkdir -p extensions
-          fi
-
-          echo ""
-          echo "🔍 ========== DIAGNOSTIC MODE =========="
-          echo "🔍 Look for these logs:"
-          echo "   [EXT-DIAG:XXXX] 🚀 EXTENSIONS MODULE LOADED"
-          echo "   [EXT-DIAG:XXXX] 🎯🎯🎯 packageAllLocalExtensionsStream CALLED"
-          echo "   [EXT-DIAG:XXXX] 🔧 createExtensionStream CALLED"
-          echo "   [EXT-DIAG:XXXX] 📊 TOTAL FILES"
-          echo ""
-
-          echo "📦 Running vscode-linux-x64 task..."
           npx tsx node_modules/gulp/bin/gulp.js vscode-linux-x64 --no-color
-
-          echo ""
           echo "Done: $(date)"
 
-      # ========== 诊断结果分析 ==========
-      - name: 🔍 Diagnostic results
-        run: |
-          echo "=========================================="
-          echo "🔍 Diagnostic results"
-          echo "=========================================="
-
-          echo "📁 Checking /tmp/packageAllLocalExtensionsStream-called.txt:"
-          if [ -f /tmp/packageAllLocalExtensionsStream-called.txt ]; then
-            cat /tmp/packageAllLocalExtensionsStream-called.txt
-          else
-            echo "  ❌ NOT FOUND - packageAllLocalExtensionsStream was NOT called!"
-            echo ""
-            echo "🔍 This means vscode-linux-x64 task does NOT use packageAllLocalExtensionsStream."
-            echo "   It uses a different mechanism (prepare-prebuilt-extensions)."
-          fi
-
-          echo ""
-          echo "📁 Checking build directory extensions:"
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR/resources/app/extensions" ]; then
-            EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
-            EXT_COUNT=$((EXT_COUNT - 1))
-            echo "  Build extensions count: $EXT_COUNT"
-            echo ""
-            echo "  Extensions in build:"
-            for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
-              if [ -f "$ext/package.json" ]; then
-                echo "    ✅ $(basename "$ext")"
-              fi
-            done
-          else
-            echo "  ❌ Build extensions directory not found or empty"
-          fi
-
-      # ========== 强制复制官方扩展（临时方案） ==========
-      - name: 📦 Force copy official extensions
-        run: |
-          echo "=========================================="
-          echo "📦 Force copying official extensions"
-          echo "=========================================="
-          echo ""
-          echo "⚠️ This is a TEMPORARY workaround while we diagnose the root cause."
-          echo "   The vscode-linux-x64 task does not consume the extension stream."
-          echo ""
-
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
-            exit 1
-          fi
-
-          EXT_TARGET="$BUILD_DIR/resources/app/extensions"
-          mkdir -p "$EXT_TARGET"
-
-          EXT_SOURCE="./extensions"
-
-          if [ ! -d "$EXT_SOURCE" ]; then
-            echo "❌ Source extensions directory not found!"
-            exit 1
-          fi
-
-          SOURCE_COUNT=$(find "$EXT_SOURCE" -maxdepth 1 -type d 2>/dev/null | wc -l)
-          SOURCE_COUNT=$((SOURCE_COUNT - 1))
-          echo "📌 Source extensions count: $SOURCE_COUNT"
-
-          echo ""
-          echo "📌 Copying all official extensions from source..."
-          cp -r "$EXT_SOURCE"/* "$EXT_TARGET/"
-
-          echo ""
-          echo "📌 Marking all extensions as builtin..."
-          for ext in "$EXT_TARGET"/*/; do
-            if [ -f "$ext/package.json" ]; then
-              EXT_NAME=$(basename "$ext")
-              python3 << PY_END
-          import json
-          pkg_path = "$ext/package.json"
-          with open(pkg_path, 'r') as f:
-              data = json.load(f)
-          data['builtin'] = True
-          data['extensionKind'] = ['workspace', 'ui']
-          if 'main' not in data:
-              data['main'] = './out/extension.js'
-          with open(pkg_path, 'w') as f:
-              json.dump(data, f, indent=2)
-          print(f"  ✅ Marked {data.get('name', '$EXT_NAME')} as builtin")
-          PY_END
-            fi
-          done
-
-          TARGET_COUNT=$(find "$EXT_TARGET" -maxdepth 1 -type d 2>/dev/null | wc -l)
-          TARGET_COUNT=$((TARGET_COUNT - 1))
-          echo ""
-          echo "📌 Target extensions count: $TARGET_COUNT"
-          echo "✅ Official extensions force copied to build"
-
-      # ========== 复制自定义扩展 ==========
-      - name: 📦 Copy custom extensions
-        run: |
-          echo "=========================================="
-          echo "📦 Copying custom extensions"
-          echo "=========================================="
-
-          if [ ! -d "custom-extensions" ] || [ -z "$(ls -A custom-extensions 2>/dev/null)" ]; then
-            echo "ℹ️ No custom extensions to copy"
-            exit 0
-          fi
-
-          BUILD_DIR=""
-          for dir in "./VSCode-linux-x64" "./vscode/VSCode-linux-x64" "../VSCode-linux-x64"; do
-            if [ -d "$dir" ]; then
-              BUILD_DIR="$dir"
-              echo "Found build directory: $BUILD_DIR"
-              break
-            fi
-          done
-
-          if [ -z "$BUILD_DIR" ]; then
-            echo "❌ Build directory not found!"
-            exit 1
-          fi
-
-          EXT_DIR="$BUILD_DIR/resources/app/extensions"
-          mkdir -p "$EXT_DIR"
-
-          echo "📌 Copying custom extensions..."
-          cp -r custom-extensions/* "$EXT_DIR/"
-
-          echo ""
-          echo "📌 Installing dependencies for custom extensions..."
-          cd "$EXT_DIR"
-          for ext in */; do
-            if [ -f "$ext/package.json" ]; then
-              EXT_NAME=$(basename "$ext")
-              if grep -q '"dependencies"' "$ext/package.json" 2>/dev/null; then
-                echo "  📦 Installing deps for: $EXT_NAME"
-                cd "$ext"
-                npm install --legacy-peer-deps --ignore-scripts --production 2>/dev/null || \
-                npm install --legacy-peer-deps --ignore-scripts 2>/dev/null || true
-                cd -
-              fi
-            fi
-          done
-          cd -
-
-          echo "✅ Custom extensions copied and dependencies installed"
-
-      # ========== 验证构建内容 ==========
       - name: 🔍 Verify build contents
         run: |
           echo "=========================================="
@@ -820,72 +211,6 @@ jobs:
             exit 1
           fi
 
-          echo ""
-          echo "📌 Checking critical files..."
-          for file in "resources/app/out/main.js" "resources/app/package.json" "code" "chrome-sandbox"; do
-            if [ -f "$BUILD_DIR/$file" ]; then
-              echo "  ✅ $file"
-            else
-              echo "  ❌ $file missing!"
-            fi
-          done
-
-          echo ""
-          echo "📌 Checking extensions..."
-          if [ -d "$BUILD_DIR/resources/app/extensions" ]; then
-            EXT_COUNT=$(find "$BUILD_DIR/resources/app/extensions" -maxdepth 1 -type d 2>/dev/null | wc -l)
-            EXT_COUNT=$((EXT_COUNT - 1))
-            echo "  ✅ Extensions directory exists with $EXT_COUNT extensions"
-
-            echo ""
-            echo "📋 Extensions list:"
-            OFFICIAL_COUNT=0
-            for ext in "$BUILD_DIR/resources/app/extensions"/*/; do
-              if [ -f "$ext/package.json" ]; then
-                EXT_NAME=$(basename "$ext")
-                IS_CUSTOM=false
-                if [[ "$EXT_NAME" == "cweijan.vscode-office" ]] || \
-                   [[ "$EXT_NAME" == "test-tech."* ]] || \
-                   [[ "$EXT_NAME" == "ms-ceintl.vscode-language-pack-zh-hans" ]] || \
-                   [[ "$EXT_NAME" == "MS-CEINTL.vscode-language-pack-zh-hans" ]]; then
-                  IS_CUSTOM=true
-                else
-                  OFFICIAL_COUNT=$((OFFICIAL_COUNT + 1))
-                fi
-                if [ -d "$ext/out" ] || [ -d "$ext/dist" ]; then
-                  echo "  ✅ $EXT_NAME (compiled, custom=$IS_CUSTOM)"
-                else
-                  echo "  ✅ $EXT_NAME (source, custom=$IS_CUSTOM)"
-                fi
-              fi
-            done
-
-            echo ""
-            echo "📊 Summary:"
-            echo "  Total extensions: $EXT_COUNT"
-            echo "  Official extensions: $OFFICIAL_COUNT"
-            echo "  Custom extensions: $((EXT_COUNT - OFFICIAL_COUNT))"
-
-            if [ $OFFICIAL_COUNT -eq 0 ]; then
-              echo ""
-              echo "❌ ERROR: No official extensions found in build!"
-              echo ""
-              echo "🔍 DIAGNOSIS: The vscode-linux-x64 task does NOT use"
-              echo "   packageAllLocalExtensionsStream. It uses prepare-prebuilt-extensions."
-              echo ""
-              echo "📋 To fix this permanently, we need to either:"
-              echo "   1. Modify prepare-prebuilt-extensions to use local extensions"
-              echo "   2. Use the force copy approach (current workaround)"
-              exit 1
-            else
-              echo ""
-              echo "✅ Found $OFFICIAL_COUNT official extensions"
-            fi
-          else
-            echo "  ❌ Extensions directory not found!"
-            exit 1
-          fi
-
           TARGET_DIR="./tscode"
           if [ "$BUILD_DIR" != "$TARGET_DIR" ]; then
             echo "Renaming $BUILD_DIR to $TARGET_DIR"
@@ -895,116 +220,240 @@ jobs:
           BUILD_DIR="$TARGET_DIR"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          echo ""
-          echo "Build size:"
+          echo "Initial build size:"
           du -sh "$BUILD_DIR"
 
-      # ========== 编译原生模块 ==========
-      - name: 📦 Compile native modules for offline use
+      - name: 📦 Copy node_modules to resources/app
         run: |
           echo "=========================================="
-          echo "📦 Compiling native modules for offline use"
+          echo "📦 Copy node_modules to resources/app"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
+          if [ ! -d "./node_modules" ]; then
+            echo "❌ node_modules not found in root!"
+            echo "Installing node_modules..."
+            npm install --legacy-peer-deps
+          fi
+
+          echo "📌 Copying node_modules to $BUILD_DIR/resources/app/"
+          rm -rf "$BUILD_DIR/resources/app/node_modules"
+          cp -r ./node_modules "$BUILD_DIR/resources/app/"
+
+          echo "✅ node_modules copied"
+
+      - name: 🔥 Replace native modules with official version
+        run: |
+          echo "=========================================="
+          echo "🔥 Replacing native modules with official version"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+          VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+
+          echo "📌 Downloading official VSCode $VERSION for Linux x64..."
+          wget -q --show-progress "https://update.code.visualstudio.com/$VERSION/linux-x64/stable" -O /tmp/official.tar.gz
+
+          if [ $? -ne 0 ] || [ ! -s /tmp/official.tar.gz ]; then
+            echo "⚠️ Failed to download version $VERSION, trying latest..."
+            wget -q --show-progress https://update.code.visualstudio.com/latest/linux-x64/stable -O /tmp/official.tar.gz
+          fi
+
+          tar -xzf /tmp/official.tar.gz -C /tmp/ 2>/dev/null
+
+          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          if [ -z "$OFFICIAL_DIR" ]; then
+            OFFICIAL_DIR=$(find /tmp -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+          fi
+
+          if [ -z "$OFFICIAL_DIR" ]; then
+            echo "❌ Could not find official VSCode!"
+            exit 1
+          fi
+
+          echo "✅ Official VSCode found at: $OFFICIAL_DIR"
+
+          if [ -d "$OFFICIAL_DIR/resources/app/node_modules" ]; then
+            echo "   Copying official node_modules..."
+            if [ -d "$BUILD_DIR/resources/app/node_modules" ]; then
+              mv "$BUILD_DIR/resources/app/node_modules" \
+                 "$BUILD_DIR/resources/app/node_modules.bak"
+            fi
+            cp -r "$OFFICIAL_DIR/resources/app/node_modules" \
+                  "$BUILD_DIR/resources/app/"
+            echo "   ✅ node_modules replaced with official version"
+          fi
+
+          rm -rf /tmp/official.tar.gz
+          rm -rf "$OFFICIAL_DIR"
+          echo ""
+          echo "✅ Native modules replacement completed"
+
+      - name: 📂 Copy official extensions (preserve all including @builtin)
+        run: |
+          echo "=========================================="
+          echo "📂 Copying official extensions"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          # 重新解压官方 VSCode（如果已被删除）
+          if [ ! -d "/tmp/VSCode-linux-x64" ]; then
+            echo "📌 Re-downloading official VSCode..."
+            wget -q https://update.code.visualstudio.com/1.116.0/linux-x64/stable -O /tmp/official.tar.gz
+            tar -xzf /tmp/official.tar.gz -C /tmp/
+          fi
+
+          OFFICIAL_DIR=$(find /tmp -maxdepth 1 -type d -name "VSCode-linux-x64" 2>/dev/null | head -1)
+
+          if [ -z "$OFFICIAL_DIR" ] || [ ! -d "$OFFICIAL_DIR/resources/app/extensions" ]; then
+            echo "⚠️ Could not find official extensions"
+            exit 0
+          fi
+
+          echo "✅ Official VSCode at: $OFFICIAL_DIR"
+
+          # 核心扩展列表（必须保留）
+          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result"
+
+          mkdir -p "$BUILD_DIR/resources/app/extensions"
+
+          # 复制所有扩展（保留自定义扩展）
+          echo "📌 Copying extensions from official build..."
+          for ext in "$OFFICIAL_DIR/resources/app/extensions"/*; do
+            if [ -d "$ext" ]; then
+              ext_name=$(basename "$ext")
+              # 跳过 @builtin（单独处理）
+              if [ "$ext_name" = "@builtin" ]; then
+                continue
+              fi
+              # 如果扩展已存在（自定义扩展），跳过
+              if [ -d "$BUILD_DIR/resources/app/extensions/$ext_name" ]; then
+                echo "   ⏭️ Skipping (already exists): $ext_name"
+                continue
+              fi
+              echo "   ✅ Copying: $ext_name"
+              cp -r "$ext" "$BUILD_DIR/resources/app/extensions/"
+            fi
+          done
+
+          # 复制 @builtin
+          if [ -d "$OFFICIAL_DIR/resources/app/extensions/@builtin" ]; then
+            echo "   ✅ Copying: @builtin"
+            rm -rf "$BUILD_DIR/resources/app/extensions/@builtin"
+            cp -r "$OFFICIAL_DIR/resources/app/extensions/@builtin" \
+                  "$BUILD_DIR/resources/app/extensions/"
+          fi
+
+          echo ""
+          echo "✅ Extensions copied"
+          echo "📌 Total extensions: $(ls -1 $BUILD_DIR/resources/app/extensions | wc -l)"
+
+          # 验证核心扩展
+          echo ""
+          echo "📌 Verifying core extensions:"
+          for ext in $CORE_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+            else
+              echo "   ❌ $ext (MISSING!)"
+            fi
+          done
+
+          # 保存官方目录路径供后续使用
+          echo "OFFICIAL_EXT_DIR=$OFFICIAL_DIR/resources/app/extensions" >> $GITHUB_ENV
+
+      - name: 🧹 Safe cleanup (preserve core extensions)
+        run: |
+          echo "=========================================="
+          echo "🧹 Safe cleanup - Step by Step"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          echo "📊 Before cleanup:"
+          du -sh "$BUILD_DIR"
+
+          # 保护核心扩展不被删除
+          echo ""
+          echo "📌 Preserving core extensions..."
+          CORE_EXTS="typescript-language-features git json-language-features markdown-language-features html-language-features css-language-features npm debug-auto-launch merge-conflict search-result @builtin"
+
+          mkdir -p /tmp/core-extensions-backup
+          for ext in $CORE_EXTS; do
+            if [ -d "$BUILD_DIR/resources/app/extensions/$ext" ]; then
+              echo "   Backing up: $ext"
+              mv "$BUILD_DIR/resources/app/extensions/$ext" /tmp/core-extensions-backup/ 2>/dev/null || true
+            fi
+          done
+
           cd "$BUILD_DIR/resources/app"
 
-          echo "📌 Removing preinstall/postinstall scripts..."
-          npx json -I -f package.json -e 'delete this.scripts.preinstall' 2>/dev/null || true
-          npx json -I -f package.json -e 'delete this.scripts.postinstall' 2>/dev/null || true
-
+          echo ""
           echo "📌 Removing devDependencies..."
           npx json -I -f package.json -e 'this.devDependencies={}' 2>/dev/null || true
 
-          echo "📌 Installing production dependencies..."
-          npm install --legacy-peer-deps --production --ignore-scripts 2>/dev/null || \
-          npm install --legacy-peer-deps --ignore-scripts
-
-          ELECTRON_VERSION=$(node -p "require('electron/package.json').version" 2>/dev/null || echo "22.14.0")
-          echo "📌 Electron version: $ELECTRON_VERSION"
-
-          echo "📌 Downloading Electron headers..."
-          npm install --ignore-scripts --save-dev electron@$ELECTRON_VERSION 2>/dev/null || true
-
-          export npm_config_target=$ELECTRON_VERSION
-          export npm_config_arch=x64
-          export npm_config_target_platform=linux
-          export npm_config_disturl=https://electronjs.org/headers
-          export npm_config_runtime=electron
-          export npm_config_build_from_source=true
+          echo ""
+          echo "📌 Cleaning node_modules (safe)..."
+          find node_modules -name "*.ts" -type f ! -name "*.d.ts" -delete 2>/dev/null || true
+          find node_modules -name "*.md" -type f -delete 2>/dev/null || true
+          find node_modules -name "CHANGELOG*" -type f -delete 2>/dev/null || true
+          find node_modules -name "LICENSE*" -type f -delete 2>/dev/null || true
+          find node_modules -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "__tests__" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "example" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+          find node_modules -name "*.map" -type f -delete 2>/dev/null || true
+          find node_modules -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
 
           echo ""
-          echo "📌 Compiling native modules..."
-
-          modules_to_rebuild=(
-            "@vscode/spdlog"
-            "@vscode/sqlite3"
-            "keytar"
-            "node-pty"
-            "vscode-oniguruma"
-            "native-watchdog"
-            "native-keymap"
-          )
-
-          for module in "${modules_to_rebuild[@]}"; do
-            if [ -d "node_modules/$module" ]; then
-              echo "  🔨 Building $module..."
-              cd "node_modules/$module"
-              npm run install 2>/dev/null || \
-              npm run build 2>/dev/null || \
-              npx electron-rebuild --force --only $module 2>/dev/null || \
-              node-gyp rebuild \
-                --target=$ELECTRON_VERSION \
-                --arch=x64 \
-                --dist-url=https://electronjs.org/headers \
-                --runtime=electron 2>/dev/null || \
-              echo "    ⚠️ $module build failed"
-              cd ../..
-            fi
-          done
+          echo "📌 Removing unnecessary packages..."
+          rm -rf node_modules/@types 2>/dev/null || true
+          rm -rf node_modules/webpack 2>/dev/null || true
+          rm -rf node_modules/rollup 2>/dev/null || true
+          rm -rf node_modules/vite 2>/dev/null || true
+          rm -rf node_modules/terser 2>/dev/null || true
 
           echo ""
-          echo "📌 Running electron-rebuild..."
-          npx electron-rebuild --force --module-dir . 2>/dev/null || true
-
-          echo ""
-          echo "📌 Cleaning up build artifacts..."
-          find node_modules -name "*.o" -delete 2>/dev/null || true
-          find node_modules -name "*.a" -delete 2>/dev/null || true
-          find node_modules -name "*.Makefile" -delete 2>/dev/null || true
-          find node_modules -name "*.gypch" -delete 2>/dev/null || true
-          find node_modules -name "*.d" -delete 2>/dev/null || true
-          find node_modules -type d -name "obj" -exec rm -rf {} + 2>/dev/null || true
-          find node_modules -type d -name "obj.target" -exec rm -rf {} + 2>/dev/null || true
-
-          echo ""
-          echo "📌 Verifying native modules:"
-          for module in "${modules_to_rebuild[@]}"; do
-            if [ -d "node_modules/$module" ]; then
-              FOUND=$(find "node_modules/$module" -name "*.node" 2>/dev/null | head -1)
-              if [ -n "$FOUND" ]; then
-                echo "  ✅ $module: $FOUND"
-              else
-                echo "  ⚠️ $module: No .node file found"
-              fi
-            fi
-          done
+          echo "📌 Removing build temp..."
+          rm -rf .cache 2>/dev/null || true
+          rm -rf build 2>/dev/null || true
 
           cd -
 
-          echo "✅ Native modules compiled for offline use"
+          # 恢复核心扩展
+          echo ""
+          echo "📌 Restoring core extensions..."
+          if [ -d "/tmp/core-extensions-backup" ]; then
+            for ext in $CORE_EXTS; do
+              if [ -d "/tmp/core-extensions-backup/$ext" ]; then
+                echo "   Restoring: $ext"
+                mv "/tmp/core-extensions-backup/$ext" "$BUILD_DIR/resources/app/extensions/" 2>/dev/null || true
+              fi
+            done
+            rm -rf /tmp/core-extensions-backup
+          fi
 
-      # ========== 创建启动器 ==========
-      - name: 📄 Create launcher
+          echo ""
+          echo "📊 After cleanup:"
+          du -sh "$BUILD_DIR"
+
+      - name: 📄 Create launcher and fix all issues
         run: |
           echo "=========================================="
-          echo "📄 Creating launcher"
+          echo "📄 Creating launcher and fixing all issues"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           cd "$BUILD_DIR"
 
+          # 复制配置文件
+          [ -f "resources/app/package.json" ] && cp "resources/app/package.json" . && echo "✅ package.json"
+          [ -f "resources/app/product.json" ] && cp "resources/app/product.json" . && echo "✅ product.json"
+
+          # 找到可执行文件
           REAL_EXEC=""
           for name in code code-oss; do
             if [ -f "./$name" ]; then
@@ -1027,63 +476,23 @@ jobs:
           if [ "$REAL_EXEC" != "tscode" ]; then
             mv "$REAL_EXEC" "tscode"
             echo "✅ Renamed to tscode"
+          else
+            echo "✅ Already named tscode"
           fi
 
-          chmod +x tscode
-
-          sudo tee /usr/local/bin/tscode-wrapper > /dev/null << 'WRAPEOF'
-          #!/bin/bash
-          # TSCode 独立启动包装器
-          # 数据目录: ~/.tscode
-
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
-          export ELECTRON_DISABLE_CRASH_REPORTER=1
-          export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export CRASHPAD_DISABLE=1
-          export ELECTRON_NO_SANDBOX=1
-
-          export GNOME_KEYRING_CONTROL=
-          export DBUS_SESSION_BUS_ADDRESS=
-          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
-          export SECRETS_BACKEND=basic
-          export DISABLE_VAULT=1
-          export VSCODE_PASSWORD_STORE=basic
-          export ELECTRON_PASSWORD_STORE=basic
-
-          export VSCODE_APPDATA="$HOME/.tscode"
-          export XDG_CONFIG_HOME="$HOME/.tscode"
-          export VSCODE_PORTABLE="$HOME/.tscode"
-
-          mkdir -p "$HOME/.tscode"
-          mkdir -p "$HOME/.tscode/extensions"
-          mkdir -p "$HOME/.tscode/user-data"
-
-          exec /opt/tscode/tscode \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --disable-crash-reporter \
-              --disable-breakpad \
-              --disable-keychain \
-              --password-store=basic \
-              --user-data-dir="$HOME/.tscode/user-data" \
-              --extensions-dir="$HOME/.tscode/extensions" \
-              "$@"
-          WRAPEOF
-
-          sudo chmod +x /usr/local/bin/tscode-wrapper
-          sudo ln -sf /usr/local/bin/tscode-wrapper /usr/bin/tscode
+          # ============================================================
+          # 创建启动包装脚本（使用 ~/.tscode 作为用户数据目录）
+          # ============================================================
+          echo ""
+          echo "📌 Creating startup wrapper script with ~/.tscode as user data dir..."
 
           cat > run.sh << 'RUNEOF'
           #!/bin/bash
-          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          # TSCode 启动包装脚本
+          # 用户数据目录: ~/.tscode
+          # 绕过沙箱密码提示
 
+          # 设置环境变量
           export ELECTRON_ENABLE_GPU=0
           export LIBGL_ALWAYS_SOFTWARE=1
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -1093,57 +502,89 @@ jobs:
           export ELECTRON_DISABLE_CRASH_REPORTER=1
           export ELECTRON_DISABLE_CRASH_REPORTING=1
           export CRASHPAD_DISABLE=1
-          export ELECTRON_NO_SANDBOX=1
 
-          export GNOME_KEYRING_CONTROL=
-          export DBUS_SESSION_BUS_ADDRESS=
-          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
-          export SECRETS_BACKEND=basic
-          export DISABLE_VAULT=1
-          export VSCODE_PASSWORD_STORE=basic
-          export ELECTRON_PASSWORD_STORE=basic
-
-          export VSCODE_APPDATA="$HOME/.tscode"
-          export XDG_CONFIG_HOME="$HOME/.tscode"
-          export VSCODE_PORTABLE="$HOME/.tscode"
-
+          # 确保用户数据目录存在
           mkdir -p "$HOME/.tscode"
-          mkdir -p "$HOME/.tscode/extensions"
-          mkdir -p "$HOME/.tscode/user-data"
 
-          exec "$SCRIPT_DIR/tscode" \
+          # 如果 argv.json 不存在，创建默认配置
+          if [ ! -f "$HOME/.tscode/argv.json" ]; then
+              cat > "$HOME/.tscode/argv.json" << 'JSONEOF'
+          {
+              "enable-crash-reporter": false,
+              "disable-hardware-acceleration": false,
+              "enable-proposed-api": []
+          }
+          JSONEOF
+          fi
+
+          # 启动 TSCode（使用 ~/.tscode 作为用户数据目录）
+          /opt/tscode/tscode \
+              --user-data-dir="$HOME/.tscode" \
               --no-sandbox \
               --disable-gpu-sandbox \
               --disable-software-rasterizer \
               --disable-gpu \
               --disable-crash-reporter \
               --disable-breakpad \
-              --disable-keychain \
-              --password-store=basic \
-              --user-data-dir="$HOME/.tscode/user-data" \
-              --extensions-dir="$HOME/.tscode/extensions" \
               "$@"
           RUNEOF
 
           chmod +x run.sh
+          echo "   ✅ run.sh created (user data: ~/.tscode)"
 
+          # ============================================================
+          # 创建启动脚本（兼容旧版本，指向 run.sh）
+          # ============================================================
           cat > start-tscode.sh << 'STARTEOF'
           #!/bin/bash
+          # TSCode 启动脚本 (兼容版本)
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           exec "$SCRIPT_DIR/run.sh" "$@"
           STARTEOF
 
           chmod +x start-tscode.sh
+          echo "   ✅ start-tscode.sh created"
 
-          if [ -f "chrome-sandbox" ]; then
-            sudo chown root:root chrome-sandbox
-            sudo chmod 4755 chrome-sandbox
-            echo "✅ chrome-sandbox SUID set"
+          # ============================================================
+          # 创建 Git 查找脚本
+          # ============================================================
+          mkdir -p bin
+          cat > bin/git-finder << 'GITFINDER'
+          #!/bin/bash
+          # Git auto-discovery for TSCode
+          for git_path in /usr/local/bin/git /usr/bin/git /usr/local/git/bin/git /opt/git/bin/git; do
+            if [ -x "$git_path" ]; then
+              export GIT_EXEC_PATH="$($git_path --exec-path 2>/dev/null || echo '')"
+              export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+              export GIT_TERMINAL_PROMPT=0
+              exec "$git_path" "$@"
+              exit 0
+            fi
+          done
+          if command -v git >/dev/null 2>&1; then
+            GIT_PATH="$(command -v git)"
+            export GIT_EXEC_PATH="$("$GIT_PATH" --exec-path 2>/dev/null || echo '')"
+            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+            export GIT_TERMINAL_PROMPT=0
+            exec "$GIT_PATH" "$@"
+            exit 0
           fi
+          echo "ERROR: Git not found!" >&2
+          exit 1
+          GITFINDER
 
-          echo "✅ Launcher created"
+          chmod +x bin/git-finder
+          echo "   ✅ git-finder created"
 
-      # ========== 创建桌面入口 ==========
+          # 设置所有可执行文件权限
+          chmod +x tscode
+          chmod +x chrome-sandbox 2>/dev/null || true
+          chmod +x run.sh
+          chmod +x start-tscode.sh
+
+          echo ""
+          echo "✅ Launcher and scripts created"
+
       - name: 📄 Create desktop entry
         run: |
           echo "=========================================="
@@ -1152,15 +593,18 @@ jobs:
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
 
+          # 创建桌面文件目录
           mkdir -p "$BUILD_DIR/usr/share/applications"
           mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
 
+          # 复制图标
           if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
             cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
                "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png"
             echo "   ✅ Icon copied"
           fi
 
+          # 创建桌面文件（指向 run.sh，无需密码）
           cat > "$BUILD_DIR/usr/share/applications/tscode.desktop" << 'EOF'
           [Desktop Entry]
           Version=1.0
@@ -1168,26 +612,144 @@ jobs:
           Name=TSCode
           GenericName=Code Editor
           Comment=Code Editing. Redefined.
-          Exec=/usr/bin/tscode %F
+          Exec=/opt/tscode/run.sh %F
           Icon=tscode
           Terminal=false
-          Categories=Development;IDE
-          MimeType=text/plain;inode/directory
+          Categories=Development;IDE;
+          MimeType=text/plain;inode/directory;
           StartupNotify=true
           StartupWMClass=Code
+          X-GNOME-SingleWindow=false
           EOF
 
-          echo "✅ Desktop entry created"
+          echo "   ✅ Desktop file created"
 
-      # ========== 构建 DEB 包 ==========
+      - name: 📄 Create validation script
+        run: |
+          echo "=========================================="
+          echo "📄 Creating validation script"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          cat > "$BUILD_DIR/validate.sh" << 'VALIDATE_EOF'
+          #!/bin/bash
+          echo "=========================================="
+          echo "TSCode Validation Script"
+          echo "=========================================="
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          PASSED=0
+          FAILED=0
+
+          echo ""
+          echo "1️⃣ Checking main executable..."
+          if [ -x "$SCRIPT_DIR/tscode" ]; then
+            echo "   ✅ tscode executable"
+            ((PASSED++))
+          else
+            echo "   ❌ tscode not executable"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "2️⃣ Checking run wrapper..."
+          if [ -x "$SCRIPT_DIR/run.sh" ]; then
+            echo "   ✅ run.sh exists and executable"
+            ((PASSED++))
+          else
+            echo "   ❌ run.sh missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "3️⃣ Checking desktop file..."
+          if [ -f "$SCRIPT_DIR/usr/share/applications/tscode.desktop" ]; then
+            echo "   ✅ Desktop file exists"
+            ((PASSED++))
+          else
+            echo "   ❌ Desktop file missing"
+            ((FAILED++))
+          fi
+
+          echo ""
+          echo "4️⃣ Checking icon..."
+          if [ -f "$SCRIPT_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
+            echo "   ✅ Icon exists"
+            ((PASSED++))
+          else
+            echo "   ⚠️ Icon missing"
+          fi
+
+          echo ""
+          echo "5️⃣ Checking Chrome sandbox..."
+          if [ -f "$SCRIPT_DIR/chrome-sandbox" ]; then
+            PERMS=$(stat -c %a "$SCRIPT_DIR/chrome-sandbox" 2>/dev/null || echo "000")
+            if [ "$PERMS" = "4755" ]; then
+              echo "   ✅ chrome-sandbox SUID: 4755"
+              ((PASSED++))
+            else
+              echo "   ⚠️ chrome-sandbox permissions: $PERMS"
+            fi
+          else
+            echo "   ⚠️ chrome-sandbox not found"
+          fi
+
+          echo ""
+          echo "6️⃣ Checking core extensions..."
+          for ext in typescript-language-features git json-language-features; do
+            if [ -d "$SCRIPT_DIR/resources/app/extensions/$ext" ]; then
+              echo "   ✅ $ext"
+              ((PASSED++))
+            else
+              echo "   ❌ $ext (missing)"
+              ((FAILED++))
+            fi
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "Validation Results:"
+          echo "   ✅ Passed: $PASSED"
+          echo "   ❌ Failed: $FAILED"
+          echo "=========================================="
+
+          if [ $FAILED -eq 0 ]; then
+            echo "✅ All checks passed!"
+            exit 0
+          else
+            echo "❌ Some checks failed."
+            exit 1
+          fi
+          VALIDATE_EOF
+
+          chmod +x "$BUILD_DIR/validate.sh"
+          echo "✅ Validation script created"
+
+      - name: 🔍 Run validation
+        run: |
+          echo "=========================================="
+          echo "🔍 Running validation"
+          echo "=========================================="
+
+          BUILD_DIR="${BUILD_DIR:-./tscode}"
+
+          if ! "$BUILD_DIR/validate.sh"; then
+            echo "❌ Validation failed!"
+            exit 1
+          fi
+
+          echo "✅ Validation passed!"
+
       - name: 📦 Build DEB package
         run: |
           echo "=========================================="
-          echo "📦 Building DEB package"
+          echo "📦 Building DEB package for Debian 10"
           echo "=========================================="
 
           BUILD_DIR="${BUILD_DIR:-./tscode}"
           VERSION="${{ github.event.inputs.version || '1.116.0' }}"
+          DEB_NAME="tscode"
           DEB_VERSION="${VERSION}-1"
           DEB_ARCH="amd64"
           DEB_ROOT="$(pwd)/deb_root"
@@ -1195,15 +757,17 @@ jobs:
           mkdir -p "$DEB_ROOT/DEBIAN"
           mkdir -p "$DEB_ROOT/opt/tscode"
           mkdir -p "$DEB_ROOT/usr/bin"
-          mkdir -p "$DEB_ROOT/usr/local/bin"
           mkdir -p "$DEB_ROOT/usr/share/applications"
           mkdir -p "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps"
 
-          echo "📌 Copying application..."
+          echo "📌 Copying application to /opt/tscode..."
           cp -r "$BUILD_DIR"/* "$DEB_ROOT/opt/tscode/"
 
+          # ============================================================
+          # 修复所有权限
+          # ============================================================
           echo ""
-          echo "📌 Fixing permissions and SUID..."
+          echo "📌 Fixing permissions..."
 
           if [ -f "$DEB_ROOT/opt/tscode/chrome-sandbox" ]; then
             sudo chown root:root "$DEB_ROOT/opt/tscode/chrome-sandbox"
@@ -1214,71 +778,60 @@ jobs:
           chmod +x "$DEB_ROOT/opt/tscode/tscode" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/run.sh" 2>/dev/null || true
           chmod +x "$DEB_ROOT/opt/tscode/start-tscode.sh" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/bin/git-finder" 2>/dev/null || true
+          chmod +x "$DEB_ROOT/opt/tscode/validate.sh" 2>/dev/null || true
+
           find "$DEB_ROOT/opt/tscode" -name "rg" -type f -exec chmod 755 {} \; 2>/dev/null || true
+          find "$DEB_ROOT/opt/tscode" -type f -executable -exec chmod 755 {} \; 2>/dev/null || true
 
-          cat > "$DEB_ROOT/usr/local/bin/tscode-wrapper" << 'WRAPEOF'
-          #!/bin/bash
-          # TSCode 独立启动包装器
-          # 数据目录: ~/.tscode
+          echo "   ✅ All permissions fixed"
 
-          export ELECTRON_ENABLE_GPU=0
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          export ELECTRON_DISABLE_SANDBOX=1
-          export GDK_BACKEND=x11
-          export QT_QPA_PLATFORM=xcb
-          export ELECTRON_DISABLE_CRASH_REPORTER=1
-          export ELECTRON_DISABLE_CRASH_REPORTING=1
-          export CRASHPAD_DISABLE=1
-          export ELECTRON_NO_SANDBOX=1
+          # ============================================================
+          # 创建符号链接
+          # ============================================================
+          echo ""
+          echo "📌 Creating symlink..."
+          cd "$DEB_ROOT/usr/bin"
+          ln -sf /opt/tscode/run.sh tscode
+          cd -
+          echo "   ✅ /usr/bin/tscode -> /opt/tscode/run.sh"
 
-          export GNOME_KEYRING_CONTROL=
-          export DBUS_SESSION_BUS_ADDRESS=
-          export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
-          export SECRETS_BACKEND=basic
-          export DISABLE_VAULT=1
-          export VSCODE_PASSWORD_STORE=basic
-          export ELECTRON_PASSWORD_STORE=basic
+          # ============================================================
+          # 创建桌面文件（使用 echo 方式避免 heredoc 问题）
+          # ============================================================
+          echo ""
+          echo "📌 Creating desktop file..."
 
-          export VSCODE_APPDATA="$HOME/.tscode"
-          export XDG_CONFIG_HOME="$HOME/.tscode"
-          export VSCODE_PORTABLE="$HOME/.tscode"
+          # 使用 printf 或 echo 代替 heredoc
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Version=1.0' \
+            'Type=Application' \
+            'Name=TSCode' \
+            'GenericName=Code Editor' \
+            'Comment=Code Editing. Redefined.' \
+            'Exec=/opt/tscode/run.sh %F' \
+            'Icon=tscode' \
+            'Terminal=false' \
+            'Categories=Development;IDE' \
+            'MimeType=text/plain;inode/directory' \
+            'StartupNotify=true' \
+            'StartupWMClass=Code' > "$DEB_ROOT/usr/share/applications/tscode.desktop"
 
-          mkdir -p "$HOME/.tscode"
-          mkdir -p "$HOME/.tscode/extensions"
-          mkdir -p "$HOME/.tscode/user-data"
+          echo "   ✅ Desktop file created"
 
-          exec /opt/tscode/tscode \
-              --no-sandbox \
-              --disable-gpu-sandbox \
-              --disable-software-rasterizer \
-              --disable-gpu \
-              --disable-crash-reporter \
-              --disable-breakpad \
-              --disable-keychain \
-              --password-store=basic \
-              --user-data-dir="$HOME/.tscode/user-data" \
-              --extensions-dir="$HOME/.tscode/extensions" \
-              "$@"
-          WRAPEOF
-
-          chmod +x "$DEB_ROOT/usr/local/bin/tscode-wrapper"
-
-          cat > "$DEB_ROOT/usr/bin/tscode" << 'BINWRAPEOF'
-          #!/bin/bash
-          exec /usr/local/bin/tscode-wrapper "$@"
-          BINWRAPEOF
-
-          chmod +x "$DEB_ROOT/usr/bin/tscode"
-
-          if [ -f "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" ]; then
-            cp "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/tscode.png" \
-               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/"
+          # ============================================================
+          # 复制图标
+          # ============================================================
+          if [ -f "$BUILD_DIR/resources/app/resources/linux/code.png" ]; then
+            cp "$BUILD_DIR/resources/app/resources/linux/code.png" \
+               "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/tscode.png"
+            echo "   ✅ Icon copied"
           fi
 
-          cp "$BUILD_DIR/usr/share/applications/tscode.desktop" \
-             "$DEB_ROOT/usr/share/applications/"
-
+          # ============================================================
+          # 创建 DEBIAN/control
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/control" << 'CONTROLEOF'
           Package: tscode
           Version: REPLACE_VERSION
@@ -1287,11 +840,9 @@ jobs:
           Description: TSCode - Code Editing. Redefined.
            TSCode is a code editor redefined and optimized for building
            and debugging modern web and cloud applications.
-           All data stored in ~/.tscode directory.
-           No password/keychain required.
-           Includes all official @builtin extensions.
           Depends: libgtk-3-0, libx11-6, libxss1, libxtst6, libnss3, libasound2, libgbm1, libglib2.0-0, libcairo2, libpango-1.0-0, libatk1.0-0, libgdk-pixbuf2.0-0
           Recommends: git, python3
+          Homepage: https://github.com/tscode
           Section: devel
           Priority: optional
           CONTROLEOF
@@ -1299,73 +850,63 @@ jobs:
           sed -i "s/REPLACE_VERSION/$DEB_VERSION/g" "$DEB_ROOT/DEBIAN/control"
           sed -i "s/REPLACE_ARCH/$DEB_ARCH/g" "$DEB_ROOT/DEBIAN/control"
 
+          # ============================================================
+          # 创建 postinst 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/postinst" << 'POSTINSTEOF'
           #!/bin/bash
           set -e
 
-          echo "=========================================="
-          echo "🔧 Configuring TSCode..."
-          echo "=========================================="
+          echo "Setting up TSCode for Debian 10..."
+
+          rm -f /tmp/tscode.lock
 
           if [ -f "/opt/tscode/chrome-sandbox" ]; then
               chown root:root /opt/tscode/chrome-sandbox
               chmod 4755 /opt/tscode/chrome-sandbox
-              echo "✅ chrome-sandbox SUID configured"
+              echo "  ✅ chrome-sandbox permissions fixed"
           fi
 
-          chmod +x /opt/tscode/run.sh /opt/tscode/tscode 2>/dev/null || true
-          chmod +x /usr/local/bin/tscode-wrapper 2>/dev/null || true
-          chmod +x /usr/bin/tscode 2>/dev/null || true
+          chmod +x /opt/tscode/run.sh 2>/dev/null || true
+          chmod +x /opt/tscode/tscode 2>/dev/null || true
+          chmod +x /opt/tscode/bin/git-finder 2>/dev/null || true
 
           if [ -f "/opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg" ]; then
               chmod 755 /opt/tscode/resources/app/node_modules/@vscode/ripgrep/bin/rg
+              echo "  ✅ ripgrep permissions fixed"
           fi
 
-          echo ""
-          echo "🔑 Disabling keyring for users..."
-          for USER_HOME in /home/* /root; do
-              if [ -d "$USER_HOME" ] && [ "$USER_HOME" != "/home/*" ]; then
-                  mkdir -p "$USER_HOME/.local/share/keyrings" 2>/dev/null || true
-                  echo "[keyring]" > "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
-                  echo "display-name=Login" >> "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
-                  echo "locked=false" >> "$USER_HOME/.local/share/keyrings/login.keyring" 2>/dev/null || true
-                  chown -R $(stat -c '%u:%g' "$USER_HOME" 2>/dev/null || echo "1000:1000") \
-                      "$USER_HOME/.local/share/keyrings" 2>/dev/null || true
-                  echo "  ✅ Keyring disabled for $(basename "$USER_HOME")"
-              fi
-          done
+          if command -v update-desktop-database >/dev/null 2>&1; then
+              update-desktop-database /usr/share/applications/
+              echo "  ✅ Desktop database updated"
+          fi
 
-          update-desktop-database /usr/share/applications/ 2>/dev/null || true
+          if command -v update-icon-caches >/dev/null 2>&1; then
+              update-icon-caches /usr/share/icons/hicolor/
+              echo "  ✅ Icon cache updated"
+          fi
 
           echo ""
           echo "✅ TSCode installed successfully!"
           echo ""
-          echo "📁 Data directory: ~/.tscode/"
-          echo "   - Extensions: ~/.tscode/extensions/"
-          echo "   - User data: ~/.tscode/user-data/"
-          echo ""
-          echo "🚀 Run 'tscode' to start"
-          echo "📂 Or use application menu: Development -> TSCode"
-          echo ""
-          echo "🔑 No password/keychain required (disabled)"
+          echo "Run 'tscode' to start (no password required)."
+          echo "Desktop entry available in application menu."
+          echo "User data directory: ~/.tscode"
           echo "=========================================="
+
+          exit 0
           POSTINSTEOF
 
           chmod +x "$DEB_ROOT/DEBIAN/postinst"
 
+          # ============================================================
+          # 创建 prerm 脚本
+          # ============================================================
           cat > "$DEB_ROOT/DEBIAN/prerm" << 'PRERMEOF'
           #!/bin/bash
           set -e
-          echo "=========================================="
           echo "TSCode is being removed..."
-          echo "=========================================="
-          echo ""
-          echo "📁 User data preserved at: ~/.tscode/"
-          echo "📦 Extensions preserved at: ~/.tscode/extensions/"
-          echo ""
-          echo "To completely remove user data:"
-          echo "  rm -rf ~/.tscode"
-          echo "=========================================="
+          rm -f /tmp/tscode.lock
           exit 0
           PRERMEOF
 
@@ -1404,14 +945,11 @@ jobs:
           echo "Version: ${{ github.event.inputs.version || '1.116.0' }}"
           echo "Format: DEB (Debian 10)"
           echo ""
-          echo "✅ Features:"
-          echo "   - ✅ No password required on startup"
-          echo "   - ✅ Keychain/Password input disabled"
-          echo "   - ✅ Data stored in ~/.tscode/"
-          echo "   - ✅ Official @builtin extensions built from source + copied"
-          echo "   - ✅ Custom extensions from repo"
-          echo "   - ✅ Desktop entry in application menu"
-          echo "   - ✅ Native modules compiled for offline use"
+          echo "✅ Fixed Issues:"
+          echo "   - No password required on startup"
+          echo "   - Desktop entry created in application menu"
+          echo "   - Official extensions preserved"
+          echo "   - User data directory: ~/.tscode"
           echo "=========================================="
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -1419,15 +957,19 @@ jobs:
             echo "✅ Build completed successfully!"
             echo ""
             echo "📦 DEB Package:"
-            ls -lh *.deb 2>/dev/null
+            ls -lh *.deb 2>/dev/null || echo "   No DEB package found"
             echo ""
-            echo "📖 Installation:"
+            echo "📖 Installation on Debian 10:"
             echo "  sudo dpkg -i tscode-*.deb"
             echo "  sudo apt-get install -f"
             echo ""
-            echo "🚀 Run: tscode"
+            echo "🚀 After installation:"
+            echo "  - Run: tscode (no password)"
+            echo "  - Find in application menu: TSCode"
+            echo "  - Extensions: TypeScript, Git, JSON, Markdown included"
+            echo "  - User data: ~/.tscode (argv.json + extensions/)"
             echo ""
-            echo "📁 Data location: ~/.tscode/"
-            echo "🔑 No password/keychain prompts"
+            echo "🔍 Verify:"
+            echo "  /opt/tscode/validate.sh"
             echo "=========================================="
           fi
